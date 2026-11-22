@@ -80,7 +80,7 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   sha512h sha512h2 sha512su0 sha512su1
   lea movdqa movdqu paddd pxor pshufd pshufb palignr pblendw pinsrd pextrd
   sha1rnds4 sha1nexte sha1msg1 sha1msg2 sha256rnds2 sha256msg1 sha256msg2
-  aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq
+  aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq pslld psrld
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze

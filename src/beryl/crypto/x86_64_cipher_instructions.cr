@@ -373,5 +373,102 @@ module Beryl::Crypto
         : "rcx", "r8", "r9", "r10", "r11",
           "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10", "memory", "cc")
     end
+
+    # Blocks of ChaCha20 keystream one pass of `xor_chacha20_keystream`
+    # produces: three blocks, each held as its four rows in four registers,
+    # which with two scratch registers and the two byte-order masks fill the
+    # sixteen that SSE has.
+    CHACHA20_BLOCKS_PER_GROUP = 3
+
+    # ChaCha20 (RFC 8439 §2.3): XORs the keystream of the sixteen-word
+    # state at *state* into *group_count* (at least 1) groups of
+    # `CHACHA20_BLOCKS_PER_GROUP` 64-byte blocks at *input* and writes them
+    # to *output*, which may be *input*. Word 12 of the state is the counter
+    # of the first block; it is left at the counter of the block after the
+    # last one, wrapping at 2^32.
+    #
+    # Each block keeps its rows in four registers, so a quarter round works
+    # on all four columns at once; `pshufd` turns the columns into diagonals
+    # between the two halves of a double round and back. The three blocks
+    # are interleaved step by step, three independent chains. The rotations
+    # by 16 and 8 are byte moves (`pshufb` with the masks stored after the
+    # code); those by 12 and 7 are two shifts and an or.
+    #
+    # Registers: r8 the state, r10 input, r11 output, rcx groups left, edx
+    # the counter, eax a counter word, rax the constants; xmm0 to xmm11 the
+    # rows of the three blocks, xmm12 and xmm13 scratch, xmm14 and xmm15 the
+    # masks of the rotations by 16 and 8.
+    macro xor_chacha20_keystream(state, input, output, group_count)
+      {% template = "  mov $0, %r8\n  mov $1, %r10\n  mov $2, %r11\n  mov $3, %rcx
+  lea 8f(%rip), %rax
+  movdqu (%rax), %xmm14
+  movdqu 16(%rax), %xmm15
+  mov 48(%r8), %edx
+1:
+" %}
+      {% for block in 0...3 %}
+        {% for row in 0...4 %}
+          {% template = template + "  movdqu #{row * 16}(%r8), %xmm#{block * 4 + row}\n" %}
+        {% end %}
+        {% template = template + "  lea #{block}(%rdx), %eax\n  pinsrd $$0, %eax, %xmm#{block * 4 + 3}\n" %}
+      {% end %}
+      {% for double_round in 0...10 %}
+        {% for half in 0...2 %}
+          {% for step in [[0, 1, 3, 16], [2, 3, 1, 12], [0, 1, 3, 8], [2, 3, 1, 7]] %}
+            {% for block in 0...3 %}
+              {% template = template + "  paddd %xmm#{block * 4 + step[1]}, %xmm#{block * 4 + step[0]}\n" %}
+            {% end %}
+            {% for block in 0...3 %}
+              {% template = template + "  pxor %xmm#{block * 4 + step[0]}, %xmm#{block * 4 + step[2]}\n" %}
+            {% end %}
+            {% for block in 0...3 %}
+              {% target = "%xmm#{block * 4 + step[2]}" %}
+              {% if step[3] == 16 %}
+                {% template = template + "  pshufb %xmm14, #{target.id}\n" %}
+              {% elsif step[3] == 8 %}
+                {% template = template + "  pshufb %xmm15, #{target.id}\n" %}
+              {% else %}
+                {% scratch = "%xmm#{12 + block % 2}" %}
+                {% template = template + "  movdqa #{target.id}, #{scratch.id}\n  pslld $$#{step[3]}, #{target.id}\n  psrld $$#{32 - step[3]}, #{scratch.id}\n  por #{scratch.id}, #{target.id}\n" %}
+              {% end %}
+            {% end %}
+          {% end %}
+          {% for block in 0...3 %}
+            {% if half == 0 %}
+              {% template = template + "  pshufd $$0x39, %xmm#{block * 4 + 1}, %xmm#{block * 4 + 1}\n  pshufd $$0x4e, %xmm#{block * 4 + 2}, %xmm#{block * 4 + 2}\n  pshufd $$0x93, %xmm#{block * 4 + 3}, %xmm#{block * 4 + 3}\n" %}
+            {% else %}
+              {% template = template + "  pshufd $$0x93, %xmm#{block * 4 + 1}, %xmm#{block * 4 + 1}\n  pshufd $$0x4e, %xmm#{block * 4 + 2}, %xmm#{block * 4 + 2}\n  pshufd $$0x39, %xmm#{block * 4 + 3}, %xmm#{block * 4 + 3}\n" %}
+            {% end %}
+          {% end %}
+        {% end %}
+      {% end %}
+      {% for block in 0...3 %}
+        {% for row in 0...4 %}
+          {% template = template + "  movdqu #{row * 16}(%r8), %xmm12\n" %}
+          {% if row == 3 %}
+            {% template = template + "  lea #{block}(%rdx), %eax\n  pinsrd $$0, %eax, %xmm12\n" %}
+          {% end %}
+          {% template = template + "  paddd %xmm12, %xmm#{block * 4 + row}
+  movdqu #{block * 64 + row * 16}(%r10), %xmm13
+  pxor %xmm13, %xmm#{block * 4 + row}
+  movdqu %xmm#{block * 4 + row}, #{block * 64 + row * 16}(%r11)
+" %}
+        {% end %}
+      {% end %}
+      {% template = template + "  add $$3, %edx\n  add $$192, %r10\n  add $$192, %r11\n  dec %rcx\n  jnz 1b\n  mov %edx, 48(%r8)
+  jmp 9f
+  .p2align 4
+8:
+  .quad 0x0504070601000302
+  .quad 0x0d0c0f0e09080b0a
+  .quad 0x0605040702010003
+  .quad 0x0e0d0c0f0a09080b
+9:
+" %}
+      asm({{ template }} :: "r"({{ state }}), "r"({{ input }}), "r"({{ output }}), "r"({{ group_count }})
+        : "rax", "rcx", "rdx", "r8", "r10", "r11",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
+          "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "memory", "cc")
+    end
   end
 end
