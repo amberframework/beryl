@@ -89,3 +89,63 @@ module Wycheproof
     getter list_of_tests : Array(PbkdfTest) = [] of PbkdfTest
   end
 end
+
+# The cipher files (`aead_test_schema_v1.json`, `ind_cpa_test_schema_v1.json`).
+module Wycheproof
+  struct AeadTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    getter key : String = ""
+    @[JSON::Field(key: "iv")]
+    getter nonce : String = ""
+    @[JSON::Field(key: "aad")]
+    getter associated_data : String = ""
+    @[JSON::Field(key: "msg")]
+    getter message : String = ""
+    @[JSON::Field(key: "ct")]
+    getter ciphertext : String = ""
+    getter tag : String = ""
+    getter result : String = ""
+  end
+
+  struct AeadTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "ivSize")]
+    getter nonce_bit_size : Int32 = 0
+    @[JSON::Field(key: "keySize")]
+    getter key_bit_size : Int32 = 0
+    @[JSON::Field(key: "tagSize")]
+    getter tag_bit_size : Int32 = 0
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(AeadTest) = [] of AeadTest
+  end
+
+  struct BlockCipherModeTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    getter key : String = ""
+    @[JSON::Field(key: "iv")]
+    getter initialization_vector : String = ""
+    @[JSON::Field(key: "msg")]
+    getter message : String = ""
+    @[JSON::Field(key: "ct")]
+    getter ciphertext : String = ""
+    getter result : String = ""
+  end
+
+  struct BlockCipherModeTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "keySize")]
+    getter key_bit_size : Int32 = 0
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(BlockCipherModeTest) = [] of BlockCipherModeTest
+  end
+end
