@@ -2,7 +2,7 @@
 
 `Beryl::Crypto` implements these standards in Crystal. Nothing here calls OpenSSL or any other C library.
 
-Status: milestone B1 of the Beryl cryptography plan. The code passes every published vector listed below and agrees with OpenSSL 4.1.0 on millions of random inputs. It passes the three constant-time checks described under "How it is tested". Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge. It is not tuned for speed yet (hardware SHA instructions arrive in milestone F1).
+Status: milestones B1 (make it work) and F1 (make it fast) of the Beryl cryptography plan. The code passes every published vector listed below and agrees with OpenSSL 4.1.0 on millions of random inputs. It passes the three constant-time checks described under "How it is tested". Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge. Its speed next to OpenSSL 4.1.0 is under "Speed".
 
 ## Which call to use
 
@@ -100,24 +100,93 @@ salted_password = pbkdf2.derive_key(password, salt: salt, iteration_count: 4096,
 Every error descends from `Beryl::Error` through `Beryl::Crypto::Error`:
 `DerivedKeyTooLong`, `DerivedKeySizeIsNegative`, `IterationCountTooSmall`, `MessageTooLong`, `OutputSizeMismatch`, `TruncatedTagTooShort`.
 
+## Speed
+
+Every SHA hash runs on the processor's own SHA instructions where the processor has them, and on portable Crystal everywhere else. `Beryl::Crypto::ProcessorFeatures` makes the choice once, when the program starts.
+
+| Platform | SHA-1, SHA-224, SHA-256 | SHA-384, SHA-512, SHA-512/256 | How the processor is asked |
+|---|---|---|---|
+| Apple Silicon (macOS on AArch64) | ARMv8 SHA1 and SHA2 instructions | ARMv8.2 SHA512 instructions | Every Apple Silicon processor has them; known at compile time |
+| Linux on AArch64 | ARMv8 SHA1 and SHA2 instructions | ARMv8.2 SHA512 instructions | `getauxval(AT_HWCAP)`, each of the three on its own bit |
+| Linux on x86-64 | SHA extensions (SHA-NI) | portable code | CPUID |
+| Anything else, or built with `-Dberyl_portable_hashes` | portable code | portable code | |
+
+MD5 is portable code on every platform; no processor has MD5 instructions.
+
+Measured against OpenSSL 4.1.0 on an Apple M1 Max, which runs the same ARMv8 instructions in OpenSSL's own assembly (`bench/hashes_against_libcrypto.cr`, 2026-11-22). A row is ten rounds (rows whose first interval spanned 1 were measured again with 20 or 30 rounds, and the table shows the longer run); in a round each arm runs for two seconds of processor time, the two arms taking turns of a few milliseconds on the same buffer. "Paired 95% interval" is the interval of the per-round ratio. HMAC is keyed once and restarted for each message on both sides.
+
+| Algorithm | Message | Beryl MB/s | libcrypto MB/s | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
+|---|---|---|---|---|---|---|
+| MD5 | 64 B | 333.9 | 243.2 | 1.37× as fast | 1.37× as fast to 1.38× as fast | yes |
+| MD5 | 1 KiB | 622.4 | 595.4 | 1.045× as fast | 1.044× as fast to 1.047× as fast | yes |
+| MD5 | 1 MiB | 666.5 | 664.1 | 1.004× as fast | 1.003× as fast to 1.005× as fast | yes |
+| HMAC-MD5 | 64 B | 220.4 | 218.0 | 1.011× as fast | 1.01× as fast to 1.012× as fast | yes |
+| HMAC-MD5 | 1 KiB | 590.3 | 588.5 | 1.003× as fast | 1.002× as fast to 1.003× as fast | yes |
+| HMAC-MD5 | 1 MiB | 665.6 | 663.4 | 1.003× as fast | 1.002× as fast to 1.004× as fast | yes |
+| SHA-1 | 64 B | 1011.1 | 386.9 | 2.62× as fast | 2.61× as fast to 2.62× as fast | yes |
+| SHA-1 | 1 KiB | 2102.9 | 1775.2 | 1.18× as fast | 1.18× as fast to 1.19× as fast | yes |
+| SHA-1 | 1 MiB | 2250.6 | 2247.7 | 1.001× as fast | 1.001× as fast to 1.002× as fast | yes |
+| HMAC-SHA-1 | 64 B | 676.0 | 492.7 | 1.37× as fast | 1.37× as fast to 1.38× as fast | yes |
+| HMAC-SHA-1 | 1 KiB | 1977.7 | 1916.0 | 1.033× as fast | 1.032× as fast to 1.033× as fast | yes |
+| HMAC-SHA-1 | 1 MiB | 2216.2 | 2214.5 | 1.0× as fast | 1.0× as fast to 1.001× as fast | yes |
+| SHA-224 | 64 B | 1020.9 | 424.0 | 2.41× as fast | 2.4× as fast to 2.41× as fast | yes |
+| SHA-224 | 1 KiB | 2134.3 | 1844.7 | 1.16× as fast | 1.16× as fast to 1.16× as fast | yes |
+| SHA-224 | 1 MiB | 2309.9 | 2306.3 | 1.002× as fast | 1.001× as fast to 1.002× as fast | yes |
+| HMAC-SHA-224 | 64 B | 691.3 | 560.8 | 1.23× as fast | 1.23× as fast to 1.23× as fast | yes |
+| HMAC-SHA-224 | 1 KiB | 1978.1 | 1944.4 | 1.017× as fast | 1.016× as fast to 1.018× as fast | yes |
+| HMAC-SHA-224 | 1 MiB | 2363.1 | 2362.8 | 1.001× as fast | 1.0× as fast to 1.001× as fast | yes |
+| SHA-256 | 64 B | 1050.6 | 406.6 | 2.59× as fast | 2.58× as fast to 2.59× as fast | yes |
+| SHA-256 | 1 KiB | 2266.3 | 1892.4 | 1.2× as fast | 1.2× as fast to 1.2× as fast | yes |
+| SHA-256 | 1 MiB | 2283.1 | 2278.3 | 1.002× as fast | 1.001× as fast to 1.004× as fast | yes |
+| HMAC-SHA-256 | 64 B | 660.5 | 564.8 | 1.18× as fast | 1.17× as fast to 1.18× as fast | yes |
+| HMAC-SHA-256 | 1 KiB | 1978.6 | 1952.3 | 1.015× as fast | 1.013× as fast to 1.016× as fast | yes |
+| HMAC-SHA-256 | 1 MiB | 2209.6 | 2206.7 | 1.001× as fast | 1.0× as fast to 1.002× as fast | yes |
+| SHA-384 | 64 B | 641.0 | 329.1 | 1.95× as fast | 1.94× as fast to 1.96× as fast | yes |
+| SHA-384 | 1 KiB | 1147.6 | 1029.4 | 1.12× as fast | 1.11× as fast to 1.12× as fast | yes |
+| SHA-384 | 1 MiB | 1337.7 | 1322.7 | 1.012× as fast | 1.01× as fast to 1.014× as fast | yes |
+| HMAC-SHA-384 | 64 B | 311.6 | 278.6 | 1.11× as fast | 1.11× as fast to 1.12× as fast | yes |
+| HMAC-SHA-384 | 1 KiB | 1058.4 | 1028.5 | 1.023× as fast | 1.023× as fast to 1.029× as fast | yes |
+| HMAC-SHA-384 | 1 MiB | 1338.1 | 1320.1 | 1.011× as fast | 1.008× as fast to 1.013× as fast | yes |
+| SHA-512 | 64 B | 631.5 | 309.8 | 2.03× as fast | 2.02× as fast to 2.04× as fast | yes |
+| SHA-512 | 1 KiB | 1161.8 | 1043.4 | 1.12× as fast | 1.11× as fast to 1.12× as fast | yes |
+| SHA-512 | 1 MiB | 1353.1 | 1331.0 | 1.014× as fast | 1.013× as fast to 1.016× as fast | yes |
+| HMAC-SHA-512 | 64 B | 305.1 | 284.2 | 1.073× as fast | 1.066× as fast to 1.077× as fast | yes |
+| HMAC-SHA-512 | 1 KiB | 1078.1 | 1056.1 | 1.019× as fast | 1.018× as fast to 1.021× as fast | yes |
+| HMAC-SHA-512 | 1 MiB | 1349.2 | 1335.1 | 1.011× as fast | 1.011× as fast to 1.013× as fast | yes |
+| SHA-512/256 | 64 B | 642.2 | 320.6 | 2.01× as fast | 2.0× as fast to 2.02× as fast | yes |
+| SHA-512/256 | 1 KiB | 1193.6 | 1072.8 | 1.11× as fast | 1.11× as fast to 1.12× as fast | yes |
+| SHA-512/256 | 1 MiB | 1326.8 | 1308.5 | 1.014× as fast | 1.012× as fast to 1.015× as fast | yes |
+| HMAC-SHA-512/256 | 64 B | 334.1 | 290.9 | 1.15× as fast | 1.14× as fast to 1.15× as fast | yes |
+| HMAC-SHA-512/256 | 1 KiB | 1084.1 | 1067.8 | 1.018× as fast | 1.015× as fast to 1.019× as fast | yes |
+| HMAC-SHA-512/256 | 1 MiB | 1349.5 | 1333.4 | 1.012× as fast | 1.01× as fast to 1.013× as fast | yes |
+
+How to read it:
+
+- **42 of 42 rows are faster than OpenSSL with the whole interval above 1.** At 64 B and 1 KiB the gain is in what surrounds the compression function: Beryl's `reset`, `update` and `final` do less work per message than OpenSSL's, and HMAC keeps its outer block laid out.
+- **On 1 MiB messages SHA-1, SHA-224 and SHA-256 lead by at most 0.4%.** Both libraries run the same ARMv8 instructions there, each group of four rounds waits for the one before it, and that chain sets the speed of both. The HMAC-SHA-1 and HMAC-SHA-224 rows at 1 MiB first came out as ties in a ten-round run and are shown from the longer runs; every run is kept with the evidence.
+- SHA-384, SHA-512 and SHA-512/256 are ahead on long messages too, because Beryl's SHA-512 routine gives `sha512h` a sum that already holds c and d and so takes one addition out of the chain between rounds.
+
+The portable code was not measured against OpenSSL here, because on this processor OpenSSL keeps its SHA instructions. In a best-case timing of 64 KiB messages it runs SHA-1 at 0.41, SHA-256 at 0.14 and SHA-512 at 0.39 of the speed of OpenSSL with the instructions; this work made portable SHA-256 12% and portable SHA-512 18% faster than they were.
+
 ## How it is tested
 
 | Command | What it runs | Time |
 |---|---|---|
-| `crystal-alpha spec` | Unit specs and every published vector below, with the count per algorithm printed at the end | under a minute |
+| `crystal-alpha spec` | Unit specs and every published vector below, with the count per algorithm printed at the end, on the code the processor selects | under a minute |
+| `crystal-alpha spec -Dberyl_portable_hashes` | The same suite with every hash on its portable code, whatever the processor has | under a minute |
 | `crystal-alpha spec --release --tag slow` | The two PBKDF2 vectors of 16,777,216 iterations | seconds |
 | `crystal-alpha spec --release --tag differential` | Beryl against libcrypto on random inputs: 1,000,000 cases per hash and per HMAC (messages of 0 to 65,536 bytes, random `update` splits), 100,000 per HKDF, 10,000 per PBKDF2 (1 to 4,096 iterations). The seed is printed, and any failing case replays alone | one to two hours of processor time; one algorithm at a time with `-e` |
 | `crystal-alpha spec --release --tag constant_time` | Constant time, by timing (the dudect method): HMAC `verify`, keying and tagging, 10,000,000 measurements per class, largest \|t\| under 4.5. Inputs are laid out a batch at a time before any is timed, so the two classes differ only in the secret bytes read | about a minute |
 | `valgrind --error-exitcode=99 ./secret_taint` on `spec/probes/secret_taint.cr` (Linux) | Constant time, by memory checker (the ctgrind method): every key, message, tag and password is undefined memory, so Memcheck reports any branch or address computed from one. `./secret_taint leaky` must be reported | seconds |
 | `scripts/check_secret_flow.rb` on the LLVM IR of `spec/probes/secret_flow.cr` | Constant time, in the compiled code: follows secrets through the optimized IR of every `Beryl::Crypto` function and reports a branch, a memory index or a division that depends on one. The probe's deliberate leak must be reported | seconds |
 | `crystal-alpha build --release -Dwithout_openssl spec/probes/no_libcrypto.cr` then `otool -L` | Proof that the library links no libssl and no libcrypto | seconds |
-| `bench/hashes_against_libcrypto.cr` | Baseline speed next to libcrypto, alternating arms | about four minutes |
+| `bench/hashes_against_libcrypto.cr` | Speed of every hash and HMAC next to libcrypto, alternating arms (see "Speed") | 40 seconds per row, 28 minutes for all 42; `BERYL_BENCH_ALGORITHMS` picks some |
 
 The differential, the vector pin check and the benchmark are the only places this repository uses OpenSSL. The library requires none of it.
 
-CI (`.github/workflows/ci.yml`) runs the quick suite, the slow vectors, the linkage probe and all three constant-time checks on every pull request. The differential runs on request (`workflow_dispatch`), because it takes one to two hours.
+CI (`.github/workflows/ci.yml`) runs the quick suite (on the code the processor selects, then on the portable code alone), the slow vectors, the linkage probe and all three constant-time checks on every pull request, on Linux x86-64, and the suite, the memory-checker run and the compiled-code check again on Linux AArch64. The differential runs on request (`workflow_dispatch`), because it takes one to two hours; it then runs three times: on Linux x86-64 with the code the processor selects, on Linux x86-64 with the portable code alone, and on Linux AArch64.
 
-The compiled-code check is a taint analysis written for this code, one function at a time, and it was itself tested by planting leaks (an early-exit comparison in `verify`, a secret-dependent `raise` in a compression function, a secret-dependent `break` in PBKDF2): it reported each one. Its header states its limits.
+The compiled-code check is a taint analysis written for this code, one function at a time, and it was itself tested by planting leaks (an early-exit comparison in `verify`, a secret-dependent `raise` in a compression function, a secret-dependent `break` in PBKDF2): it reported each one. Assembly is opaque to that analysis, so the checker reads its text instead: every instruction must be on a list of instructions whose timing does not depend on their operands, the only conditional branch must close the loop on the count of blocks, and memory may be addressed only as a register plus a constant. That rule was tested the same way (a branch on a data register, a load indexed by a register, a division, a second write to the counting register): it reported each one. Its header states its limits.
 
 ### Published vectors
 
@@ -170,6 +239,7 @@ RFC 4231 and RFC 5869 are read field by field from the pinned RFC text. The othe
 ## Design notes
 
 - **Wrapping arithmetic.** The compression functions use `&+` and the rotations only, so no overflow check runs and no input value decides a branch.
+- **Processor instructions.** `Beryl::Crypto::ProcessorFeatures` decides once, when the program starts, whether each hash runs on the processor's SHA instructions; the assembly lives in `armv8_hash_instructions.cr` and `x86_64_hash_instructions.cr`. It has one branch, on the count of blocks left, and reads memory only at fixed offsets, so it keeps the constant-time rules by construction. The portable code is always compiled in and is the same code the vectors run on under `-Dberyl_portable_hashes`.
 - **Key handling.** `HMAC.new` turns the key into two keyed hash states and wipes its working copies with a volatile write. The key's length is the only thing about it that decides a step. Digest and tag buffers that held secret-dependent values are wiped the same way.
 - **Limits.** A message holds at most 2^61 − 1 bytes. HKDF gives at most 255 hash outputs. PBKDF2 runs at least one iteration.
 - **Logging.** `Beryl::Log` is the shard's log source. Nothing in `Beryl::Crypto` logs a key, a message or a tag.
