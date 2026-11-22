@@ -45,6 +45,15 @@ module Beryl::Crypto::V1
     # *ciphertext* and *associated_data* under *nonce*.
     protected abstract def compute_tag(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, full_tag : Bytes) : Nil
 
+    # Encrypts *plaintext* into *ciphertext* under *nonce* and writes into
+    # *full_tag* the tag of the ciphertext and *associated_data*. A cipher
+    # that can encrypt and authenticate in one pass over the message
+    # overrides this.
+    protected def seal(nonce : Bytes, associated_data : Bytes, plaintext : Bytes, ciphertext : Bytes, full_tag : Bytes) : Nil
+      apply_keystream(nonce, plaintext, ciphertext)
+      compute_tag(nonce, associated_data, ciphertext, full_tag)
+    end
+
     # Returns *plaintext* encrypted under *nonce*: the ciphertext, then the
     # tag.
     def encrypt(plaintext : Bytes | String, *, nonce : Bytes, associated_data : Bytes | String = Bytes.empty) : Bytes
@@ -66,10 +75,8 @@ module Beryl::Crypto::V1
       end
 
       ciphertext = ciphertext_and_tag[0, plaintext_bytes.size]
-      apply_keystream(nonce, plaintext_bytes, ciphertext)
-
       full_tag_storage = uninitialized UInt8[FULL_TAG_BYTESIZE]
-      compute_tag(nonce, associated_data.to_slice, ciphertext, full_tag_storage.to_slice)
+      seal(nonce, associated_data.to_slice, plaintext_bytes, ciphertext, full_tag_storage.to_slice)
       full_tag_storage.to_slice[0, @tag_bytesize].copy_to(ciphertext_and_tag[plaintext_bytes.size, @tag_bytesize])
       SecretWiping.wipe(full_tag_storage.to_slice)
     end
