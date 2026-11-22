@@ -345,7 +345,7 @@ module Beryl::Crypto
     # encryption round keys at *round_keys*: the last key first, the middle
     # keys through `aesimc`, the first key last. No loop.
     macro prepare_decryption_round_keys(round_keys, decryption_round_keys, round_count)
-      {% template = "  mov x9, $0\n  mov x10, $1\n" %}
+      {% template = "  .arch_extension aes\n  mov x9, $0\n  mov x10, $1\n" %}
       {% for index in 0..round_count %}
         {% template = template + "  ldr q0, [x9, ##{(round_count - index) * 16}]\n" %}
         {% if index > 0 && index < round_count %}
@@ -367,7 +367,7 @@ module Beryl::Crypto
     # block's first `aese` (which XORs its operand in first).
     macro encrypt_chained_blocks(round_keys, chaining_block, input, output, block_count, round_count)
       {% key_count = round_count + 1 %}
-      {% template = "  mov x9, $0\n  mov x10, $1\n  mov x12, $2\n  mov x13, $3\n  mov x11, $4\n" %}
+      {% template = "  .arch_extension aes\n  mov x9, $0\n  mov x10, $1\n  mov x12, $2\n  mov x13, $3\n  mov x11, $4\n" %}
       {% for start in [0, 4, 8, 12] %}
         {% if start < key_count %}
           {% count = key_count - start %}
@@ -411,7 +411,7 @@ module Beryl::Crypto
     # left holding the last ciphertext block read.
     macro decrypt_chained_blocks(decryption_round_keys, chaining_block, input, output, group_count, round_count, blocks_per_group)
       {% key_count = round_count + 1 %}
-      {% template = "  mov x9, $0\n  mov x10, $1\n  mov x12, $2\n  mov x13, $3\n  mov x11, $4\n" %}
+      {% template = "  .arch_extension aes\n  mov x9, $0\n  mov x10, $1\n  mov x12, $2\n  mov x13, $3\n  mov x11, $4\n" %}
       {% for start in [0, 4, 8, 12] %}
         {% if start < key_count %}
           {% count = key_count - start %}
@@ -484,7 +484,7 @@ module Beryl::Crypto
     # to v15 the blocks, v16 to v30 the round keys, v31 a ciphertext block.
     macro decrypt_chained_blocks_pipelined(decryption_round_keys, input, output, pair_count, round_count)
       {% key_count = round_count + 1 %}
-      {% template = "  mov x9, $0\n  mov x12, $1\n  mov x13, $2\n  mov x11, $3\n" %}
+      {% template = "  .arch_extension aes\n  mov x9, $0\n  mov x12, $1\n  mov x13, $2\n  mov x11, $3\n" %}
       {% for start in [0, 4, 8, 12] %}
         {% if start < key_count %}
           {% count = key_count - start %}
