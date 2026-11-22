@@ -72,15 +72,20 @@ module Beryl::Crypto::Compatibility
       # The loop runs once per whole block, so every read below stays
       # inside *list_of_blocks*.
       block_pointer = list_of_blocks.to_unsafe
+      # The state stays in these four locals from the first block to the last.
+      state_a = @state[0]
+      state_b = @state[1]
+      state_c = @state[2]
+      state_d = @state[3]
       (list_of_blocks.size // BLOCK_SIZE).times do
         {% for k in 0...16 %}
           x[{{ k }}] = IO::ByteFormat::LittleEndian.decode(UInt32, Slice.new(block_pointer + {{ k * 4 }}, 4))
         {% end %}
 
-        a = @state[0]
-        b = @state[1]
-        c = @state[2]
-        d = @state[3]
+        a = state_a
+        b = state_b
+        c = state_c
+        d = state_d
 
         {% begin %}
         {% names = %w[a b c d] %}
@@ -135,13 +140,17 @@ module Beryl::Crypto::Compatibility
         {% end %}
         {% end %}
 
-        @state[0] = @state[0] &+ a
-        @state[1] = @state[1] &+ b
-        @state[2] = @state[2] &+ c
-        @state[3] = @state[3] &+ d
+        state_a &+= a
+        state_b &+= b
+        state_c &+= c
+        state_d &+= d
 
         block_pointer += BLOCK_SIZE
       end
+      @state[0] = state_a
+      @state[1] = state_b
+      @state[2] = state_c
+      @state[3] = state_d
     end
   end
 
