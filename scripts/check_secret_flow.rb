@@ -56,7 +56,9 @@ ANALYZED_FUNCTION = /Beryl::Crypto|SecretFlowProbe|Crypto::Subtle/.freeze
 # and authenticator cores, which work on keys, round keys, accumulators and
 # message blocks handed to them as bare pointers.
 SECRET_BUFFER_FUNCTION = /BitslicedAdvancedEncryptionStandard::|ChaCha20StreamCipher::|Poly1305OneTimeAuthenticator::|
-                          GaloisHash::|CipherBlockChaining::|ChaCha20Poly1305Construction::/x.freeze
+                          GaloisHash::|CipherBlockChaining::|ChaCha20Poly1305Construction::|
+                          GaloisCounterModeWithProcessorInstructions::|ChaCha20WithVectorInstructions::|
+                          Poly1305WithWideMultiplication::|CipherBlockChainingWithProcessorInstructions::/x.freeze
 
 # Methods of the cipher objects. A cipher object keeps integers that are
 # public (a round count, a tag size) beside buffers that are secret (a key,
@@ -81,6 +83,8 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   lea movdqa movdqu paddd pxor pshufd pshufb palignr pblendw pinsrd pextrd
   sha1rnds4 sha1nexte sha1msg1 sha1msg2 sha256rnds2 sha256msg1 sha256msg2
   aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq pslld psrld
+  aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
+  adds adcs adc mul umulh ror
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze

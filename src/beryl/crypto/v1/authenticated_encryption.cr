@@ -122,8 +122,10 @@ module Beryl::Crypto::V1
         )
       end
 
-      open(nonce, associated_data.to_slice, ciphertext_and_tag[0, plaintext.size],
-        ciphertext_and_tag[plaintext.size, @tag_bytesize], plaintext)
+      # `open` reveals its verdict where it computes it; revealing it again
+      # here tells the secret-flow check that the caller sees a public value.
+      Declassification.reveal(open(nonce, associated_data.to_slice, ciphertext_and_tag[0, plaintext.size],
+        ciphertext_and_tag[plaintext.size, @tag_bytesize], plaintext))
     end
 
     # Returns whether *ciphertext_and_tag* carries the right tag for *nonce*
