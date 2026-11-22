@@ -7,8 +7,8 @@
 # under a name the checker can find. Its `Bytes` arguments are the secrets;
 # `scripts/check_secret_flow.rb` follows them through the optimized LLVM IR
 # and reports any branch, table index or division that depends on one.
-# `leaky_comparison` is the fault the check exists to catch and must be
-# reported.
+# `leaky_comparison` and `leaky_comparison_of_round_keys` are the faults the
+# check exists to catch and must be reported.
 require "../../src/beryl/crypto"
 
 module SecretFlowProbe
@@ -53,6 +53,97 @@ module SecretFlowProbe
     )
   end
 
+  alias ChaCha20Poly1305 = Beryl::Crypto::V1::ChaCha20Poly1305
+  alias XChaCha20Poly1305 = Beryl::Crypto::V1::XChaCha20Poly1305
+  alias AESGCM = Beryl::Crypto::V1::AESGCM
+  alias AESCBC = Beryl::Crypto::Compatibility::AESCBC
+  alias BitslicedAES = Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard
+
+  @[NoInline]
+  def self.chacha20_poly1305_keying(key : Bytes) : ChaCha20Poly1305
+    ChaCha20Poly1305.new(key)
+  end
+
+  @[NoInline]
+  def self.chacha20_poly1305_encryption(cipher : ChaCha20Poly1305, plaintext : Bytes, nonce : Bytes, sealed : Bytes) : Nil
+    cipher.encrypt(plaintext, into: sealed, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.chacha20_poly1305_decryption(cipher : ChaCha20Poly1305, sealed : Bytes, nonce : Bytes, plaintext : Bytes) : Bool
+    cipher.decrypt(sealed, into: plaintext, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.xchacha20_poly1305_keying(key : Bytes) : XChaCha20Poly1305
+    XChaCha20Poly1305.new(key)
+  end
+
+  @[NoInline]
+  def self.xchacha20_poly1305_encryption(cipher : XChaCha20Poly1305, plaintext : Bytes, nonce : Bytes, sealed : Bytes) : Nil
+    cipher.encrypt(plaintext, into: sealed, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.xchacha20_poly1305_decryption(cipher : XChaCha20Poly1305, sealed : Bytes, nonce : Bytes, plaintext : Bytes) : Bool
+    cipher.decrypt(sealed, into: plaintext, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.aes_gcm_keying(key : Bytes) : AESGCM
+    AESGCM.new(key)
+  end
+
+  @[NoInline]
+  def self.aes_gcm_encryption(cipher : AESGCM, plaintext : Bytes, nonce : Bytes, sealed : Bytes) : Nil
+    cipher.encrypt(plaintext, into: sealed, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.aes_gcm_decryption(cipher : AESGCM, sealed : Bytes, nonce : Bytes, plaintext : Bytes) : Bool
+    cipher.decrypt(sealed, into: plaintext, nonce: nonce, associated_data: "header")
+  end
+
+  @[NoInline]
+  def self.aes_cbc_keying(key : Bytes) : AESCBC
+    AESCBC.new(key)
+  end
+
+  @[NoInline]
+  def self.aes_cbc_encryption(cipher : AESCBC, plaintext : Bytes, initialization_vector : Bytes) : Bytes
+    cipher.encrypt(plaintext, initialization_vector: initialization_vector)
+  end
+
+  @[NoInline]
+  def self.aes_cbc_decryption(cipher : AESCBC, ciphertext : Bytes, initialization_vector : Bytes) : Bytes?
+    cipher.decrypt(ciphertext, initialization_vector: initialization_vector)
+  end
+
+  @[NoInline]
+  def self.aes_block_decryption(round_keys : Slice(UInt64), round_count : Int32, input : Bytes, output : Bytes) : Nil
+    BitslicedAES.decrypt_blocks(round_keys, round_count, input, output)
+  end
+
+  @[NoInline]
+  def self.sealed_message(message : Bytes, key : Bytes) : Bytes
+    Beryl::Crypto.encrypt(message, key: key)
+  end
+
+  @[NoInline]
+  def self.opened_message(encrypted_message : Bytes, key : Bytes) : Bytes?
+    Beryl::Crypto.decrypt(encrypted_message, key: key)
+  end
+
+  # Stops at the first round key word that is zero: a leak in the form
+  # cipher code would have it, which the check must report as well.
+  @[NoInline]
+  def self.leaky_comparison_of_round_keys(round_keys : Slice(UInt64)) : Bool
+    round_keys.size.times do |index|
+      return false if round_keys[index] == 0_u64
+    end
+    true
+  end
+
   # Compares with an early exit: the textbook timing leak.
   @[NoInline]
   def self.leaky_comparison(first : Bytes, second : Bytes) : Bool
@@ -76,6 +167,43 @@ is_verified &= !SecretFlowProbe.truncated_verification(long_authentication, tag)
 derived_key = SecretFlowProbe.key_derivation(key, tag)
 stretched_key = SecretFlowProbe.password_stretching(key)
 is_verified &= SecretFlowProbe.leaky_comparison(tag, tag)
+
+# The ciphers, once each so that every entry point is in the module.
+nonce = Bytes.new(24) { |index| (index + 1).to_u8 }
+plaintext = Bytes.new(100) { |index| (index &* 3).to_u8! }
+sealed = Bytes.new(116)
+opened = Bytes.new(100)
+
+chacha20_poly1305 = SecretFlowProbe.chacha20_poly1305_keying(key)
+SecretFlowProbe.chacha20_poly1305_encryption(chacha20_poly1305, plaintext, nonce[0, 12], sealed)
+is_verified &= SecretFlowProbe.chacha20_poly1305_decryption(chacha20_poly1305, sealed, nonce[0, 12], opened)
+is_verified &= opened == plaintext
+
+xchacha20_poly1305 = SecretFlowProbe.xchacha20_poly1305_keying(key)
+SecretFlowProbe.xchacha20_poly1305_encryption(xchacha20_poly1305, plaintext, nonce, sealed)
+is_verified &= SecretFlowProbe.xchacha20_poly1305_decryption(xchacha20_poly1305, sealed, nonce, opened)
+is_verified &= opened == plaintext
+
+{16, 24, 32}.each do |key_bytesize|
+  aes_gcm = SecretFlowProbe.aes_gcm_keying(key[0, key_bytesize])
+  {12, 20}.each do |nonce_bytesize|
+    SecretFlowProbe.aes_gcm_encryption(aes_gcm, plaintext, nonce[0, nonce_bytesize], sealed)
+    is_verified &= SecretFlowProbe.aes_gcm_decryption(aes_gcm, sealed, nonce[0, nonce_bytesize], opened)
+    is_verified &= opened == plaintext
+  end
+
+  aes_cbc = SecretFlowProbe.aes_cbc_keying(key[0, key_bytesize])
+  ciphertext = SecretFlowProbe.aes_cbc_encryption(aes_cbc, plaintext, nonce[0, 16])
+  is_verified &= SecretFlowProbe.aes_cbc_decryption(aes_cbc, ciphertext, nonce[0, 16]) == plaintext
+
+  round_keys = Slice(UInt64).new(SecretFlowProbe::BitslicedAES::ROUND_KEY_WORD_COUNT, 0_u64)
+  SecretFlowProbe::BitslicedAES.expand_key(key[0, key_bytesize], round_keys)
+  SecretFlowProbe.aes_block_decryption(round_keys, key_bytesize // 4 + 6, ciphertext[0, 64], opened[0, 64])
+  SecretFlowProbe.leaky_comparison_of_round_keys(round_keys)
+end
+
+encrypted_message = SecretFlowProbe.sealed_message(plaintext, key)
+is_verified &= SecretFlowProbe.opened_message(encrypted_message, key) == plaintext
 
 list_of_digests = [
   Beryl::Crypto::Compatibility::MD5.digest(key), Beryl::Crypto::Compatibility::SHA1.digest(key),

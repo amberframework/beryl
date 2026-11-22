@@ -32,4 +32,19 @@ module Beryl::Crypto
   # allows: half the hash output, and never under 80 bits.
   class TruncatedTagTooShort < Error
   end
+
+  # Raised when a key is a different size than its cipher takes, for example
+  # anything but 32 bytes for ChaCha20-Poly1305.
+  class KeySizeMismatch < Error
+  end
+
+  # Raised when a nonce or an initialization vector is a different size than
+  # its cipher takes.
+  class NonceSizeMismatch < Error
+  end
+
+  # Raised when an authenticated cipher is asked for a tag size its standard
+  # does not define.
+  class TagSizeNotSupported < Error
+  end
 end
