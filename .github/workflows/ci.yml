@@ -38,6 +38,8 @@ jobs:
         run: crystal spec
       - name: Run the quick suite again on the portable code alone
         run: crystal spec -Dberyl_portable_hashes
+      - name: Run the quick suite again on the portable ciphers alone
+        run: crystal spec -Dberyl_portable_ciphers
       - name: Run the PBKDF2 vectors of 16,777,216 iterations
         run: crystal spec --release --tag slow
       - name: Prove the library links no OpenSSL
@@ -86,13 +88,17 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_hashes spec/probes/secret_flow.cr -o secret_flow_portable
           ruby scripts/check_secret_flow.rb secret_flow_portable.ll
+      - name: "Compiled code, portable ciphers alone: no branch or index depends on a secret"
+        run: |
+          crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_ciphers spec/probes/secret_flow.cr -o secret_flow_portable_ciphers
+          ruby scripts/check_secret_flow.rb secret_flow_portable_ciphers.ll
       - name: "Timing: HMAC and the ciphers take the same time whatever the secret"
         run: crystal spec --release --tag constant_time
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
 
   aarch64:
-    name: Linux on AArch64 (SHA instructions found at run time)
+    name: Linux on AArch64 (hash and cipher instructions found at run time)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
@@ -107,10 +113,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends valgrind=1:3.22.0-0ubuntu3
       - name: Install dependencies
         run: shards install --frozen --skip-postinstall --skip-executables
-      - name: List the processor's hash instructions
+      - name: List the processor's hash and cipher instructions
         run: grep -m1 Features /proc/cpuinfo
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
+      - name: Run the cipher vectors again on the code written without eor3
+        run: crystal spec -Dberyl_without_eor3 spec/beryl/crypto
       - name: Run the PBKDF2 vectors of 16,777,216 iterations
         run: crystal spec --release --tag slow
       - name: "Memory checker: no branch or address depends on a secret"
@@ -129,11 +137,28 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl spec/probes/secret_flow.cr -o secret_flow
           ruby scripts/check_secret_flow.rb secret_flow.ll
+      - name: "Compiled code, written without eor3: no branch or index depends on a secret"
+        run: |
+          crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_without_eor3 spec/probes/secret_flow.cr -o secret_flow_without_eor3
+          ruby scripts/check_secret_flow.rb secret_flow_without_eor3.ll
 
 
   cipher-differential:
-    name: Differential against libcrypto (ciphers)
-    runs-on: ubuntu-24.04
+    name: Differential against libcrypto, ciphers (${{ matrix.code }} on ${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            code: the code the processor selects
+            flags: ""
+          - runner: ubuntu-24.04
+            code: portable ciphers alone
+            flags: "-Dberyl_portable_ciphers"
+          - runner: ubuntu-24.04-arm
+            code: the code the processor selects
+            flags: ""
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -144,8 +169,10 @@ jobs:
         run: shards install --frozen --skip-postinstall --skip-executables
       - name: Show the libcrypto this job compares against
         run: openssl version
+      - name: State which cipher instructions run
+        run: crystal spec ${{ matrix.flags }} spec/beryl/crypto/processor_cipher_instructions_spec.cr -e "states which instructions"
       - name: Run the differential (1,000,000 cases per cipher)
-        run: crystal spec --release --tag differential -e "cipher "
+        run: crystal spec --release ${{ matrix.flags }} --tag differential -e "cipher "
 
 
   differential:

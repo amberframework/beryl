@@ -58,10 +58,20 @@ AES-CBC does not authenticate. Check an HMAC over the ciphertext first, as those
 
 ## How the code avoids leaking secrets
 
-- **AES** is bitsliced after BearSSL's `aes_ct64`: the S-box is a circuit of AND, OR and XOR over 64-bit words (the Boyar–Peralta circuit), so no table is indexed by a secret byte and no cache line depends on the key or the message.
-- **GHASH** multiplies in GF(2^128) with carry-less multiplication built from integer multiplies with holes (after BearSSL's `ghash_ctmul64`), again with no table.
-- **Poly1305** uses three limbs of 44, 44 and 42 bits with 128-bit products, and a final reduction made of masks.
-- **ChaCha20** is additions, XORs and fixed rotations.
+Each algorithm has two implementations behind the same interface. The processor's own instructions run where it has them; the portable code runs everywhere else, and under `-Dberyl_portable_ciphers`, which the test suite uses to run every vector through it on any machine.
+
+| Processor | AES-GCM and AES-CBC | ChaCha20 | Poly1305 |
+|---|---|---|---|
+| Apple Silicon (known at compile time) | `aese`/`aesd` and `pmull`, with `eor3` | Advanced SIMD and general registers | 64-bit multiplies (`mul`, `umulh`) |
+| Linux on AArch64 (read from the auxiliary vector) | the same when `HWCAP_AES` and `HWCAP_PMULL` are set; `eor3` when `HWCAP_SHA3` is | Advanced SIMD and general registers | 64-bit multiplies |
+| x86-64 (read with CPUID) | AES-NI and `pclmulqdq` when present, with SSSE3 and SSE4.1 | SSE2 and SSSE3 | 64-bit multiplies |
+| Anywhere else | portable | portable | portable |
+
+- **The instructions.** Crystal has no vector types, so the assembly is written out as inline `asm` statements built by macros (`Armv8CipherInstructions`, `X8664CipherInstructions`). Every statement has at most one branch, which closes its loop on a count of blocks, and reads and writes memory only at fixed offsets from its inputs. AES, carry-less multiply, the vector instructions and the 64-bit multiplies take the same time whatever their operands hold, and `scripts/check_secret_flow.rb` checks each statement's text against that list.
+- **AES (portable)** is bitsliced after BearSSL's `aes_ct64`: the S-box is a circuit of AND, OR and XOR over 64-bit words (the Boyar–Peralta circuit), so no table is indexed by a secret byte and no cache line depends on the key or the message.
+- **GHASH** with `pmull` or `pclmulqdq` works on byte-reversed blocks and a hash key multiplied by x once, reduces with two carry-less multiplies (Gueron and Kounavis), and hashes sixteen blocks against precomputed powers H to H^16 with one reduction per group. The portable GHASH builds carry-less multiplication from integer multiplies with holes (after BearSSL's `ghash_ctmul64`), again with no table.
+- **Poly1305** on 64-bit processors keeps the accumulator in two words and a few bits, with r folded into the product as OpenSSL's `poly1305-armv8` does; a long message is absorbed as four runs side by side and joined with powers of r. The portable code uses three limbs of 44, 44 and 42 bits. Both end in a reduction made of masks.
+- **ChaCha20** is additions, XORs and fixed rotations. On AArch64 a pass makes nine blocks: four across the lanes of sixteen vector registers, three more in rows of four registers, and two on the general registers. For sealing and opening long messages, a pass of seven vector blocks absorbs Poly1305 on the general registers at the same time. Short messages run block by block on the general registers.
 - **The verdict.** `decrypt` computes the tag, compares it in constant time, and passes the one-bit result through `Declassification.reveal`. That is the only place a secret-derived value decides a branch, and the compiled-code checker lists every such place so a review can see them all.
 
 ## How it is tested
@@ -107,7 +117,7 @@ The machine was busy with other work during the run (load average near 90), so t
 
 ## Design notes
 
-- **Decrypt checks first.** No plaintext byte is produced before the tag matches, and a caller's `into:` buffer is left untouched on failure.
+- **Decrypt checks first.** No plaintext byte reaches the caller before the tag matches, and a caller's `into:` buffer is left untouched on failure. On AArch64, ChaCha20-Poly1305 decrypts into a scratch buffer while it absorbs the ciphertext, and copies the plaintext out only once the tag is right; the scratch buffer is wiped.
 - **XChaCha20-Poly1305** derives a subkey with HChaCha20 for every message, then runs ChaCha20-Poly1305 with the last 8 nonce bytes.
 - **AES-GCM** accepts a nonce of any length as SP 800-38D defines it (a 12-byte nonce is used directly; any other is hashed with GHASH). A Crystal `Bytes` holds under 2^31 bytes, which is inside GCM's limit of 2^36 − 32 bytes for one message.
 - **Errors.** A key, nonce or tag size that the algorithm does not accept raises `KeySizeMismatch`, `NonceSizeMismatch` or `TagSizeNotSupported`, each a `Beryl::Error`. A tag that does not match is never an exception: `decrypt` returns nil or false.
