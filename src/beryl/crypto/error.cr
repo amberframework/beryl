@@ -1,0 +1,35 @@
+require "../error"
+
+module Beryl::Crypto
+  # The base of every error raised by `Beryl::Crypto`.
+  class Error < Beryl::Error
+  end
+
+  # Raised when a key derivation is asked for more bytes than its standard
+  # allows, for example more than 255 hash outputs from HKDF (RFC 5869 §2.3).
+  class DerivedKeyTooLong < Error
+  end
+
+  # Raised when a key derivation is asked for a negative number of bytes.
+  class DerivedKeySizeIsNegative < Error
+  end
+
+  # Raised when PBKDF2 is asked to run fewer than one iteration.
+  class IterationCountTooSmall < Error
+  end
+
+  # Raised when a message grows past the length its hash function can encode
+  # (2^61 - 1 bytes for the hashes in this shard).
+  class MessageTooLong < Error
+  end
+
+  # Raised when the buffer handed to `Digest#final` is a different size than
+  # the digest or the authentication tag being written.
+  class OutputSizeMismatch < Error
+  end
+
+  # Raised when a truncated authentication tag is shorter than RFC 2104 §5
+  # allows: half the hash output, and never under 80 bits.
+  class TruncatedTagTooShort < Error
+  end
+end
