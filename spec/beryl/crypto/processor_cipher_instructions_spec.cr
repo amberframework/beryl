@@ -159,7 +159,7 @@ describe "Beryl ciphers on the processor's instructions" do
   {% for key_bytesize in [16, 24, 32] %}
     it "encrypts and decrypts AES-{{ key_bytesize * 8 }}-CBC as the portable code does, at every length that changes path" do
       generator = Random.new(0x6362_6300 + {{ key_bytesize }})
-      (0..300).each do |message_bytesize|
+      ((0..300).to_a + [1023, 1024, 2047, 2048, 4096, 16_383, 16_384, 100_000]).each do |message_bytesize|
         key = generator.random_bytes({{ key_bytesize }})
         initialization_vector = generator.random_bytes(16)
         plaintext = generator.random_bytes(message_bytesize)

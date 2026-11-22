@@ -281,11 +281,12 @@ module CiphersAgainstLibcrypto
     raise "the two arms disagree on #{algorithm}" unless beryl_sealed == libcrypto_sealed
     raise "Beryl cannot open its own #{algorithm} message" unless beryl_cipher.decrypt(beryl_sealed, initialization_vector: initialization_vector) == message
 
+    beryl_written = Bytes.new(padded_bytesize)
     measure(io, settings, algorithm, "seal", message_bytesize,
-      -> { beryl_cipher.encrypt(message, initialization_vector: initialization_vector); nil },
+      -> { beryl_cipher.encrypt(message, into: beryl_written, initialization_vector: initialization_vector); nil },
       -> { libcrypto_sealing.seal(message, libcrypto_sealed, initialization_vector, Bytes.empty); nil })
     measure(io, settings, algorithm, "open", message_bytesize,
-      -> { beryl_cipher.decrypt(beryl_sealed, initialization_vector: initialization_vector); nil },
+      -> { beryl_cipher.decrypt(beryl_sealed, into: beryl_written, initialization_vector: initialization_vector); nil },
       -> { libcrypto_opening.open(libcrypto_sealed, libcrypto_opened, initialization_vector, Bytes.empty); nil })
   end
 

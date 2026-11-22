@@ -52,17 +52,38 @@ module Beryl::Crypto::Compatibility
     # under *initialization_vector* (16 bytes, fresh and unpredictable for
     # every message).
     def encrypt(plaintext : Bytes | String, *, initialization_vector : Bytes) : Bytes
+      plaintext_bytes = plaintext.to_slice
+      ciphertext = Bytes.new(padded_bytesize(plaintext_bytes.size))
+      encrypt(plaintext_bytes, into: ciphertext, initialization_vector: initialization_vector)
+      ciphertext
+    end
+
+    # Encrypts *plaintext* into *ciphertext*, which must hold the padded
+    # length: `padded_bytesize(plaintext.size)` bytes.
+    def encrypt(plaintext : Bytes | String, *, into ciphertext : Bytes, initialization_vector : Bytes) : Nil
       ensure_initialization_vector_fits(initialization_vector)
       plaintext_bytes = plaintext.to_slice
-      padding_bytesize = BLOCK_BYTESIZE - plaintext_bytes.size % BLOCK_BYTESIZE
-      ciphertext = Bytes.new(plaintext_bytes.size + padding_bytesize, padding_bytesize.to_u8)
+      unless ciphertext.size == padded_bytesize(plaintext_bytes.size)
+        raise Beryl::Crypto::OutputSizeMismatch.new(
+          "the ciphertext is #{padded_bytesize(plaintext_bytes.size)} bytes, the buffer holds #{ciphertext.size}"
+        )
+      end
+
+      padding_bytesize = ciphertext.size - plaintext_bytes.size
       plaintext_bytes.copy_to(ciphertext)
+      ciphertext[plaintext_bytes.size, padding_bytesize].fill(padding_bytesize.to_u8)
       if ProcessorFeatures::HAS_AES_INSTRUCTIONS
         CipherBlockChainingWithProcessorInstructions.encrypt_in_place(@round_key_bytes, @round_count, initialization_vector, ciphertext)
       else
         CipherBlockChaining.encrypt_in_place(@round_keys, @round_count, initialization_vector, ciphertext)
       end
-      ciphertext
+    end
+
+    # The length of the ciphertext of a *plaintext_bytesize*-byte message:
+    # padding takes it to the next whole block, adding a block when it is
+    # whole already.
+    def padded_bytesize(plaintext_bytesize : Int32) : Int32
+      plaintext_bytesize + BLOCK_BYTESIZE - plaintext_bytesize % BLOCK_BYTESIZE
     end
 
     # Returns the plaintext of *ciphertext*, or `nil` when the ciphertext is
@@ -74,6 +95,23 @@ module Beryl::Crypto::Compatibility
       return nil if ciphertext.empty? || ciphertext.size % BLOCK_BYTESIZE != 0
 
       padded_plaintext = Bytes.new(ciphertext.size)
+      plaintext_bytesize = decrypt(ciphertext, into: padded_plaintext, initialization_vector: initialization_vector)
+      return nil unless plaintext_bytesize
+
+      padded_plaintext[0, plaintext_bytesize]
+    end
+
+    # Decrypts *ciphertext* into *padded_plaintext*, which must be as long,
+    # and returns how many of its first bytes are the plaintext; or returns
+    # `nil`, with *padded_plaintext* wiped, when the ciphertext is empty, is
+    # not a whole number of blocks, or decrypts to malformed padding.
+    def decrypt(ciphertext : Bytes, *, into padded_plaintext : Bytes, initialization_vector : Bytes) : Int32?
+      ensure_initialization_vector_fits(initialization_vector)
+      return nil if ciphertext.empty? || ciphertext.size % BLOCK_BYTESIZE != 0
+      unless padded_plaintext.size == ciphertext.size
+        raise Beryl::Crypto::OutputSizeMismatch.new("the buffer holds #{padded_plaintext.size} bytes, the ciphertext #{ciphertext.size}")
+      end
+
       if ProcessorFeatures::HAS_AES_INSTRUCTIONS
         CipherBlockChainingWithProcessorInstructions.decrypt(@decryption_round_key_bytes, @round_count, initialization_vector,
           ciphertext, padded_plaintext)
@@ -87,7 +125,7 @@ module Beryl::Crypto::Compatibility
         return nil
       end
 
-      padded_plaintext[0, padded_plaintext.size - padding_bytesize]
+      padded_plaintext.size - padding_bytesize.to_i32
     end
 
     private def ensure_initialization_vector_fits(initialization_vector : Bytes) : Nil

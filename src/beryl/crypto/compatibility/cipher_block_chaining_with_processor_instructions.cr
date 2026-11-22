@@ -65,8 +65,24 @@ module Beryl::Crypto::Compatibility
       block_count = ciphertext.size // BLOCK_BYTESIZE
       group_count = block_count // DECRYPTION_BLOCKS_PER_GROUP
       keys = decryption_round_key_bytes.to_unsafe
-      if group_count > 0
-        decrypt_groups(keys, round_count, chaining_block.to_unsafe, ciphertext.to_unsafe, padded_plaintext.to_unsafe, group_count.to_u64)
+      done_group_count = 0
+      {% if flag?(:aarch64) %}
+        if group_count >= 4
+          # The first group chains from the initialization vector; the
+          # pipelined loop then reads each previous ciphertext block from
+          # the message itself.
+          decrypt_groups(keys, round_count, chaining_block.to_unsafe, ciphertext.to_unsafe, padded_plaintext.to_unsafe, 1_u64)
+          pair_count = (group_count - 2) // 2
+          offset = DECRYPTION_BLOCKS_PER_GROUP * BLOCK_BYTESIZE
+          decrypt_pipelined(keys, round_count, ciphertext.to_unsafe + offset, padded_plaintext.to_unsafe + offset, pair_count.to_u64)
+          done_group_count = 2 + pair_count * 2
+          ciphertext[done_group_count * DECRYPTION_BLOCKS_PER_GROUP * BLOCK_BYTESIZE - BLOCK_BYTESIZE, BLOCK_BYTESIZE].copy_to(chaining_block)
+        end
+      {% end %}
+      if group_count > done_group_count
+        offset = done_group_count * DECRYPTION_BLOCKS_PER_GROUP * BLOCK_BYTESIZE
+        decrypt_groups(keys, round_count, chaining_block.to_unsafe, ciphertext.to_unsafe + offset, padded_plaintext.to_unsafe + offset,
+          (group_count - done_group_count).to_u64)
       end
       single_count = block_count - group_count * DECRYPTION_BLOCKS_PER_GROUP
       if single_count > 0
@@ -134,6 +150,20 @@ module Beryl::Crypto::Compatibility
             {% else %}
               raise UnsupportedProcessor.new("this processor has no AES instructions Beryl can use")
             {% end %}
+            return
+          end
+        {% end %}
+        raise KeySizeMismatch.new("AES runs 10, 12 or 14 rounds, not #{round_count}")
+      end
+    {% end %}
+
+    {% if flag?(:aarch64) %}
+      @[NoInline]
+      private def self.decrypt_pipelined(decryption_round_keys : Pointer(UInt8), round_count : Int32, input : Pointer(UInt8),
+                                         output : Pointer(UInt8), pair_count : UInt64) : Nil
+        {% for count in [10, 12, 14] %}
+          if round_count == {{ count }}
+            Armv8CipherInstructions.decrypt_chained_blocks_pipelined(decryption_round_keys, input, output, pair_count, {{ count }})
             return
           end
         {% end %}

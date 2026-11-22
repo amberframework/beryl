@@ -471,6 +471,99 @@ module Beryl::Crypto
     # general registers.
     CHACHA20_BLOCKS_PER_GROUP = 9
 
+    # CBC decryption of 2 * *pair_count* + 1 groups of eight blocks
+    # (*pair_count* at least 1), software pipelined as the counter mode is:
+    # two sets of eight registers take turns, one running the second half of
+    # its rounds and being written out while the other starts the next
+    # group. Each block is XORed with the ciphertext block stored just
+    # before it, so the first block at *input* must not be the first of the
+    # message: the caller decrypts the first group with
+    # `decrypt_chained_blocks`.
+    #
+    # Registers: x9 round keys, x11 passes left, x12 input, x13 output; v0
+    # to v15 the blocks, v16 to v30 the round keys, v31 a ciphertext block.
+    macro decrypt_chained_blocks_pipelined(decryption_round_keys, input, output, pair_count, round_count)
+      {% key_count = round_count + 1 %}
+      {% template = "  mov x9, $0\n  mov x12, $1\n  mov x13, $2\n  mov x11, $3\n" %}
+      {% for start in [0, 4, 8, 12] %}
+        {% if start < key_count %}
+          {% count = key_count - start %}
+          {% if count > 4 %}{% count = 4 %}{% end %}
+          {% registers = [] of StringLiteral %}
+          {% for offset in 0...count %}{% registers << "v#{16 + start + offset}.16b" %}{% end %}
+          {% template = template + "  ld1 {#{registers.join(", ").id}}, [x9], ##{count * 16}\n" %}
+        {% end %}
+      {% end %}
+      {% split = round_count // 2 %}
+      {% list_of_load_lines = {} of NumberLiteral => StringLiteral %}
+      {% list_of_early_rounds = {} of NumberLiteral => ArrayLiteral %}
+      {% list_of_late_rounds = {} of NumberLiteral => ArrayLiteral %}
+      {% for base in [0, 8] %}
+        {% list_of_load_lines[base] = "  ld1 {v#{base}.16b, v#{base + 1}.16b, v#{base + 2}.16b, v#{base + 3}.16b}, [x12]\n  ldp q#{base + 4}, q#{base + 5}, [x12, #64]\n  ldp q#{base + 6}, q#{base + 7}, [x12, #96]\n" %}
+        {% rounds = [] of ArrayLiteral %}
+        {% for round in 0...split %}
+          {% lines = [] of StringLiteral %}
+          {% for block in 0...8 %}
+            {% lines << "  aesd v#{base + block}.16b, v#{16 + round}.16b\n  aesimc v#{base + block}.16b, v#{base + block}.16b" %}
+          {% end %}
+          {% rounds << lines %}
+        {% end %}
+        {% list_of_early_rounds[base] = rounds %}
+        {% rounds = [] of ArrayLiteral %}
+        {% for round in split...(round_count - 1) %}
+          {% lines = [] of StringLiteral %}
+          {% for block in 0...8 %}
+            {% lines << "  aesd v#{base + block}.16b, v#{16 + round}.16b\n  aesimc v#{base + block}.16b, v#{base + block}.16b" %}
+          {% end %}
+          {% rounds << lines %}
+        {% end %}
+        {% lines = [] of StringLiteral %}
+        {% for block in 0...8 %}
+          {% lines << "  aesd v#{base + block}.16b, v#{16 + round_count - 1}.16b\n  ldr q31, [x12, ##{block * 16 - 16}]\n  eor v#{base + block}.16b, v#{base + block}.16b, v#{16 + round_count}.16b\n  eor v#{base + block}.16b, v#{base + block}.16b, v31.16b" %}
+        {% end %}
+        {% lines << "  st1 {v#{base}.16b, v#{base + 1}.16b, v#{base + 2}.16b, v#{base + 3}.16b}, [x13], #64\n  st1 {v#{base + 4}.16b, v#{base + 5}.16b, v#{base + 6}.16b, v#{base + 7}.16b}, [x13], #64\n  add x12, x12, #128" %}
+        {% rounds << lines %}
+        {% list_of_late_rounds[base] = rounds %}
+      {% end %}
+      # The set that starts reads the group after the one finishing, at
+      # x12 + 128 until the finishing set moves x12 on.
+      {% template = template + list_of_load_lines[0] %}
+      {% for lines in list_of_early_rounds[0] %}
+        {% template = template + lines.join("\n") + "\n" %}
+      {% end %}
+      {% template = template + "1:\n" %}
+      {% for roles in [[0, 8], [8, 0]] %}
+        {% finishing = roles[0] %}
+        {% starting = roles[1] %}
+        {% template = template + "  ldp q#{starting}, q#{starting + 1}, [x12, #128]\n  ldp q#{starting + 2}, q#{starting + 3}, [x12, #160]\n  ldp q#{starting + 4}, q#{starting + 5}, [x12, #192]\n  ldp q#{starting + 6}, q#{starting + 7}, [x12, #224]\n" %}
+        {% step_count = list_of_late_rounds[finishing].size %}
+        {% if list_of_early_rounds[starting].size > step_count %}
+          {% step_count = list_of_early_rounds[starting].size %}
+        {% end %}
+        {% for step in 0...step_count %}
+          {% late_lines = list_of_late_rounds[finishing][step] %}
+          {% early_lines = list_of_early_rounds[starting][step] %}
+          {% for index in 0...9 %}
+            {% if late_lines && late_lines[index] %}
+              {% template = template + late_lines[index] + "\n" %}
+            {% end %}
+            {% if early_lines && early_lines[index] %}
+              {% template = template + early_lines[index] + "\n" %}
+            {% end %}
+          {% end %}
+        {% end %}
+      {% end %}
+      {% template = template + "  subs x11, x11, #1\n  b.ne 1b\n" %}
+      {% for lines in list_of_late_rounds[0] %}
+        {% template = template + lines.join("\n") + "\n" %}
+      {% end %}
+      asm({{ template }} :: "r"({{ decryption_round_keys }}), "r"({{ input }}), "r"({{ output }}), "r"({{ pair_count }})
+        : "x9", "x11", "x12", "x13",
+          "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
+          "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
+          "memory", "cc")
+    end
+
     # ChaCha20 (RFC 8439 §2.3): XORs the keystream of the sixteen-word
     # state at *state* into *group_count* (at least 1) groups of eight
     # 64-byte blocks at *input* and writes them to *output*. Word 12 of the
