@@ -10,7 +10,7 @@ module Beryl::Crypto
   #   known when the program is compiled.
   # - Linux on AArch64: the kernel lists them in the auxiliary vector, read
   #   once when the program starts.
-  # - Linux on x86-64: CPUID lists the SHA extensions (SHA-1 and SHA-256),
+  # - x86-64: CPUID lists the SHA extensions (SHA-1 and SHA-256),
   #   AES-NI and `pclmulqdq`, read once when the program starts.
   # - Anywhere else: none.
   #
@@ -42,7 +42,7 @@ module Beryl::Crypto
       private def self.has_capability?(capability : UInt64) : Bool
         LibAuxiliaryVector.getauxval(HARDWARE_CAPABILITIES_ENTRY).to_u64 & capability != 0
       end
-    {% elsif flag?(:x86_64) && flag?(:linux) %}
+    {% elsif flag?(:x86_64) %}
       # Returns the EAX, EBX, ECX and EDX registers that CPUID gives for
       # *leaf* and *subleaf*.
       private def self.processor_identification(leaf : UInt32, subleaf : UInt32) : {UInt32, UInt32, UInt32, UInt32}
@@ -87,7 +87,7 @@ module Beryl::Crypto
       HAS_SHA1_INSTRUCTIONS   = has_capability?(SHA1_CAPABILITY)
       HAS_SHA256_INSTRUCTIONS = has_capability?(SHA256_CAPABILITY)
       HAS_SHA512_INSTRUCTIONS = has_capability?(SHA512_CAPABILITY)
-    {% elsif flag?(:x86_64) && flag?(:linux) %}
+    {% elsif flag?(:x86_64) %}
       HAS_SHA1_INSTRUCTIONS   = has_sha_extensions?
       HAS_SHA256_INSTRUCTIONS = HAS_SHA1_INSTRUCTIONS
       HAS_SHA512_INSTRUCTIONS = false
@@ -109,7 +109,7 @@ module Beryl::Crypto
       HAS_AES_INSTRUCTIONS                = has_capability?(AES_CAPABILITY)
       HAS_CARRYLESS_MULTIPLY_INSTRUCTIONS = has_capability?(PMULL_CAPABILITY)
       HAS_VECTOR_INSTRUCTIONS             = true
-    {% elsif flag?(:x86_64) && flag?(:linux) %}
+    {% elsif flag?(:x86_64) %}
       HAS_AES_INSTRUCTIONS                = has_cipher_bit?(25)
       HAS_CARRYLESS_MULTIPLY_INSTRUCTIONS = has_cipher_bit?(1)
       HAS_VECTOR_INSTRUCTIONS             = true
