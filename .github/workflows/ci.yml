@@ -127,9 +127,22 @@ jobs:
           ruby scripts/check_secret_flow.rb secret_flow.ll
 
   differential:
-    name: Differential against libcrypto
+    name: Differential against libcrypto (${{ matrix.code }} on ${{ matrix.runner }})
     if: github.event_name == 'workflow_dispatch' && inputs.run_differential
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            code: the code the processor selects
+            flags: ""
+          - runner: ubuntu-24.04
+            code: portable code alone
+            flags: "-Dberyl_portable_hashes"
+          - runner: ubuntu-24.04-arm
+            code: the code the processor selects
+            flags: ""
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -138,5 +151,7 @@ jobs:
           crystal: 1.21.0
       - name: Install dependencies
         run: shards install --frozen --skip-postinstall --skip-executables
+      - name: State which compression functions run
+        run: crystal spec ${{ matrix.flags }} spec/beryl/crypto/processor_instructions_spec.cr -e "states which instructions"
       - name: Run the differential
-        run: crystal spec --release --tag differential
+        run: crystal spec --release ${{ matrix.flags }} --tag differential
