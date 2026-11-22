@@ -62,11 +62,13 @@ module Beryl::Crypto::Compatibility
     # length of that chain. Each step therefore adds the three values it has
     # early (`a`, the message word and the constant) on their own, and
     # brings in the newest variable, `b`, in as few operations as its round
-    # allows: the second round's function is split into the half without `b`,
-    # added early, and the half with it; the third round combines the two
-    # older variables first. The empty assembly statements mark values the
-    # optimizer must keep as written; they emit no instruction, and without
-    # them it regroups two sums so that they wait for `b`.
+    # allows: the first round's function is `d ^ (b & (c ^ d))`, three
+    # operations of which one is ready early; the second round's is split
+    # into the half without `b`, added early, and the half with it; the third
+    # round combines the two older variables first. The empty assembly
+    # statements mark values the optimizer must keep as written. They emit no
+    # instruction; without them it rewrites the first round's function into
+    # four operations and regroups two sums so that they wait for `b`.
     private def compress(list_of_blocks : Bytes) : Nil
       x = uninitialized UInt32[16]
       # The loop runs once per whole block, so every read below stays
@@ -115,7 +117,11 @@ module Beryl::Crypto::Compatibility
           {% rd = names[(67 - i) % 4].id %}
           {% if i < 16 %}
             {% word_index = i %}
-            %mixed = {{ rd }} ^ ({{ rb }} & ({{ rc }} ^ {{ rd }}))
+            %older = {{ rc }} ^ {{ rd }}
+            asm("" : "=r"(%older) : "0"(%older))
+            %masked = {{ rb }} & %older
+            asm("" : "=r"(%masked) : "0"(%masked))
+            %mixed = {{ rd }} ^ %masked
             %early = {{ ra }} &+ x[{{ word_index }}] &+ {{ sine_table[i] }}
             {% if i == 0 %}
               asm("" : "=r"(%early) : "0"(%early))
