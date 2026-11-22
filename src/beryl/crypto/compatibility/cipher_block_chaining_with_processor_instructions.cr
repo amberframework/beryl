@@ -37,17 +37,18 @@ module Beryl::Crypto::Compatibility
       round_count
     end
 
-    # Encrypts *buffer*, a whole number of blocks, where it lies, chaining
-    # from *initialization_vector*.
-    def self.encrypt_in_place(round_key_bytes : Bytes, round_count : Int32, initialization_vector : Bytes, buffer : Bytes) : Nil
+    # Encrypts *plaintext*, a whole number of blocks, into *ciphertext*
+    # (which may be the same buffer), chaining from *initialization_vector*.
+    def self.encrypt(round_key_bytes : Bytes, round_count : Int32, initialization_vector : Bytes, plaintext : Bytes, ciphertext : Bytes) : Nil
       ensure_round_keys_fit(round_key_bytes)
-      return if buffer.empty?
+      raise OutputSizeMismatch.new("CBC writes as many bytes as it reads") unless plaintext.size == ciphertext.size
+      return if plaintext.empty?
 
       chaining_block_storage = uninitialized UInt8[16]
       chaining_block = chaining_block_storage.to_slice
       initialization_vector.copy_to(chaining_block)
-      block_count = (buffer.size // BLOCK_BYTESIZE).to_u64
-      encrypt_chained(round_key_bytes.to_unsafe, round_count, chaining_block.to_unsafe, buffer.to_unsafe, buffer.to_unsafe, block_count)
+      block_count = (plaintext.size // BLOCK_BYTESIZE).to_u64
+      encrypt_chained(round_key_bytes.to_unsafe, round_count, chaining_block.to_unsafe, plaintext.to_unsafe, ciphertext.to_unsafe, block_count)
       SecretWiping.wipe(chaining_block)
     end
 

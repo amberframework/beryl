@@ -70,11 +70,21 @@ module Beryl::Crypto::Compatibility
       end
 
       padding_bytesize = ciphertext.size - plaintext_bytes.size
-      plaintext_bytes.copy_to(ciphertext)
-      ciphertext[plaintext_bytes.size, padding_bytesize].fill(padding_bytesize.to_u8)
       if ProcessorFeatures::HAS_AES_INSTRUCTIONS
-        CipherBlockChainingWithProcessorInstructions.encrypt_in_place(@round_key_bytes, @round_count, initialization_vector, ciphertext)
+        # The whole blocks go straight from the plaintext; the last block,
+        # with its padding, is built in place and chained from the block
+        # before it.
+        whole_bytesize = ciphertext.size - BLOCK_BYTESIZE
+        CipherBlockChainingWithProcessorInstructions.encrypt(@round_key_bytes, @round_count, initialization_vector,
+          plaintext_bytes[0, whole_bytesize], ciphertext[0, whole_bytesize])
+        last_block = ciphertext[whole_bytesize, BLOCK_BYTESIZE]
+        plaintext_bytes[whole_bytesize..].copy_to(last_block)
+        last_block[BLOCK_BYTESIZE - padding_bytesize, padding_bytesize].fill(padding_bytesize.to_u8)
+        chaining_block = whole_bytesize == 0 ? initialization_vector : ciphertext[whole_bytesize - BLOCK_BYTESIZE, BLOCK_BYTESIZE]
+        CipherBlockChainingWithProcessorInstructions.encrypt(@round_key_bytes, @round_count, chaining_block, last_block, last_block)
       else
+        plaintext_bytes.copy_to(ciphertext)
+        ciphertext[plaintext_bytes.size, padding_bytesize].fill(padding_bytesize.to_u8)
         CipherBlockChaining.encrypt_in_place(@round_keys, @round_count, initialization_vector, ciphertext)
       end
     end
