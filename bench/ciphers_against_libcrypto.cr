@@ -24,8 +24,9 @@
 #   reads the message twice; libcrypto decrypts while it hashes and checks
 #   the tag at the end.
 # - XChaCha20-Poly1305 has no libcrypto implementation. Its row runs against
-#   libcrypto's ChaCha20-Poly1305 on the same message, which does less work
-#   (no HChaCha20 per message), so the comparison is conservative.
+#   XChaCha20-Poly1305 built from libcrypto's parts (`LibcryptoExtendedNonceCipher`),
+#   and both arms must produce the same bytes. BERYL_BENCH_XCHACHA_AGAINST=chacha20
+#   runs it against plain ChaCha20-Poly1305 instead, which skips HChaCha20.
 # - AES-CBC encrypts and decrypts with PKCS#7 padding, as
 #   `Beryl::Crypto::Compatibility::AESCBC` does; the message size is the
 #   plaintext's.
@@ -76,13 +77,14 @@ module CiphersAgainstLibcrypto
   # libcrypto's cipher, keyed once and reused for every message.
   class LibcryptoCipher
     @is_authenticated : Bool
+    @direction : LibC::Int
 
     def initialize(libcrypto_name : String, key : Bytes, is_sealing : Bool)
       cipher = LibCrypto.evp_get_cipherbyname(libcrypto_name)
       raise "libcrypto has no cipher named #{libcrypto_name}" if cipher.null?
       @is_authenticated = !libcrypto_name.includes?("cbc")
       @context = LibCrypto.evp_cipher_ctx_new
-      direction = is_sealing ? 1 : 0
+      direction = @direction = is_sealing ? 1 : 0
       check LibCrypto.evp_cipherinit_ex(@context, cipher, Pointer(Void).null, Pointer(UInt8).null, Pointer(UInt8).null, direction)
       check LibCrypto.beryl_cipher_bench_evp_cipher_ctx_ctrl(@context, EVP_CTRL_AEAD_SET_IVLEN, 12, Pointer(Void).null) if @is_authenticated
       check LibCrypto.evp_cipherinit_ex(@context, Pointer(Void).null.as(LibCrypto::EVP_CIPHER), Pointer(Void).null, key, Pointer(UInt8).null, direction)
@@ -119,6 +121,64 @@ module CiphersAgainstLibcrypto
       total = written
       check LibCrypto.evp_cipherfinal_ex(@context, opened.to_unsafe + total, pointerof(written))
       total + written
+    end
+
+    # Replaces the key, keeping the cipher and the nonce size.
+    def rekey(key : Bytes) : Nil
+      check LibCrypto.evp_cipherinit_ex(@context, Pointer(Void).null.as(LibCrypto::EVP_CIPHER), Pointer(Void).null, key, Pointer(UInt8).null, @direction)
+    end
+
+    private def check(result : LibC::Int) : Nil
+      raise "a libcrypto cipher call failed" unless result == 1
+    end
+  end
+
+  # XChaCha20-Poly1305 as a program on libcrypto has to build it: libcrypto
+  # has HChaCha20 only inside one block of its raw ChaCha20, whose words 0
+  # to 3 and 12 to 15, less the input words (the constants and the first 16
+  # nonce bytes, all public), are HChaCha20's output. That subkey then keys
+  # libcrypto's ChaCha20-Poly1305, with the last 8 nonce bytes.
+  class LibcryptoExtendedNonceCipher
+    CONSTANT_WORDS = {0x61707865_u32, 0x3320646e_u32, 0x79622d32_u32, 0x6b206574_u32}
+
+    @key : Bytes
+    @inner : LibcryptoCipher
+
+    def initialize(key : Bytes, is_sealing : Bool)
+      @key = key.dup
+      @inner = LibcryptoCipher.new("chacha20-poly1305", key, is_sealing)
+      @stream_cipher = LibCrypto.evp_get_cipherbyname("chacha20")
+      raise "libcrypto has no cipher named chacha20" if @stream_cipher.null?
+      @stream_context = LibCrypto.evp_cipher_ctx_new
+      @zero_block = Bytes.new(64)
+      @block = Bytes.new(64)
+      @subkey = Bytes.new(32)
+      @inner_nonce = Bytes.new(12)
+    end
+
+    def seal(message : Bytes, sealed : Bytes, nonce : Bytes, associated_data : Bytes) : Int32
+      derive_subkey(nonce)
+      @inner.seal(message, sealed, @inner_nonce, associated_data)
+    end
+
+    def open(sealed : Bytes, opened : Bytes, nonce : Bytes, associated_data : Bytes) : Int32
+      derive_subkey(nonce)
+      @inner.open(sealed, opened, @inner_nonce, associated_data)
+    end
+
+    private def derive_subkey(nonce : Bytes) : Nil
+      written = 0
+      check LibCrypto.evp_cipherinit_ex(@stream_context, @stream_cipher, Pointer(Void).null, @key, nonce, 1)
+      check LibCrypto.evp_cipherupdate(@stream_context, @block, pointerof(written), @zero_block, 64)
+      4.times do |index|
+        word = IO::ByteFormat::LittleEndian.decode(UInt32, @block[4 * index, 4]) &- CONSTANT_WORDS[index]
+        IO::ByteFormat::LittleEndian.encode(word, @subkey[4 * index, 4])
+        word = IO::ByteFormat::LittleEndian.decode(UInt32, @block[48 + 4 * index, 4]) &-
+               IO::ByteFormat::LittleEndian.decode(UInt32, nonce[4 * index, 4])
+        IO::ByteFormat::LittleEndian.encode(word, @subkey[16 + 4 * index, 4])
+      end
+      @inner.rekey(@subkey)
+      nonce[16, 8].copy_to(@inner_nonce + 4)
     end
 
     private def check(result : LibC::Int) : Nil
@@ -229,17 +289,26 @@ module CiphersAgainstLibcrypto
     io.flush
   end
 
+  def self.new_authenticated_arm(libcrypto_name : String, key : Bytes, is_sealing : Bool) : LibcryptoCipher | LibcryptoExtendedNonceCipher
+    if libcrypto_name == "xchacha20-poly1305"
+      LibcryptoExtendedNonceCipher.new(key, is_sealing)
+    else
+      LibcryptoCipher.new(libcrypto_name, key, is_sealing)
+    end
+  end
+
   # Measures sealing and opening of one authenticated cipher at one size.
   # *libcrypto_name* is the cipher libcrypto runs against it.
   def self.measure_authenticated_cipher(io : IO, settings : Settings, algorithm : String, libcrypto_name : String,
                                         beryl_cipher : Beryl::Crypto::V1::AuthenticatedEncryption, key : Bytes,
                                         message_bytesize : Int32) : Nil
     beryl_nonce = Random::Secure.random_bytes(beryl_cipher.nonce_bytesize)
-    libcrypto_nonce = Random::Secure.random_bytes(12)
+    libcrypto_name = "chacha20-poly1305" if libcrypto_name == "xchacha20-poly1305" && ENV["BERYL_BENCH_XCHACHA_AGAINST"]? == "chacha20"
+    libcrypto_nonce = libcrypto_name == "xchacha20-poly1305" ? beryl_nonce : Random::Secure.random_bytes(12)
     associated_data = Random::Secure.random_bytes(ASSOCIATED_DATA_BYTESIZE)
     message = Random::Secure.random_bytes(message_bytesize)
-    libcrypto_sealing = LibcryptoCipher.new(libcrypto_name, key, true)
-    libcrypto_opening = LibcryptoCipher.new(libcrypto_name, key, false)
+    libcrypto_sealing = new_authenticated_arm(libcrypto_name, key, true)
+    libcrypto_opening = new_authenticated_arm(libcrypto_name, key, false)
     beryl_sealed = Bytes.new(message_bytesize + TAG_BYTESIZE)
     libcrypto_sealed = Bytes.new(message_bytesize + TAG_BYTESIZE)
     beryl_opened = Bytes.new(message_bytesize)
@@ -303,7 +372,7 @@ module CiphersAgainstLibcrypto
     io.puts "|---|---|---|---|---|---|---|---|"
 
     {% for cipher in [{"ChaCha20-Poly1305", "chacha20-poly1305", 32, "Beryl::Crypto::V1::ChaCha20Poly1305"},
-                      {"XChaCha20-Poly1305", "chacha20-poly1305", 32, "Beryl::Crypto::V1::XChaCha20Poly1305"},
+                      {"XChaCha20-Poly1305", "xchacha20-poly1305", 32, "Beryl::Crypto::V1::XChaCha20Poly1305"},
                       {"AES-128-GCM", "aes-128-gcm", 16, "Beryl::Crypto::V1::AESGCM"},
                       {"AES-256-GCM", "aes-256-gcm", 32, "Beryl::Crypto::V1::AESGCM"}] %}
       if settings.includes_algorithm?({{ cipher[0] }})
