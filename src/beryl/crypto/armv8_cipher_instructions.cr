@@ -464,5 +464,203 @@ module Beryl::Crypto
           "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
           "memory", "cc")
     end
+
+    # Blocks of ChaCha20 keystream one pass of `xor_chacha20_keystream`
+    # produces: four side by side across the lanes of sixteen vector
+    # registers, three more in four vector registers each, and one in
+    # general registers.
+    CHACHA20_BLOCKS_PER_GROUP = 8
+
+    # ChaCha20 (RFC 8439 §2.3): XORs the keystream of the sixteen-word
+    # state at *state* into *group_count* (at least 1) groups of eight
+    # 64-byte blocks at *input* and writes them to *output*. Word 12 of the
+    # state is the counter of the first block; it is left at the counter of
+    # the block after the last one, wrapping at 2^32.
+    #
+    # Twenty rounds are a chain of additions, XORs and rotations in which
+    # each step needs the one before, and a vector step takes two cycles, so
+    # a processor that starts four vector instructions a cycle needs eight
+    # chains at once to stay busy. Four blocks run side by side, one word of
+    # each block in each lane of sixteen registers, which gives the four
+    # quarter rounds of a round as four chains; three more blocks each keep
+    # their four rows in four registers, a chain each, with `ext` turning
+    # the columns into diagonals between the two halves of a double round.
+    # The eighth block runs on the general registers, whose units the vector
+    # code leaves idle. The rotations by 16 and 8 are byte moves (`rev32` and
+    # `tbl`); those by 12 and 7 shift into a spare register, which then takes
+    # the word's place, so no instruction is spent moving values back.
+    #
+    # Registers: x9 the state, x11 groups left, x12 input, x13 output, w16
+    # the counter, w17 scratch, sixteen more general registers the eighth
+    # block; v28 the byte order of a rotation by 8, v29 the lane numbers 0
+    # to 3, the other vector registers the seven vector blocks and two
+    # spares.
+    macro xor_chacha20_keystream(state, input, output, group_count)
+      # Logical words: 0 to 15 are the words of the four side-by-side blocks,
+      # 16 + 4 * block + row the rows of the three row-held blocks. *register*
+      # maps each to the vector register holding it; *spares* holds the free
+      # vector registers, taken and given back in turn.
+      {% register = {} of NumberLiteral => NumberLiteral %}
+      {% row_block_count = 3 %}
+      {% table = 16 + row_block_count * 4 %}
+      {% lanes = table + 1 %}
+      {% for word in 0...table %}
+        {% register[word] = word %}
+      {% end %}
+      {% scalar = ["w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w10", "w14", "w15", "w19", "w20", "w21", "w22"] %}
+      {% spares = {} of NumberLiteral => NumberLiteral %}
+      {% for number in (lanes + 1)...32 %}
+        {% spares[number - lanes - 1] = number %}
+      {% end %}
+      {% spare_count = 31 - lanes %}
+      {% next_spare = 0 %}
+      {% template = "  mov x9, $0\n  mov x12, $1\n  mov x13, $2\n  mov x11, $3\n  ldr w16, [x9, #48]\n1:\n" %}
+      # v#{table}: within each 32-bit lane, the bytes in the order 3, 0, 1, 2.
+      {% template = template + "  movz x17, #0x0003\n  movk x17, #0x0201, lsl #16\n  movk x17, #0x0407, lsl #32\n  movk x17, #0x0605, lsl #48\n  mov v#{table}.d[0], x17\n" %}
+      {% template = template + "  movz x17, #0x080b\n  movk x17, #0x0a09, lsl #16\n  movk x17, #0x0c0f, lsl #32\n  movk x17, #0x0e0d, lsl #48\n  mov v#{table}.d[1], x17\n" %}
+      {% template = template + "  movi v#{lanes}.4s, #0\n  mov w17, #1\n  mov v#{lanes}.s[1], w17\n  mov w17, #2\n  mov v#{lanes}.s[2], w17\n  mov w17, #3\n  mov v#{lanes}.s[3], w17\n" %}
+
+      # The state of this group: the side-by-side blocks take each word in
+      # every lane, with counters +0 to +3; the row-held ones take the state as
+      # rows, with counters +4 to +6, and the general-register block +7.
+      {% for quarter in 0...4 %}
+        {% template = template + "  ld4r {v#{quarter * 4}.4s, v#{quarter * 4 + 1}.4s, v#{quarter * 4 + 2}.4s, v#{quarter * 4 + 3}.4s}, [x9], #16\n" %}
+      {% end %}
+      {% template = template + "  sub x9, x9, #64\n  dup v12.4s, w16\n  add v12.4s, v12.4s, v#{lanes}.4s\n" %}
+      {% for block in 0...row_block_count %}
+        {% template = template + "  ld1 {v#{16 + block * 4}.4s, v#{17 + block * 4}.4s, v#{18 + block * 4}.4s, v#{19 + block * 4}.4s}, [x9]\n  add w17, w16, ##{4 + block}\n  mov v#{19 + block * 4}.s[0], w17\n" %}
+      {% end %}
+
+      {% for pair in 0...8 %}
+        {% template = template + "  ldp #{scalar[pair * 2].id}, #{scalar[pair * 2 + 1].id}, [x9, ##{pair * 8}]\n" %}
+      {% end %}
+      {% template = template + "  add #{scalar[12].id}, w16, ##{4 + row_block_count}\n" %}
+      {% for double_round in 0...10 %}
+        {% for half in 0...2 %}
+          {% if half == 0 %}
+            {% columns = [[0, 4, 8, 12], [1, 5, 9, 13], [2, 6, 10, 14], [3, 7, 11, 15]] %}
+          {% else %}
+            {% columns = [[0, 5, 10, 15], [1, 6, 11, 12], [2, 7, 8, 13], [3, 4, 9, 14]] %}
+          {% end %}
+          {% quarter_rounds = columns.map { |words| words } %}
+          {% for block in 0...row_block_count %}
+            {% quarter_rounds << [16 + block * 4, 17 + block * 4, 18 + block * 4, 19 + block * 4] %}
+          {% end %}
+          # Each step of the quarter round, for all seven vector chains and the general-register block:
+          # {a, b, d, rotation} means a += b, d ^= a, d <<<= rotation.
+          {% for step in [[0, 1, 3, 16], [2, 3, 1, 12], [0, 1, 3, 8], [2, 3, 1, 7]] %}
+            {% for words in quarter_rounds %}
+              {% target = register[words[step[0]]] %}
+              {% template = template + "  add v#{target}.4s, v#{target}.4s, v#{register[words[step[1]]]}.4s\n" %}
+            {% end %}
+            {% for words in columns %}
+              {% template = template + "  add #{scalar[words[step[0]]].id}, #{scalar[words[step[0]]].id}, #{scalar[words[step[1]]].id}\n" %}
+            {% end %}
+            {% for words in quarter_rounds %}
+              {% target = register[words[step[2]]] %}
+              {% template = template + "  eor v#{target}.16b, v#{target}.16b, v#{register[words[step[0]]]}.16b\n" %}
+            {% end %}
+            {% for words in columns %}
+              {% template = template + "  eor #{scalar[words[step[2]]].id}, #{scalar[words[step[2]]].id}, #{scalar[words[step[0]]].id}\n" %}
+            {% end %}
+            {% for words in quarter_rounds %}
+              {% word = words[step[2]] %}
+              {% if step[3] == 16 %}
+                {% template = template + "  rev32 v#{register[word]}.8h, v#{register[word]}.8h\n" %}
+              {% elsif step[3] == 8 %}
+                {% template = template + "  tbl v#{register[word]}.16b, {v#{register[word]}.16b}, v#{table}.16b\n" %}
+              {% else %}
+                {% spare = spares[next_spare] %}
+                {% template = template + "  ushr v#{spare}.4s, v#{register[word]}.4s, ##{32 - step[3]}\n  sli v#{spare}.4s, v#{register[word]}.4s, ##{step[3]}\n" %}
+                {% spares[next_spare] = register[word] %}
+                {% register[word] = spare %}
+                {% next_spare = (next_spare + 1) % spare_count %}
+              {% end %}
+            {% end %}
+            {% for words in columns %}
+              {% template = template + "  ror #{scalar[words[step[2]]].id}, #{scalar[words[step[2]]].id}, ##{32 - step[3]}\n" %}
+            {% end %}
+          {% end %}
+          # The row-held blocks turn columns into diagonals and back.
+          {% for block in 0...row_block_count %}
+            {% for row in 1...4 %}
+              {% shift = half == 0 ? row * 4 : 16 - row * 4 %}
+              {% name = register[16 + block * 4 + row] %}
+              {% template = template + "  ext v#{name}.16b, v#{name}.16b, v#{name}.16b, ##{shift}\n" %}
+            {% end %}
+          {% end %}
+        {% end %}
+      {% end %}
+
+      # The side-by-side blocks: add the state back, four words at a time,
+      # turn each four words of four blocks into four words of one block,
+      # then XOR the input and store, a block at a time.
+      {% first_spare = spares[next_spare] %}
+      {% template = template + "  dup v#{first_spare}.4s, w16\n  add v#{first_spare}.4s, v#{first_spare}.4s, v#{lanes}.4s\n  add v#{register[12]}.4s, v#{register[12]}.4s, v#{first_spare}.4s\n" %}
+      {% loaded = [] of NumberLiteral %}
+      {% for offset in 0...spare_count %}
+        {% loaded << spares[(next_spare + offset) % spare_count] %}
+      {% end %}
+      {% loaded << table %}
+      {% loaded << lanes %}
+      {% for quarter in 0...4 %}
+        {% for offset in 0...4 %}
+          {% template = template + "  ld1r {v#{loaded[offset]}.4s}, [x9], #4\n" %}
+        {% end %}
+        {% for offset in 0...4 %}
+          {% if quarter != 3 || offset != 0 %}
+            {% name = register[quarter * 4 + offset] %}
+            {% template = template + "  add v#{name}.4s, v#{name}.4s, v#{loaded[offset]}.4s\n" %}
+          {% end %}
+        {% end %}
+        # Words w0..w3 (lane = block) to rows: trn on 32-bit lanes, then on
+        # 64-bit lanes. The four loaded registers are free again and take
+        # the first results.
+        {% w = [register[quarter * 4], register[quarter * 4 + 1], register[quarter * 4 + 2], register[quarter * 4 + 3]] %}
+        {% t = loaded %}
+        {% template = template + "  trn1 v#{t[0]}.4s, v#{w[0]}.4s, v#{w[1]}.4s\n  trn2 v#{t[1]}.4s, v#{w[0]}.4s, v#{w[1]}.4s\n  trn1 v#{t[2]}.4s, v#{w[2]}.4s, v#{w[3]}.4s\n  trn2 v#{t[3]}.4s, v#{w[2]}.4s, v#{w[3]}.4s\n" %}
+        {% template = template + "  trn1 v#{w[0]}.2d, v#{t[0]}.2d, v#{t[2]}.2d\n  trn1 v#{w[1]}.2d, v#{t[1]}.2d, v#{t[3]}.2d\n  trn2 v#{w[2]}.2d, v#{t[0]}.2d, v#{t[2]}.2d\n  trn2 v#{w[3]}.2d, v#{t[1]}.2d, v#{t[3]}.2d\n" %}
+        # Now register[quarter * 4 + block] holds words 4*quarter.. of *block*.
+      {% end %}
+      {% template = template + "  sub x9, x9, #64\n" %}
+      {% for block in 0...4 %}
+        {% template = template + "  ldp q#{loaded[0]}, q#{loaded[1]}, [x12, ##{block * 64}]\n  ldp q#{loaded[2]}, q#{loaded[3]}, [x12, ##{block * 64 + 32}]\n" %}
+        {% for quarter in 0...4 %}
+          {% name = register[quarter * 4 + block] %}
+          {% template = template + "  eor v#{name}.16b, v#{name}.16b, v#{loaded[quarter]}.16b\n" %}
+        {% end %}
+        {% template = template + "  stp q#{register[block]}, q#{register[4 + block]}, [x13, ##{block * 64}]\n  stp q#{register[8 + block]}, q#{register[12 + block]}, [x13, ##{block * 64 + 32}]\n" %}
+      {% end %}
+
+      # The row-held blocks: add the state back, XOR the input, store.
+      {% for block in 0...row_block_count %}
+        {% template = template + "  ldp q#{loaded[0]}, q#{loaded[1]}, [x9]\n  ldp q#{loaded[2]}, q#{loaded[3]}, [x9, #32]\n  add w17, w16, ##{4 + block}\n  mov v#{loaded[3]}.s[0], w17\n" %}
+        {% for row in 0...4 %}
+          {% name = register[16 + block * 4 + row] %}
+          {% template = template + "  add v#{name}.4s, v#{name}.4s, v#{loaded[row]}.4s\n" %}
+        {% end %}
+        {% template = template + "  ldp q#{loaded[0]}, q#{loaded[1]}, [x12, ##{256 + block * 64}]\n  ldp q#{loaded[2]}, q#{loaded[3]}, [x12, ##{256 + block * 64 + 32}]\n" %}
+        {% for row in 0...4 %}
+          {% name = register[16 + block * 4 + row] %}
+          {% template = template + "  eor v#{name}.16b, v#{name}.16b, v#{loaded[row]}.16b\n" %}
+        {% end %}
+        {% template = template + "  stp q#{register[16 + block * 4]}, q#{register[17 + block * 4]}, [x13, ##{256 + block * 64}]\n  stp q#{register[18 + block * 4]}, q#{register[19 + block * 4]}, [x13, ##{256 + block * 64 + 32}]\n" %}
+      {% end %}
+      {% for word in 0...16 %}
+        {% if word == 12 %}
+          {% template = template + "  add w17, w16, ##{4 + row_block_count}\n" %}
+        {% else %}
+          {% template = template + "  ldr w17, [x9, ##{word * 4}]\n" %}
+        {% end %}
+        {% template = template + "  add #{scalar[word].id}, #{scalar[word].id}, w17\n  ldr w17, [x12, ##{256 + row_block_count * 64 + word * 4}]\n  eor #{scalar[word].id}, #{scalar[word].id}, w17\n  str #{scalar[word].id}, [x13, ##{256 + row_block_count * 64 + word * 4}]\n" %}
+      {% end %}
+      {% template = template + "  add x12, x12, ##{320 + row_block_count * 64}\n  add x13, x13, ##{320 + row_block_count * 64}\n  add w16, w16, ##{5 + row_block_count}\n  subs x11, x11, #1\n  b.ne 1b\n  str w16, [x9, #48]\n" %}
+      asm({{ template }} :: "r"({{ state }}), "r"({{ input }}), "r"({{ output }}), "r"({{ group_count }})
+        : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17",
+          "x19", "x20", "x21", "x22",
+          "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15",
+          "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
+          "memory", "cc")
+    end
   end
 end

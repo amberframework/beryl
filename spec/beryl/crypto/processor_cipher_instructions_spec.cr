@@ -57,6 +57,18 @@ module PortableCipherReference
     16.times { |index| tag[index] ^= tag_mask[index] }
     sealed
   end
+
+  # ChaCha20-Poly1305 (RFC 8439 §2.8) from the scalar ChaCha20 and the
+  # 44-bit-limb Poly1305: the ciphertext followed by the tag.
+  def self.seal_with_chacha20_and_poly1305(key : Bytes, nonce : Bytes, associated_data : Bytes, plaintext : Bytes) : Bytes
+    sealed = Bytes.new(plaintext.size + 16)
+    Beryl::Crypto::V1::ChaCha20StreamCipher.xor_keystream(key, nonce, 1_u32, plaintext, sealed[0, plaintext.size])
+    one_time_key = Bytes.new(32)
+    Beryl::Crypto::V1::ChaCha20StreamCipher.xor_keystream(key, nonce, 0_u32, one_time_key, one_time_key)
+    Beryl::Crypto::V1::Poly1305OneTimeAuthenticator.authenticate_encrypted_message(one_time_key, associated_data,
+      sealed[0, plaintext.size], sealed[plaintext.size, 16])
+    sealed
+  end
 end
 
 # Message sizes that cross every boundary of the assembly paths: each size up
@@ -95,4 +107,52 @@ describe "Beryl ciphers on the processor's instructions" do
       end
     end
   {% end %}
+
+  it "seals and opens ChaCha20-Poly1305 and XChaCha20-Poly1305 as the portable code does, at every length that changes path" do
+    generator = Random.new(0x6368_6100)
+    LIST_OF_CIPHER_CHECK_BYTESIZES.each do |message_bytesize|
+      key = generator.random_bytes(32)
+      nonce = generator.random_bytes(12)
+      associated_data = generator.random_bytes(generator.rand(0..300))
+      plaintext = generator.random_bytes(message_bytesize)
+
+      cipher = Beryl::Crypto::V1::ChaCha20Poly1305.new(key)
+      sealed = cipher.encrypt(plaintext, nonce: nonce, associated_data: associated_data)
+      expected = PortableCipherReference.seal_with_chacha20_and_poly1305(key, nonce, associated_data, plaintext)
+      fail "ChaCha20-Poly1305 differs from the portable code at #{message_bytesize} bytes" unless sealed == expected
+      cipher.decrypt(sealed, nonce: nonce, associated_data: associated_data).should eq(plaintext)
+      untouched = Bytes.new(message_bytesize, 0x5a_u8)
+      sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
+      cipher.decrypt(sealed, into: untouched, nonce: nonce, associated_data: associated_data).should be_false
+      untouched.all?(0x5a_u8).should be_true
+
+      extended_nonce = generator.random_bytes(24)
+      subkey = Bytes.new(32)
+      Beryl::Crypto::V1::ChaCha20StreamCipher.derive_subkey(key, extended_nonce[0, 16], subkey)
+      short_nonce = Bytes.new(12)
+      extended_nonce[16, 8].copy_to(short_nonce[4, 8])
+      extended = Beryl::Crypto::V1::XChaCha20Poly1305.new(key)
+      sealed = extended.encrypt(plaintext, nonce: extended_nonce, associated_data: associated_data)
+      expected = PortableCipherReference.seal_with_chacha20_and_poly1305(subkey, short_nonce, associated_data, plaintext)
+      fail "XChaCha20-Poly1305 differs from the portable code at #{message_bytesize} bytes" unless sealed == expected
+      extended.decrypt(sealed, nonce: extended_nonce, associated_data: associated_data).should eq(plaintext)
+    end
+  end
+
+  it "runs the ChaCha20 keystream across the end of the 32-bit block counter as the portable code does" do
+    generator = Random.new(0x7772_6170)
+    key = generator.random_bytes(32)
+    nonce = generator.random_bytes(12)
+    [0xffffff00_u32, 0xffffffe0_u32, 0xfffffff9_u32].each do |initial_counter|
+      blocks_left = ((1_u64 << 32) - initial_counter).to_i32
+      [1, 64 * blocks_left - 1, 64 * blocks_left].each do |message_bytesize|
+        message = generator.random_bytes(message_bytesize)
+        expected = Bytes.new(message_bytesize)
+        Beryl::Crypto::V1::ChaCha20StreamCipher.xor_keystream(key, nonce, initial_counter, message, expected)
+        written = Bytes.new(message_bytesize)
+        Beryl::Crypto::V1::ChaCha20WithVectorInstructions.xor_keystream(key, nonce, initial_counter, message, written)
+        written.should eq(expected)
+      end
+    end
+  end
 end

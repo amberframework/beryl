@@ -130,6 +130,17 @@ module Beryl::Crypto
       HAS_THREE_WAY_EXCLUSIVE_OR = false
     {% end %}
 
+    # Whether Poly1305 multiplies 64-bit words into 128-bit products, which
+    # both 64-bit architectures do in one or two instructions whose time does
+    # not depend on the words.
+    {% if flag?(:beryl_portable_ciphers) %}
+      HAS_WIDE_MULTIPLICATION = false
+    {% elsif flag?(:aarch64) || flag?(:x86_64) %}
+      HAS_WIDE_MULTIPLICATION = true
+    {% else %}
+      HAS_WIDE_MULTIPLICATION = false
+    {% end %}
+
     # Whether AES-GCM runs on the processor's instructions: it needs both
     # AES and the carry-less multiply.
     HAS_GALOIS_COUNTER_MODE_INSTRUCTIONS = HAS_AES_INSTRUCTIONS && HAS_CARRYLESS_MULTIPLY_INSTRUCTIONS

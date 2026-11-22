@@ -45,6 +45,22 @@ module Beryl::Crypto::V1
     # *ciphertext* and *associated_data* under *nonce*.
     protected abstract def compute_tag(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, full_tag : Bytes) : Nil
 
+    # Writes the plaintext of *ciphertext* into *plaintext* and returns true
+    # when *tag* (the received tag, `tag_bytesize` bytes) is right; returns
+    # false and leaves *plaintext* untouched otherwise. A cipher whose
+    # keystream also gives its authentication key overrides this to make
+    # both from one pass.
+    protected def open(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      full_tag_storage = uninitialized UInt8[FULL_TAG_BYTESIZE]
+      compute_tag(nonce, associated_data, ciphertext, full_tag_storage.to_slice)
+      tags_match = ::Crypto::Subtle.constant_time_compare(full_tag_storage.to_slice[0, tag.size], tag)
+      SecretWiping.wipe(full_tag_storage.to_slice)
+      return false unless Declassification.reveal(tags_match)
+
+      apply_keystream(nonce, ciphertext, plaintext)
+      true
+    end
+
     # Encrypts *plaintext* into *ciphertext* under *nonce* and writes into
     # *full_tag* the tag of the ciphertext and *associated_data*. A cipher
     # that can encrypt and authenticate in one pass over the message
@@ -106,11 +122,8 @@ module Beryl::Crypto::V1
         )
       end
 
-      is_authentic = authentic?(ciphertext_and_tag, nonce: nonce, associated_data: associated_data)
-      return false unless Declassification.reveal(is_authentic)
-
-      apply_keystream(nonce, ciphertext_and_tag[0, plaintext.size], plaintext)
-      true
+      open(nonce, associated_data.to_slice, ciphertext_and_tag[0, plaintext.size],
+        ciphertext_and_tag[plaintext.size, @tag_bytesize], plaintext)
     end
 
     # Returns whether *ciphertext_and_tag* carries the right tag for *nonce*

@@ -50,6 +50,20 @@ module Beryl::Crypto::V1
       end
     end
 
+    protected def seal(nonce : Bytes, associated_data : Bytes, plaintext : Bytes, ciphertext : Bytes, full_tag : Bytes) : Nil
+      with_message_key(nonce) do |message_key, message_nonce|
+        ChaCha20Poly1305Construction.seal(message_key, message_nonce, associated_data, plaintext, ciphertext, full_tag)
+      end
+    end
+
+    protected def open(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      is_authentic = false
+      with_message_key(nonce) do |message_key, message_nonce|
+        is_authentic = ChaCha20Poly1305Construction.open(message_key, message_nonce, associated_data, ciphertext, tag, plaintext)
+      end
+      is_authentic
+    end
+
     # Yields the key and the 12-byte nonce this message is encrypted under,
     # then wipes the key.
     private def with_message_key(nonce : Bytes, & : Bytes, Bytes -> Nil) : Nil
