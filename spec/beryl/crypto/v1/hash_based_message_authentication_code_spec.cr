@@ -7,6 +7,14 @@ private KEY     = "Jefe"
 private MESSAGE = "what do ya want for nothing?"
 private TAG     = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843".hexbytes
 
+# SHA-256 that declines to have its last block laid out ahead of time, which
+# sends HMAC down the path that hashes the inner digest step by step.
+private class SHA256WithoutPreparedBlock < Beryl::Crypto::V1::SHA256
+  def lay_out_final_block(prepared_block : Bytes, tail_bytesize : Int32, message_bytesize : UInt64) : Bool
+    false
+  end
+end
+
 describe Beryl::Crypto::V1::HashBasedMessageAuthenticationCode do
   it "is aliased as HMAC" do
     Beryl::Crypto::V1::HMAC(Beryl::Crypto::V1::SHA256)
@@ -60,6 +68,34 @@ describe Beryl::Crypto::V1::HashBasedMessageAuthenticationCode do
     end
   end
 
+  describe "#reset" do
+    {% for names in LIST_OF_HASH_FUNCTION_NAMES %}
+      it "starts over on {{ names[0].id }} after a message abandoned at any point of a block" do
+        key = "a key for the abandoned message"
+        expected = Beryl::Crypto::V1::HMAC({{ names[1].id }}).authenticate("the next message", key: key)
+        authentication = Beryl::Crypto::V1::HMAC({{ names[1].id }}).new(key)
+        (0..260).each do |abandoned_bytesize|
+          authentication.update(Bytes.new(abandoned_bytesize, 0xff_u8))
+          authentication.reset
+          authentication.update("the next message").final.should eq(expected)
+          authentication.reset
+        end
+      end
+
+      it "gives the same {{ names[0].id }} tag for one message again and again from one keyed instance" do
+        authentication = Beryl::Crypto::V1::HMAC({{ names[1].id }}).new("a key used many times")
+        (0..300).each do |message_bytesize|
+          message = Bytes.new(message_bytesize) { |index| (index &* 7).to_u8! }
+          expected = Beryl::Crypto::V1::HMAC({{ names[1].id }}).authenticate(message, key: "a key used many times")
+          authentication.reset
+          authentication.update(message).final.should eq(expected)
+          authentication.reset
+          authentication.update(message).final.should eq(expected)
+        end
+      end
+    {% end %}
+  end
+
   describe "#dup" do
     it "continues independently from a copy" do
       original = HMACSHA256.new(KEY)
@@ -71,6 +107,27 @@ describe Beryl::Crypto::V1::HashBasedMessageAuthenticationCode do
       original.final.should eq(TAG)
       copy.final.should eq(HMACSHA256.authenticate("what do ya want for something?", key: KEY))
       copy.reset.update(MESSAGE).final.should eq(TAG)
+    end
+
+    it "gives a copy made after final the same tag for the next message" do
+      authentication = Beryl::Crypto::V1::HMAC(Beryl::Crypto::V1::SHA512).new("key")
+      first_tag = authentication.update("first").final
+      copy = authentication.dup
+      copy.reset
+      copy.update("first").final.should eq(first_tag)
+    end
+  end
+
+  describe "the outer hash" do
+    it "gives the same tag whether its last block was laid out when keyed or is hashed step by step" do
+      (0..150).each do |message_bytesize|
+        message = Bytes.new(message_bytesize) { |index| (index &* 13).to_u8! }
+        expected = Beryl::Crypto::V1::HMAC(Beryl::Crypto::V1::SHA256).authenticate(message, key: "outer key")
+        authentication = Beryl::Crypto::V1::HMAC(SHA256WithoutPreparedBlock).new("outer key")
+        authentication.update(message).final.should eq(expected)
+        authentication.reset
+        authentication.update(message).verify(expected).should be_true
+      end
     end
   end
 
