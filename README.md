@@ -15,7 +15,7 @@ Status: design in progress. The integration plan lives with the Amber maintainer
 
 `Beryl::Crypto` implements cryptographic standards in Crystal, with no C library underneath. It is opt-in today. It becomes a default once its own gates pass, and every pull request must pass them to merge: the published test vectors (NIST CAVP and the RFCs), Wycheproof, three constant-time checks (timing statistics after dudect, a Valgrind memory-checker run with every secret marked undefined, and a check of the compiled LLVM IR), and a differential against OpenSSL on random inputs.
 
-Available now (milestone B1): SHA-224, SHA-256, SHA-384, SHA-512 and SHA-512/256; HMAC; HKDF; and, for formats that already exist, MD5, SHA-1 and PBKDF2.
+Available now (milestones B1 and B2): SHA-224, SHA-256, SHA-384, SHA-512 and SHA-512/256; HMAC; HKDF; authenticated encryption with XChaCha20-Poly1305, ChaCha20-Poly1305 and AES-GCM; and, for formats that already exist, MD5, SHA-1, PBKDF2 and AES-CBC.
 
 ```crystal
 require "beryl"
@@ -24,9 +24,11 @@ Beryl::Crypto.digest("contents of a file")                             # SHA-256
 tag = Beryl::Crypto.authenticate("message", key: secret_key)           # HMAC-SHA256
 Beryl::Crypto.verify_authentication("message", tag, key: secret_key)   # => true
 Beryl::Crypto.derive_key(shared_secret, info: "cookies", bytesize: 32) # HKDF-SHA256
+sealed = Beryl::Crypto.encrypt("message", key: key_of_32_bytes)         # XChaCha20-Poly1305
+Beryl::Crypto.decrypt(sealed, key: key_of_32_bytes)                    # => Bytes, or nil if changed
 ```
 
-The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones. See [docs/crypto/hashes-and-macs.md](docs/crypto/hashes-and-macs.md) for the full list, the test vectors and how to run each check.
+The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones. See [docs/crypto/hashes-and-macs.md](docs/crypto/hashes-and-macs.md) and [docs/crypto/ciphers-and-aeads.md](docs/crypto/ciphers-and-aeads.md) for the full list, the test vectors, how to run each check and the measured speed against OpenSSL.
 
 ## Development
 
