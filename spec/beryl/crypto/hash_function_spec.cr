@@ -22,6 +22,15 @@ private def message_of_every_byte_value(bytesize : Int32) : Bytes
   Bytes.new(bytesize) { |index| (index % 251).to_u8 }
 end
 
+# A hash that claims to have taken in *message_bytesize* bytes already, so the
+# length limit can be reached without hashing two exabytes.
+private class HashThatHasTakenInManyBytes < Beryl::Crypto::V1::SHA256
+  def initialize(message_bytesize : UInt64)
+    super()
+    @message_bytesize = message_bytesize
+  end
+end
+
 describe "Beryl hash functions" do
   LIST_OF_KNOWN_ANSWERS.each do |standard_name, digest_bytesize, block_bytesize, digest_of_abc, digest_of_nothing|
     describe standard_name do
@@ -152,6 +161,16 @@ describe "Beryl hash functions" do
     Beryl::Crypto::Compatibility::SHA1::BLOCK_SIZE.should eq(64)
     Beryl::Crypto::Compatibility::MD5::DIGEST_SIZE.should eq(16)
     Beryl::Crypto::Compatibility::MD5::BLOCK_SIZE.should eq(64)
+  end
+
+  it "refuses a message past 2^61 - 1 bytes with MessageTooLong" do
+    limit = Beryl::Crypto::V1::BlockHashFunction::MAXIMUM_MESSAGE_BYTESIZE
+    limit.should eq(2_305_843_009_213_693_951_u64)
+
+    HashThatHasTakenInManyBytes.new(limit - 3).update("abc").final.size.should eq(32)
+    expect_raises(Beryl::Crypto::MessageTooLong, "at most 2305843009213693951 bytes") do
+      HashThatHasTakenInManyBytes.new(limit - 3).update("abcd")
+    end
   end
 
   it "hashes one million repetitions of \"a\" (FIPS 180 long-message example)" do
