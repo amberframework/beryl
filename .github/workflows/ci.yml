@@ -175,5 +175,15 @@ jobs:
         run: shards install --frozen --skip-postinstall --skip-executables
       - name: State which compression functions run
         run: crystal spec ${{ matrix.flags }} spec/beryl/crypto/processor_instructions_spec.cr -e "states which instructions"
-      - name: Run the differential
-        run: crystal spec --release ${{ matrix.flags }} --tag differential -e "hash " -e "HMAC-" -e "HKDF-" -e "PBKDF2-"
+      - name: Build the differential
+        run: crystal build --release ${{ matrix.flags }} spec/differential/libcrypto_differential_spec.cr -o differential_spec
+      # The spec runner keeps only the last -e it is given, so each family
+      # is its own run.
+      - name: Run the differential on the hashes (1,000,000 cases each)
+        run: ./differential_spec --tag differential -e "hash "
+      - name: Run the differential on HMAC (1,000,000 cases each)
+        run: ./differential_spec --tag differential -e "HMAC-"
+      - name: Run the differential on HKDF (100,000 cases each)
+        run: ./differential_spec --tag differential -e "HKDF-"
+      - name: Run the differential on PBKDF2 (10,000 cases each)
+        run: ./differential_spec --tag differential -e "PBKDF2-"
