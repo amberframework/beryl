@@ -92,6 +92,33 @@ describe "Beryl hash functions" do
         hash.final.hexstring.should eq(digest_of_nothing)
       end
 
+      it "starts over after reset at every point of a block, with nothing left from the message before" do
+        (0..(2 * block_bytesize + 1)).each do |abandoned_bytesize|
+          hash = build_hash.call
+          hash.update(Bytes.new(abandoned_bytesize, 0xff_u8))
+          hash.reset
+          hash.final.hexstring.should eq(digest_of_nothing)
+
+          hash.reset
+          hash.update(Bytes.new(abandoned_bytesize, 0xff_u8))
+          hash.final
+          hash.reset
+          hash.update("abc").final.hexstring.should eq(digest_of_abc)
+        end
+      end
+
+      it "gives the same digest when a block is completed by a later update" do
+        message = message_of_every_byte_value(5 * block_bytesize + 3)
+        expected = build_hash.call.update(message).final
+        (1...(2 * block_bytesize)).each do |first_bytesize|
+          hash = build_hash.call
+          hash.update(message[0, first_bytesize])
+          hash.update(message[first_bytesize, 7])
+          hash.update(message[first_bytesize + 7, message.size - first_bytesize - 7])
+          hash.final.should eq(expected)
+        end
+      end
+
       it "refuses more input after final" do
         hash = build_hash.call
         hash.update("abc")
