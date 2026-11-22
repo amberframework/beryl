@@ -380,6 +380,300 @@
           "sha256": "df55932f8b6a5d271f36a634d91a25903724e189ba6c120bf7257cd47f10b197"
         }
       ]
+    },
+    {
+      "source": "nist-cavp",
+      "license": "Public domain (United States Government work, NIST)",
+      "url": "https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/mac/gcmtestvectors.zip",
+      "pinned_at": "retrieved 2026-11-22; server Last-Modified 2024-09-29",
+      "kind": "zip",
+      "sha256": "f9fc479e134cde2980b3bb7cddbcb567b2cd96fd753835243ed067699f26a023",
+      "list_of_files": [
+        {
+          "archive_path": "gcmDecrypt128.rsp",
+          "stored_path": "nist-cavp/gcm/gcmDecrypt128.rsp",
+          "sha256": "0d1f98d0c9e176ede1f3e85484dd13de92c3436ca97df378ec3481e04c19a732"
+        },
+        {
+          "archive_path": "gcmDecrypt192.rsp",
+          "stored_path": "nist-cavp/gcm/gcmDecrypt192.rsp",
+          "sha256": "ca65640844441d58828e29bff87b7ec4571ef6778f4c331fc06697264edb2ffd"
+        },
+        {
+          "archive_path": "gcmDecrypt256.rsp",
+          "stored_path": "nist-cavp/gcm/gcmDecrypt256.rsp",
+          "sha256": "ed318735a517d5a85c82d2846c23dcf56e57a352fb0f0a163d9e7617a7bd12ad"
+        },
+        {
+          "archive_path": "gcmEncryptExtIV128.rsp",
+          "stored_path": "nist-cavp/gcm/gcmEncryptExtIV128.rsp",
+          "sha256": "30156236f768b0d81e58a3e5bd3bd79ce294cf9ef0ba0a84cf7b869c89ebd9fd"
+        },
+        {
+          "archive_path": "gcmEncryptExtIV192.rsp",
+          "stored_path": "nist-cavp/gcm/gcmEncryptExtIV192.rsp",
+          "sha256": "86827942bf67d1c67f34532bd057adf0a41cd911396a36023d9033f89fc6f571"
+        },
+        {
+          "archive_path": "gcmEncryptExtIV256.rsp",
+          "stored_path": "nist-cavp/gcm/gcmEncryptExtIV256.rsp",
+          "sha256": "4448b4998c3f58cd9f5542ddf7c573189a721ff3d3ac24cd5177bb4910a787f8"
+        }
+      ]
+    },
+    {
+      "source": "nist-cavp",
+      "license": "Public domain (United States Government work, NIST)",
+      "url": "https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/aes/KAT_AES.zip",
+      "pinned_at": "retrieved 2026-11-22; server Last-Modified 2024-09-29",
+      "kind": "zip",
+      "sha256": "a203b16c9246b2ebae31dee5de21a606be80cf78ceabaca37150236fa098eb60",
+      "list_of_files": [
+        {
+          "archive_path": "CBCGFSbox128.rsp",
+          "stored_path": "nist-cavp/aes/CBCGFSbox128.rsp",
+          "sha256": "8d4d32fd18d973b45a7b845aef5259767b998ce558471029d4819ee1a61269b6"
+        },
+        {
+          "archive_path": "CBCGFSbox192.rsp",
+          "stored_path": "nist-cavp/aes/CBCGFSbox192.rsp",
+          "sha256": "7e3bc066f539f52cdbfa31c848d5d2d9e270cb108d49f51466dba3e040412f79"
+        },
+        {
+          "archive_path": "CBCGFSbox256.rsp",
+          "stored_path": "nist-cavp/aes/CBCGFSbox256.rsp",
+          "sha256": "57d86961e3e2bf421d7fedbad66615a661c6b43155035d22c9df11fb1e1d2a97"
+        },
+        {
+          "archive_path": "CBCKeySbox128.rsp",
+          "stored_path": "nist-cavp/aes/CBCKeySbox128.rsp",
+          "sha256": "75ba6642f72066facfccd0423b11a7a8242e10ab8abcb39958ff040ae370f95e"
+        },
+        {
+          "archive_path": "CBCKeySbox192.rsp",
+          "stored_path": "nist-cavp/aes/CBCKeySbox192.rsp",
+          "sha256": "96be2fb652ffe20561c92548971834d64558df9d4da5335f86eb625cf2c43582"
+        },
+        {
+          "archive_path": "CBCKeySbox256.rsp",
+          "stored_path": "nist-cavp/aes/CBCKeySbox256.rsp",
+          "sha256": "2442e95008edd37e85667f3b8500225786f0cf7ad79478d1d994ad901f6c3389"
+        },
+        {
+          "archive_path": "CBCVarKey128.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarKey128.rsp",
+          "sha256": "086f2b66e48699d682a1f30f091bfe441956f02ca699235fe3dfecfc706cafd1"
+        },
+        {
+          "archive_path": "CBCVarKey192.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarKey192.rsp",
+          "sha256": "20ad66bc634b3e09c0c8d002b3746c5cf22d9116f844a726f596103d99339f53"
+        },
+        {
+          "archive_path": "CBCVarKey256.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarKey256.rsp",
+          "sha256": "dc0cb380169f43a83c4aff86eeb146d5861a7e0247908106f8b6fd37902e97f8"
+        },
+        {
+          "archive_path": "CBCVarTxt128.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarTxt128.rsp",
+          "sha256": "36e20f93a14e2a7fc7caf0f478a6cc50431e94d5e7db4dea6642c5843c787ddd"
+        },
+        {
+          "archive_path": "CBCVarTxt192.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarTxt192.rsp",
+          "sha256": "9b273848781343f47436c96434d06fc487a6266f32730b359add1fbe83ce5f73"
+        },
+        {
+          "archive_path": "CBCVarTxt256.rsp",
+          "stored_path": "nist-cavp/aes/CBCVarTxt256.rsp",
+          "sha256": "13c5b086c64c816e43ffc657b602cfe6a7231bea8297ebc9a96b0932d351f155"
+        },
+        {
+          "archive_path": "ECBGFSbox128.rsp",
+          "stored_path": "nist-cavp/aes/ECBGFSbox128.rsp",
+          "sha256": "62f17126e870b9700234cc5b592b5bb50b295320b9844f341ee58a33eae735e6"
+        },
+        {
+          "archive_path": "ECBGFSbox192.rsp",
+          "stored_path": "nist-cavp/aes/ECBGFSbox192.rsp",
+          "sha256": "885364c3f424477e5b878b13c4b3ffcf11f4501cb1223cf25d06180915d4f070"
+        },
+        {
+          "archive_path": "ECBGFSbox256.rsp",
+          "stored_path": "nist-cavp/aes/ECBGFSbox256.rsp",
+          "sha256": "6b0800d4d666d57abaaa4ede64c9dbdbf5ab2239a13adcac5ce516516dedf526"
+        },
+        {
+          "archive_path": "ECBKeySbox128.rsp",
+          "stored_path": "nist-cavp/aes/ECBKeySbox128.rsp",
+          "sha256": "f23ae1259a894fcabe955c42904e0d09394dceb17b8a3dc150767fa2a6482aa7"
+        },
+        {
+          "archive_path": "ECBKeySbox192.rsp",
+          "stored_path": "nist-cavp/aes/ECBKeySbox192.rsp",
+          "sha256": "3c3f1531fba163287b3deb001cdbf666ebc1fe70afee4a071abbefb8d4544556"
+        },
+        {
+          "archive_path": "ECBKeySbox256.rsp",
+          "stored_path": "nist-cavp/aes/ECBKeySbox256.rsp",
+          "sha256": "010a648bfc725f0ea2bd6e9892c88498cd71d805bac84c3f93199e1d919aba03"
+        },
+        {
+          "archive_path": "ECBVarKey128.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarKey128.rsp",
+          "sha256": "81ce3d0f80b57c4cfcacdde88e2ff9bc609050a1d80a0beb92fda30acdd98598"
+        },
+        {
+          "archive_path": "ECBVarKey192.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarKey192.rsp",
+          "sha256": "d94b0fbedab3607bdb22d5fde635915ce5adfd97ae6da4ce136f4b2ad5b0cb6d"
+        },
+        {
+          "archive_path": "ECBVarKey256.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarKey256.rsp",
+          "sha256": "41026476e854b2e941804726300da7222c5f7ee5b28490a1e52c4ebfbb9dfc11"
+        },
+        {
+          "archive_path": "ECBVarTxt128.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarTxt128.rsp",
+          "sha256": "447001742e5576da2213888f2187258bdd07c120106792c509786d46da2464f1"
+        },
+        {
+          "archive_path": "ECBVarTxt192.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarTxt192.rsp",
+          "sha256": "ece3fb1795a461127b4c69c8d852ec9323c88acbb037c198376b71b7d888b68f"
+        },
+        {
+          "archive_path": "ECBVarTxt256.rsp",
+          "stored_path": "nist-cavp/aes/ECBVarTxt256.rsp",
+          "sha256": "0be3b50f6b3e28e34e16f72d1acbcea4e3c240d725a32b30917b9e560e8ef24e"
+        }
+      ]
+    },
+    {
+      "source": "nist-cavp",
+      "license": "Public domain (United States Government work, NIST)",
+      "url": "https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/aes/aesmmt.zip",
+      "pinned_at": "retrieved 2026-11-22; server Last-Modified 2024-09-29",
+      "kind": "zip",
+      "sha256": "12d1616f7a713e807714055973f04efc402f46a14e3d81869717c7ace4ecbaf0",
+      "list_of_files": [
+        {
+          "archive_path": "CBCMMT128.rsp",
+          "stored_path": "nist-cavp/aes/CBCMMT128.rsp",
+          "sha256": "8602a63720fba4925b141385f590bef33e10d2a61c2c93d7f30b0b808ccb27be"
+        },
+        {
+          "archive_path": "CBCMMT192.rsp",
+          "stored_path": "nist-cavp/aes/CBCMMT192.rsp",
+          "sha256": "9312bf816c965d9329b22c61f8d7f3e734e9c0e4410c4bc374787f5b2b3b6c12"
+        },
+        {
+          "archive_path": "CBCMMT256.rsp",
+          "stored_path": "nist-cavp/aes/CBCMMT256.rsp",
+          "sha256": "bdf4379ac9419d2e1e8cb20568611aa444e1f2b4ef7d3b9438afa436a97004b7"
+        },
+        {
+          "archive_path": "ECBMMT128.rsp",
+          "stored_path": "nist-cavp/aes/ECBMMT128.rsp",
+          "sha256": "001977653a6df258fe41d35b02729367a6c25b58b2e5cd3767ca9362cc6753b7"
+        },
+        {
+          "archive_path": "ECBMMT192.rsp",
+          "stored_path": "nist-cavp/aes/ECBMMT192.rsp",
+          "sha256": "fb45f113ad649b6441651f4467196a297649cc74185b8d56ce65a4c0150260e4"
+        },
+        {
+          "archive_path": "ECBMMT256.rsp",
+          "stored_path": "nist-cavp/aes/ECBMMT256.rsp",
+          "sha256": "4fbbb291692101bcf4c2cf85762388824881f5712318151e2b4af275eb081748"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/chacha20_poly1305_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "fe61d25f90e1bde4461d00eafe61049e5f29bd999f36b766df9cda90906ad53d",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/chacha20_poly1305_test.json",
+          "sha256": "fe61d25f90e1bde4461d00eafe61049e5f29bd999f36b766df9cda90906ad53d"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/xchacha20_poly1305_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "a79de072571b90eb40c3a63ce0c7f75dcb4b62323c8870228e1f61dcc61d63a9",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/xchacha20_poly1305_test.json",
+          "sha256": "a79de072571b90eb40c3a63ce0c7f75dcb4b62323c8870228e1f61dcc61d63a9"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/aes_gcm_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "985e5ecc172e181eaf49e89508b9470dcf478002eb7e8559c707eb42dc97dfe7",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/aes_gcm_test.json",
+          "sha256": "985e5ecc172e181eaf49e89508b9470dcf478002eb7e8559c707eb42dc97dfe7"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/aes_cbc_pkcs5_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "e45234427e10cf91f27324e52afe8c00906f294dbae061535e2ae13dd300a46a",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/aes_cbc_pkcs5_test.json",
+          "sha256": "e45234427e10cf91f27324e52afe8c00906f294dbae061535e2ae13dd300a46a"
+        }
+      ]
+    },
+    {
+      "source": "rfc",
+      "license": "IETF Trust Legal Provisions (RFC text reproduced unmodified)",
+      "url": "https://www.rfc-editor.org/rfc/rfc8439.txt",
+      "pinned_at": "retrieved 2026-11-22 (RFCs are immutable once published)",
+      "kind": "file",
+      "sha256": "25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c",
+      "list_of_files": [
+        {
+          "stored_path": "rfc/rfc8439.txt",
+          "sha256": "25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c"
+        }
+      ]
+    },
+    {
+      "source": "rfc",
+      "license": "IETF Trust Legal Provisions (RFC text reproduced unmodified)",
+      "url": "https://www.ietf.org/archive/id/draft-irtf-cfrg-xchacha-03.txt",
+      "pinned_at": "retrieved 2026-11-22 (a numbered Internet-Draft revision is immutable)",
+      "kind": "file",
+      "sha256": "fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd",
+      "list_of_files": [
+        {
+          "stored_path": "rfc/draft-irtf-cfrg-xchacha-03.txt",
+          "sha256": "fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd"
+        }
+      ]
     }
   ]
 }

@@ -47,6 +47,52 @@ describe Beryl::Crypto do
       Beryl::Crypto::MessageTooLong.new.should be_a(Beryl::Crypto::Error)
       Beryl::Crypto::OutputSizeMismatch.new.should be_a(Beryl::Crypto::Error)
       Beryl::Crypto::TruncatedTagTooShort.new.should be_a(Beryl::Crypto::Error)
+      Beryl::Crypto::KeySizeMismatch.new.should be_a(Beryl::Crypto::Error)
+      Beryl::Crypto::NonceSizeMismatch.new.should be_a(Beryl::Crypto::Error)
+      Beryl::Crypto::TagSizeNotSupported.new.should be_a(Beryl::Crypto::Error)
+    end
+  end
+
+  describe ".encrypt and .decrypt" do
+    key = Bytes.new(32) { |index| (index * 7).to_u8 }
+
+    it "return the message, as XChaCha20-Poly1305 behind a fresh 24-byte nonce" do
+      sealed = Beryl::Crypto.encrypt("a private note", key: key, associated_data: "note 42")
+      sealed.size.should eq(24 + 14 + 16)
+      Beryl::Crypto.decrypt(sealed, key: key, associated_data: "note 42").should eq("a private note".to_slice)
+
+      cipher = Beryl::Crypto::V1::XChaCha20Poly1305.new(key)
+      cipher.decrypt(sealed[24, sealed.size - 24], nonce: sealed[0, 24], associated_data: "note 42").should eq("a private note".to_slice)
+    end
+
+    it "draw a new nonce for every message" do
+      first = Beryl::Crypto.encrypt("same message", key: key)
+      second = Beryl::Crypto.encrypt("same message", key: key)
+      first[0, 24].should_not eq(second[0, 24])
+      first.should_not eq(second)
+    end
+
+    it "return nil for an altered message, another key, other associated data and a message too short to hold a nonce and a tag" do
+      sealed = Beryl::Crypto.encrypt("a private note", key: key, associated_data: "note 42")
+      sealed.size.times do |position|
+        altered = sealed.dup
+        altered[position] ^= 0x01_u8
+        Beryl::Crypto.decrypt(altered, key: key, associated_data: "note 42").should be_nil
+      end
+      Beryl::Crypto.decrypt(sealed, key: Bytes.new(32), associated_data: "note 42").should be_nil
+      Beryl::Crypto.decrypt(sealed, key: key, associated_data: "note 43").should be_nil
+      Beryl::Crypto.decrypt(sealed[0, 39], key: key).should be_nil
+      Beryl::Crypto.decrypt(Bytes.empty, key: key).should be_nil
+    end
+
+    it "encrypt an empty message to a nonce and a tag" do
+      sealed = Beryl::Crypto.encrypt("", key: key)
+      sealed.size.should eq(40)
+      Beryl::Crypto.decrypt(sealed, key: key).should eq(Bytes.empty)
+    end
+
+    it "raise KeySizeMismatch for a key that is not 32 bytes" do
+      expect_raises(Beryl::Crypto::KeySizeMismatch) { Beryl::Crypto.encrypt("message", key: Bytes.new(16)) }
     end
   end
 

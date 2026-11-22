@@ -51,8 +51,25 @@
 # and the timing check cover the same code by two other methods.
 
 ANALYZED_FUNCTION = /Beryl::Crypto|SecretFlowProbe|Crypto::Subtle/.freeze
+
+# Functions whose every pointer argument leads to secret memory: the cipher
+# and authenticator cores, which work on keys, round keys, accumulators and
+# message blocks handed to them as bare pointers.
+SECRET_BUFFER_FUNCTION = /BitslicedAdvancedEncryptionStandard::|ChaCha20StreamCipher::|Poly1305OneTimeAuthenticator::|
+                          GaloisHash::|CipherBlockChaining::|ChaCha20Poly1305Construction::/x.freeze
+
+# Methods of the cipher objects. A cipher object keeps integers that are
+# public (a round count, a tag size) beside buffers that are secret (a key,
+# round keys, a hash key), so every buffer loaded from the object is secret
+# and its integers are not.
+CIPHER_OBJECT_METHOD = /AuthenticatedEncryption|GaloisCounterMode|CipherBlockChainingMode/.freeze
+
+# The one place a verdict computed from secrets may decide what happens
+# next (src/beryl/crypto/declassification.cr). Its result is public.
+DECLASSIFICATION = /Beryl::Crypto::Declassification::reveal/.freeze
 SKIPPED_FUNCTION = /Exception::new|raise</.freeze
 EXPECTED_LEAK = /SecretFlowProbe::leaky_comparison/.freeze
+LIST_OF_EXPECTED_LEAKS = [/SecretFlowProbe::leaky_comparison</, /SecretFlowProbe::leaky_comparison_of_round_keys</].freeze
 COMPRESSION_FUNCTION = /#compress(?:_with_portable_code)?</.freeze
 
 # Instructions allowed in assembly: none of them takes a time that depends on
@@ -160,7 +177,7 @@ def parse_parameters(parameter_text)
     name = parameter.strip[/(#{VALUE_TOKEN})\z/, 1]
     next unless name
 
-    kind = if parameter.include?('%"Slice(UInt8)"') then :slice
+    kind = if parameter.match?(/%"Slice\(UInt(?:8|32|64)\)"/) then :slice
            elsif parameter.strip.start_with?("ptr") then :pointer
            else :other
            end
@@ -172,12 +189,15 @@ end
 # One function's analysis: which values are secret, which pointers lead to
 # secret memory, and what was found.
 class SecretFlow
-  attr_reader :list_of_findings, :list_of_notes, :written_state_paths, :assembly_statement_count
+  attr_reader :list_of_findings, :list_of_notes, :list_of_declassifications, :written_state_paths,
+              :assembly_statement_count
 
   def initialize(function, state_paths_by_compression_function)
     @function = function
     @state_paths_by_compression_function = state_paths_by_compression_function
     @is_compression = function.name.match?(COMPRESSION_FUNCTION)
+    @is_secret_buffer_function = function.name.match?(SECRET_BUFFER_FUNCTION)
+    @is_cipher_object_method = function.name.match?(CIPHER_OBJECT_METHOD)
     @defined = function.parameters.keys.to_h { |name| [name, true] }
     function.list_of_instructions.each { |instruction| @defined[instruction.result] = true if instruction.result }
     function.list_of_instructions.each do |instruction|
@@ -189,11 +209,14 @@ class SecretFlow
     @secret_fields = {}     # "base|path" => true
     @list_of_findings = []
     @list_of_notes = []
+    @list_of_declassifications = []
+    @freshly_stored_public = {}
     @written_state_paths = {}
     @assembly_statement_count = 0
     function.parameters.each do |name, kind|
       @origin[name] = [name, ""] if kind == :pointer
       @secret_bases[name] = true if @is_compression && name == "%self"
+      @secret_bases[name] = true if @is_secret_buffer_function && kind == :pointer
     end
   end
 
@@ -202,6 +225,8 @@ class SecretFlow
       before = [@secret_values.size, @secret_bases.size, @secret_fields.size, @origin.size]
       @list_of_findings = []
       @list_of_notes = []
+      @list_of_declassifications = []
+      @freshly_stored_public = {}
       @assembly_statement_count = 0
       @function.list_of_instructions.each { |instruction| visit(instruction) }
       break if before == [@secret_values.size, @secret_bases.size, @secret_fields.size, @origin.size]
@@ -220,6 +245,11 @@ class SecretFlow
     return false unless origin
 
     @secret_bases.key?(origin[0]) || @secret_fields.key?("#{origin[0]}|#{origin[1]}")
+  end
+
+  def secret_base?(pointer)
+    origin = @origin[pointer]
+    !origin.nil? && @secret_bases.key?(origin[0])
   end
 
   def mark_memory_secret(pointer)
@@ -246,18 +276,24 @@ class SecretFlow
         @secret_bases[instruction.result] = true
       else
         @secret_values[instruction.result] = true if source && secret?(source)
-        # A slice built here, or returned by a call, still points where it did.
-        @origin[instruction.result] = @origin[source] if source && @origin.key?(source) && instruction.text.match?(/, 2\z/)
+        # A slice built here, or returned by a call, still points where it did; an
+        # optional slice (a union) still points where the slice inside it did.
+        @origin[instruction.result] = @origin[source] if source && @origin.key?(source)
       end
     when "getelementptr"
       visit_getelementptr(instruction, operands)
     when "load"
       pointer = operands.last
       report("memory address depends on a secret", instruction) if pointer && secret?(pointer)
-      if pointer && leads_to_secret?(pointer)
+      if pointer && @freshly_stored_public[pointer]
+        # Reads back a public value this function stored a moment ago, with
+        # no call and no jump in between (a stack slot the optimizer shares).
+      elsif pointer && leads_to_secret?(pointer)
         @secret_values[instruction.result] = true
       elsif instruction.text.start_with?("load ptr")
         @origin[instruction.result] = [instruction.result, ""]
+        # A buffer that a cipher object owns holds key material.
+        @secret_bases[instruction.result] = true if @is_cipher_object_method && pointer && @origin[pointer]&.first == "%self"
       end
     when "store"
       value_text, pointer = instruction.text.sub(/\Astore (?:volatile )?/, "").split(", ptr ", 2)
@@ -265,9 +301,12 @@ class SecretFlow
       value = value_text.to_s.scan(VALUE_TOKEN).find { |token| @defined[token] }
       report("memory address depends on a secret", instruction) if pointer && secret?(pointer)
       mark_memory_secret(pointer) if value && secret?(value) && pointer
+      @freshly_stored_public[pointer] = !(value && secret?(value)) if pointer
     when "br"
+      @freshly_stored_public.clear
       report("branch depends on a secret", instruction) if instruction.text.start_with?("br i1") && operands.first && secret?(operands.first)
     when "switch"
+      @freshly_stored_public.clear
       report("switch depends on a secret", instruction) if operands.first && secret?(operands.first)
     when "call", "invoke"
       visit_call(instruction, operands)
@@ -303,6 +342,7 @@ class SecretFlow
       return
     end
 
+    @freshly_stored_public.clear
     assembly_faults(template).each { |fault| @list_of_findings << Finding.new(@function.name, "assembly", fault[0, 160]) }
     list_of_arguments.each do |argument|
       mark_memory_secret(argument)
@@ -320,8 +360,13 @@ class SecretFlow
       mark_memory_secret(destination) if source && leads_to_secret?(source)
       return
     end
+    @freshly_stored_public.clear unless callee.start_with?("llvm.lifetime", "llvm.dbg")
     if callee.start_with?("llvm.")
       @secret_values[instruction.result] = true if instruction.result && operands.any? { |operand| secret?(operand) }
+      return
+    end
+    if callee.match?(DECLASSIFICATION)
+      @list_of_declassifications << "#{@function.name}: #{callee}" if operands.any? { |operand| secret?(operand) }
       return
     end
 
@@ -345,6 +390,12 @@ class SecretFlow
     if instruction.result
       returned_buffer = operands.drop(1).reverse.find { |operand| @origin.key?(operand) }
       @origin[instruction.result] ||= returned_buffer ? @origin[returned_buffer] : [instruction.result, ""]
+    end
+    # A number or a verdict that Beryl code computes from secret buffers is
+    # secret: a tag comparison, a padding size.
+    if instruction.result && callee.match?(ANALYZED_FUNCTION) && instruction.text.match?(/\A(?:call|invoke) (?:[a-z_]+ )*(?:range\([^)]*\) )?i(?:1|8|16|32|64) @/)
+      reads_secret_memory = operands.any? { |operand| @function.parameters[operand] == :slice || secret_base?(operand) }
+      @secret_values[instruction.result] = true if reads_secret_memory
     end
     list_of_secret_arguments = operands.select { |operand| secret?(operand) }
     return if list_of_secret_arguments.empty?
@@ -396,12 +447,14 @@ end
 
 list_of_findings = []
 list_of_notes = []
+list_of_declassifications = []
 assembly_statement_count = 0
 list_of_functions.each do |function|
   flow = SecretFlow.new(function, state_paths_by_compression_function).run
   assembly_statement_count += flow.assembly_statement_count
   list_of_findings.concat(flow.list_of_findings)
   list_of_notes.concat(flow.list_of_notes)
+  list_of_declassifications.concat(flow.list_of_declassifications)
 end
 
 expected, unexpected = list_of_findings.partition { |finding| finding.function_name.match?(EXPECTED_LEAK) }
@@ -410,13 +463,16 @@ list_of_functions.each { |function| puts "  #{function.name[0, 150]}" }
 puts "assembly statements checked by their text: #{assembly_statement_count}"
 puts "secret values passed on to another function (checked there): #{list_of_notes.uniq.size}"
 list_of_notes.uniq.each { |note| puts "  #{note[0, 260]}" }
-puts "findings in leaky_comparison (the deliberate leak): #{expected.size}"
-expected.each { |finding| puts "  #{finding.kind}: #{finding.text}" }
+puts "verdicts revealed through Declassification.reveal: #{list_of_declassifications.uniq.size}"
+list_of_declassifications.uniq.each { |declassification| puts "  #{declassification[0, 260]}" }
+puts "findings in the deliberate leaks: #{expected.size}"
+expected.each { |finding| puts "  #{finding.function_name[/SecretFlowProbe::\w+/]}: #{finding.kind}: #{finding.text}" }
 puts "findings anywhere else: #{unexpected.size}"
 unexpected.each { |finding| puts "  #{finding.function_name[0, 120]}\n    #{finding.kind}: #{finding.text}" }
 
-if expected.empty?
-  warn "FAIL: the deliberate leak was not reported, so the checker cannot be trusted"
+list_of_missed_leaks = LIST_OF_EXPECTED_LEAKS.reject { |leak| expected.any? { |finding| finding.function_name.match?(leak) } }
+unless list_of_missed_leaks.empty?
+  warn "FAIL: a deliberate leak was not reported (#{list_of_missed_leaks.map(&:source).join(", ")}), so the checker cannot be trusted"
   exit 1
 end
 unless unexpected.empty?

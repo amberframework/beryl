@@ -1,5 +1,5 @@
-# Linkage probe: proves that Beryl's hashes, HMAC and key derivation link no
-# OpenSSL. It requires only `beryl/crypto`, uses each family once, and is
+# Linkage probe: proves that Beryl's hashes, HMAC, key derivation and ciphers
+# link no OpenSSL. It requires only `beryl/crypto`, uses each family once, and is
 # built without the standard library's OpenSSL bindings:
 #
 #     crystal-alpha build --release -Dwithout_openssl spec/probes/no_libcrypto.cr -o no_libcrypto
@@ -19,6 +19,29 @@ salted_password = Beryl::Crypto::Compatibility::PBKDF2(Beryl::Crypto::V1::SHA256
   "passwd", salt: "salt", iteration_count: 1, bytesize: 64
 )
 
+# RFC 8439 section 2.8.2, the XChaCha draft's Appendix A.3.1, and test case 4
+# of the GCM specification.
+cipher_key = "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f".hexbytes
+sunscreen = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+header = "50515253c0c1c2c3c4c5c6c7".hexbytes
+chacha20_poly1305_sealed = Beryl::Crypto::V1::ChaCha20Poly1305.new(cipher_key).encrypt(
+  sunscreen, nonce: "070000004041424344454647".hexbytes, associated_data: header
+)
+xchacha20_poly1305_sealed = Beryl::Crypto::V1::XChaCha20Poly1305.new(cipher_key).encrypt(
+  sunscreen, nonce: "404142434445464748494a4b4c4d4e4f5051525354555657".hexbytes, associated_data: header
+)
+aes_gcm_sealed = Beryl::Crypto::V1::AESGCM.new("feffe9928665731c6d6a8f9467308308".hexbytes).encrypt(
+  ("d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72" \
+   "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39").hexbytes,
+  nonce: "cafebabefacedbaddecaf888".hexbytes,
+  associated_data: "feedfacedeadbeeffeedfacedeadbeefabaddad2".hexbytes,
+)
+aes_cbc = Beryl::Crypto::Compatibility::AESCBC.new(cipher_key)
+aes_cbc_ciphertext = aes_cbc.encrypt(sunscreen, initialization_vector: cipher_key[0, 16])
+aes_cbc_plaintext = aes_cbc.decrypt(aes_cbc_ciphertext, initialization_vector: cipher_key[0, 16])
+encrypted_note = Beryl::Crypto.encrypt("a private note", key: cipher_key)
+opened_note = Beryl::Crypto.decrypt(encrypted_note, key: cipher_key)
+
 STDOUT.puts "SHA-256(abc)           #{digest.hexstring}"
 STDOUT.puts "HMAC-SHA256 (RFC 4231) #{tag.hexstring} verified=#{tag_is_accepted}"
 STDOUT.puts "HKDF-SHA256            #{derived_key.hexstring}"
@@ -26,10 +49,20 @@ STDOUT.puts "SHA-512(abc)           #{sha512_digest.hexstring}"
 STDOUT.puts "MD5(abc)               #{md5_digest.hexstring}"
 STDOUT.puts "SHA-1(abc)             #{sha1_digest.hexstring}"
 STDOUT.puts "PBKDF2-SHA256 (RFC 7914) #{salted_password.hexstring}"
+STDOUT.puts "ChaCha20-Poly1305 tag (RFC 8439)   #{chacha20_poly1305_sealed[-16, 16].hexstring}"
+STDOUT.puts "XChaCha20-Poly1305 tag (draft)     #{xchacha20_poly1305_sealed[-16, 16].hexstring}"
+STDOUT.puts "AES-128-GCM tag (GCM test case 4)  #{aes_gcm_sealed[-16, 16].hexstring}"
+STDOUT.puts "AES-256-CBC round trip             #{aes_cbc_plaintext == sunscreen.to_slice}"
+STDOUT.puts "Beryl::Crypto.encrypt round trip   #{opened_note == "a private note".to_slice}"
 
 is_correct = digest.hexstring == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
              tag.hexstring == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" &&
              tag_is_accepted &&
              derived_key.hexstring == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8" &&
-             salted_password.hexstring.starts_with?("55ac046e56e3089fec1691c22544b605")
+             salted_password.hexstring.starts_with?("55ac046e56e3089fec1691c22544b605") &&
+             chacha20_poly1305_sealed[-16, 16].hexstring == "1ae10b594f09e26a7e902ecbd0600691" &&
+             xchacha20_poly1305_sealed[-16, 16].hexstring == "c0875924c1c7987947deafd8780acf49" &&
+             aes_gcm_sealed[-16, 16].hexstring == "5bc94fbc3221a5db94fae95ae7121a47" &&
+             aes_cbc_plaintext == sunscreen.to_slice &&
+             opened_note == "a private note".to_slice
 exit(is_correct ? 0 : 1)

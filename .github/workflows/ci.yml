@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       run_differential:
-        description: Run the differential against libcrypto (1,000,000 cases per algorithm, one to two hours)
+        description: Run the differential of the hashes against libcrypto (1,000,000 cases per algorithm, one to two hours)
         type: boolean
         default: false
 
@@ -30,6 +30,10 @@ jobs:
         run: crystal tool format --check src spec bench
       - name: Type-check the library
         run: crystal build --no-codegen src/beryl.cr
+      - name: Type-check the benchmarks
+        run: |
+          crystal build --no-codegen bench/hashes_against_libcrypto.cr
+          crystal build --no-codegen bench/ciphers_against_libcrypto.cr
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
       - name: Run the quick suite again on the portable code alone
@@ -82,7 +86,7 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_hashes spec/probes/secret_flow.cr -o secret_flow_portable
           ruby scripts/check_secret_flow.rb secret_flow_portable.ll
-      - name: "Timing: HMAC takes the same time whatever the secret"
+      - name: "Timing: HMAC and the ciphers take the same time whatever the secret"
         run: crystal spec --release --tag constant_time
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
@@ -126,8 +130,26 @@ jobs:
           crystal build --release --emit llvm-ir -Dwithout_openssl spec/probes/secret_flow.cr -o secret_flow
           ruby scripts/check_secret_flow.rb secret_flow.ll
 
+
+  cipher-differential:
+    name: Differential against libcrypto (ciphers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Show the libcrypto this job compares against
+        run: openssl version
+      - name: Run the differential (1,000,000 cases per cipher)
+        run: crystal spec --release --tag differential -e "cipher "
+
+
   differential:
-    name: Differential against libcrypto (${{ matrix.code }} on ${{ matrix.runner }})
+    name: Differential against libcrypto, hashes and MACs (${{ matrix.code }} on ${{ matrix.runner }})
     if: github.event_name == 'workflow_dispatch' && inputs.run_differential
     strategy:
       fail-fast: false
@@ -154,4 +176,4 @@ jobs:
       - name: State which compression functions run
         run: crystal spec ${{ matrix.flags }} spec/beryl/crypto/processor_instructions_spec.cr -e "states which instructions"
       - name: Run the differential
-        run: crystal spec --release ${{ matrix.flags }} --tag differential
+        run: crystal spec --release ${{ matrix.flags }} --tag differential -e "hash " -e "HMAC-" -e "HKDF-" -e "PBKDF2-"
