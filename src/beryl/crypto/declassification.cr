@@ -11,11 +11,12 @@ module Beryl::Crypto
   # checks can tell an intended verdict from a leak, and a reader can list
   # them with one search.
   module Declassification
-    # Returns *verdict* unchanged. Kept out of line so that the call is
-    # still there in the compiled code.
+    # Returns *verdict* unchanged. The value passes through an empty piece
+    # of inline assembly, so the optimizer cannot see through the call or
+    # remove it, and the call is still there in the compiled code.
     @[NoInline]
     def self.reveal(verdict : Bool) : Bool
-      verdict
+      reveal(verdict ? 1_u32 : 0_u32) == 1_u32
     end
 
     # Returns *padding_bytesize* unchanged: the number of padding bytes at the
@@ -23,7 +24,9 @@ module Beryl::Crypto
     # caller learns it from the length of the plaintext it gets back.
     @[NoInline]
     def self.reveal(padding_bytesize : UInt32) : UInt32
-      padding_bytesize
+      revealed = 0_u32
+      asm("" : "=r"(revealed) : "0"(padding_bytesize) :: "volatile")
+      revealed
     end
   end
 end
