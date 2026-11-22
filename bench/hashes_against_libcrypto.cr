@@ -5,13 +5,16 @@
 #
 # Method (plans/BERYL_TLS_CRYPTO.md section 3.1): both arms live in one
 # binary and process the same buffer through the same streaming calls
-# (`reset`, `update`, `final` into a reused buffer). They alternate, Beryl
-# then libcrypto, for ten rounds; each arm of each round runs for at least
-# two seconds. Each round gives one ratio, Beryl's MB/s divided by
-# libcrypto's MB/s in the same round, so both sides of a ratio saw the same
-# machine load. The table reports the median of those ratios and their
-# paired 95% interval (Student's t on the logarithms of the ratios). Beryl is
-# "at least as fast" when the whole interval is at or above 1.
+# (`reset`, `update`, `final` into a reused buffer). A row is ten rounds, and
+# in a round each arm runs for at least two seconds of processor time (time
+# spent waiting for a processor is not counted). Within a round the arms
+# take turns of a few milliseconds (about 2 MiB of input each), and the arm
+# that goes first changes every turn, so both see the same machine load even
+# on a machine that is busy with other work. Each round gives one ratio,
+# Beryl's MB/s divided by libcrypto's MB/s. The table reports the median of
+# those ratios and their paired 95% interval (Student's t on the logarithms
+# of the ratios). Beryl is "at least as fast" when the whole interval is at
+# or above 1.
 #
 # The HMAC arms are keyed once, outside the timing, with the same 32-byte
 # key; `reset` returns each to its keyed state. libcrypto's arm is an
@@ -79,23 +82,61 @@ module HashesAgainstLibcrypto
     end
   end
 
-  # Processes *message* over and over for at least *seconds* and returns MB/s.
-  def self.megabytes_per_second(digest, message : Bytes, output : Bytes, seconds : Float64) : Float64
-    # Check the clock every so many messages that the checks cost nothing.
-    messages_per_clock_check = Math.max(1, 65_536 // message.size)
-    bytes_processed = 0_u64
-    started_at = Time.instant
-    elapsed_seconds = 0.0
-    while elapsed_seconds < seconds
-      messages_per_clock_check.times do
-        digest.reset
-        digest.update(message)
-        digest.final(output)
-      end
-      bytes_processed += messages_per_clock_check.to_u64 * message.size
-      elapsed_seconds = (Time.instant - started_at).total_seconds
+  # `CLOCK_THREAD_CPUTIME_ID` of <time.h>.
+  THREAD_PROCESSOR_TIME_CLOCK = {% if flag?(:darwin) %} 16 {% else %} 3 {% end %}
+
+  # Returns the processor time this thread has used, in seconds. Time the
+  # thread spent waiting for a processor is left out, so other work on the
+  # machine does not count against either arm.
+  def self.processor_seconds : Float64
+    if LibC.clock_gettime(LibC::ClockidT.new(THREAD_PROCESSOR_TIME_CLOCK), out time) != 0
+      raise RuntimeError.from_errno("clock_gettime")
     end
-    bytes_processed / BYTES_PER_MEGABYTE / elapsed_seconds
+    time.tv_sec.to_f64 + time.tv_nsec.to_f64 / 1_000_000_000
+  end
+
+  # About this many bytes go through one arm before the other arm takes its
+  # turn: a few milliseconds of work.
+  BYTES_PER_TURN = 2 * 1024 * 1024
+
+  # Runs one round: the two arms take turns of a few milliseconds each on the
+  # same *message* until each has run for at least *seconds_per_arm*, and the
+  # arm that goes first changes every turn. Returns each arm's MB per second
+  # of processor time over its own turns. Turns this short put both arms
+  # under the same machine load, which whole seconds apart on a shared
+  # machine do not.
+  def self.megabytes_per_second_of_each_arm(beryl_arm, libcrypto_arm, message : Bytes, beryl_output : Bytes,
+                                            libcrypto_output : Bytes, seconds_per_arm : Float64) : {Float64, Float64}
+    messages_per_turn = Math.max(1, BYTES_PER_TURN // message.size)
+    bytes_per_turn = messages_per_turn.to_u64 * message.size
+    bytes_processed = 0_u64
+    beryl_seconds = 0.0
+    libcrypto_seconds = 0.0
+    beryl_goes_first = true
+    while beryl_seconds < seconds_per_arm || libcrypto_seconds < seconds_per_arm
+      started_at = processor_seconds
+      if beryl_goes_first
+        messages_per_turn.times { beryl_arm.reset; beryl_arm.update(message); beryl_arm.final(beryl_output) }
+      else
+        messages_per_turn.times { libcrypto_arm.reset; libcrypto_arm.update(message); libcrypto_arm.final(libcrypto_output) }
+      end
+      changed_at = processor_seconds
+      if beryl_goes_first
+        messages_per_turn.times { libcrypto_arm.reset; libcrypto_arm.update(message); libcrypto_arm.final(libcrypto_output) }
+      else
+        messages_per_turn.times { beryl_arm.reset; beryl_arm.update(message); beryl_arm.final(beryl_output) }
+      end
+      finished_at = processor_seconds
+
+      first_seconds = changed_at - started_at
+      second_seconds = finished_at - changed_at
+      beryl_seconds += beryl_goes_first ? first_seconds : second_seconds
+      libcrypto_seconds += beryl_goes_first ? second_seconds : first_seconds
+      bytes_processed += bytes_per_turn
+      beryl_goes_first = !beryl_goes_first
+    end
+    megabytes = bytes_processed / BYTES_PER_MEGABYTE
+    {megabytes / beryl_seconds, megabytes / libcrypto_seconds}
   end
 
   def self.median(list_of_values : Array(Float64)) : Float64
@@ -120,7 +161,10 @@ module HashesAgainstLibcrypto
 
   # States a ratio of Beryl's speed to libcrypto's the way Seth reads it.
   def self.describe_ratio(ratio : Float64) : String
-    ratio >= 1.0 ? "#{ratio.round(2)}× as fast" : "#{(1.0 / ratio).round(2)}× slower"
+    # Three decimals near 1, where the second would hide which side it is on.
+    factor = ratio >= 1.0 ? ratio : 1.0 / ratio
+    rounded = factor < 1.1 ? factor.round(3) : factor.round(2)
+    ratio >= 1.0 ? "#{rounded}× as fast" : "#{rounded}× slower"
   end
 
   def self.format_bytesize(bytesize : Int32) : String
@@ -140,8 +184,9 @@ module HashesAgainstLibcrypto
     list_of_libcrypto_speeds = [] of Float64
     list_of_ratios = [] of Float64
     settings.round_count.times do
-      beryl_speed = megabytes_per_second(beryl_arm, message, beryl_output, settings.seconds_per_arm)
-      libcrypto_speed = megabytes_per_second(libcrypto_arm, message, libcrypto_output, settings.seconds_per_arm)
+      beryl_speed, libcrypto_speed = megabytes_per_second_of_each_arm(
+        beryl_arm, libcrypto_arm, message, beryl_output, libcrypto_output, settings.seconds_per_arm
+      )
       raise "the two arms disagree on #{algorithm}" unless beryl_output == libcrypto_output
 
       list_of_beryl_speeds << beryl_speed
@@ -160,7 +205,7 @@ module HashesAgainstLibcrypto
     settings = Settings.from_environment
     key = Random::Secure.random_bytes(KEY_BYTESIZE)
     io.puts "Beryl #{Beryl::VERSION} against #{String.new(LibCrypto.beryl_bench_openssl_version(0))}"
-    io.puts "#{settings.round_count} rounds, Beryl then libcrypto in each, #{settings.seconds_per_arm} s per arm"
+    io.puts "#{settings.round_count} rounds, #{settings.seconds_per_arm} s of processor time per arm in each, the arms taking turns of about 2 MiB of input"
     io.puts "SHA-1, SHA-256 and SHA-512 instructions in use by Beryl: " \
             "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA1_INSTRUCTIONS}, " \
             "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA256_INSTRUCTIONS}, " \
