@@ -60,6 +60,20 @@ describe Beryl::Crypto::V1::HashBasedMessageAuthenticationCode do
     end
   end
 
+  describe "#dup" do
+    it "continues independently from a copy" do
+      original = HMACSHA256.new(KEY)
+      original.update("what do ya want ")
+      copy = original.dup
+      original.update("for nothing?")
+      copy.update("for something?")
+
+      original.final.should eq(TAG)
+      copy.final.should eq(HMACSHA256.authenticate("what do ya want for something?", key: KEY))
+      copy.reset.update(MESSAGE).final.should eq(TAG)
+    end
+  end
+
   describe "#digest_size" do
     it "is the digest size of the hash" do
       HMACSHA256.new(KEY).digest_size.should eq(32)

@@ -80,6 +80,17 @@ module Beryl::Crypto::V1
       reset_impl
     end
 
+    # Builds a copy from another authentication's four hash states.
+    protected def initialize(@inner_hash : D, @outer_hash : D, @inner_hash_after_key : D, @outer_hash_after_key : D,
+                             @finished : Bool)
+    end
+
+    # Returns an independent authentication under the same key that continues
+    # from the point this one has reached.
+    def dup : self
+      self.class.new(@inner_hash.dup, @outer_hash.dup, @inner_hash_after_key.dup, @outer_hash_after_key.dup, @finished)
+    end
+
     # Returns the number of bytes in a full authentication tag.
     def digest_size : Int32
       D::DIGEST_SIZE
