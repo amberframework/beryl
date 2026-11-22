@@ -25,6 +25,20 @@
 #     (smaller ones are the block counters of HKDF and PBKDF2, which are
 #     public).
 #
+# Assembly written inside a function (the compression functions that use the
+# processor's SHA instructions) is opaque to that analysis, so it is checked
+# by its text instead:
+#   - every instruction must be on a list of instructions whose timing does
+#     not depend on the values they work on (moves, adds, exclusive ors,
+#     shuffles, loads and stores, and the SHA instructions themselves);
+#   - the only conditional branch allowed closes the loop, directly after the
+#     instruction that counts the blocks left down by one, and nothing else
+#     may write the counting register after it is set from the block count;
+#   - memory is addressed only as a register plus a constant, so no address
+#     is computed from data.
+# Everything its pointer arguments lead to is then treated as secret. An
+# empty assembly statement is a value barrier: it passes its argument through.
+#
 # Lengths, offsets and counters stay public, as the constant-time rules
 # allow. The check passes when every finding is in the probe's
 # `leaky_comparison`, which is there to prove the checker reports a leak.
@@ -39,7 +53,54 @@
 ANALYZED_FUNCTION = /Beryl::Crypto|SecretFlowProbe|Crypto::Subtle/.freeze
 SKIPPED_FUNCTION = /Exception::new|raise</.freeze
 EXPECTED_LEAK = /SecretFlowProbe::leaky_comparison/.freeze
-COMPRESSION_FUNCTION = /#compress</.freeze
+COMPRESSION_FUNCTION = /#compress(?:_with_portable_code)?</.freeze
+
+# Instructions allowed in assembly: none of them takes a time that depends on
+# its operands' values, and none of them indexes memory by a value.
+CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
+  mov movz movk movi dup adr ldr str ld1 st1 add sub eor ext rev32 rev64
+  sha1c sha1p sha1m sha1h sha1su0 sha1su1 sha256h sha256h2 sha256su0 sha256su1
+  sha512h sha512h2 sha512su0 sha512su1
+  lea movdqa movdqu paddd pxor pshufd pshufb palignr pblendw pinsrd pextrd
+  sha1rnds4 sha1nexte sha1msg1 sha1msg2 sha256rnds2 sha256msg1 sha256msg2
+].freeze
+LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
+LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
+FORWARD_JUMP = /\A(?:b|jmp) 9f\z/.freeze
+REGISTER_INDEXED_MEMORY = /\[\s*\w+\s*,\s*[a-z]|\(\s*%\w+\s*,/.freeze
+
+# Returns what is wrong with the text of one assembly statement, as a list of
+# sentences; an empty list means it keeps to the rules in the header.
+def assembly_faults(template)
+  list_of_lines = template.split("\n").map(&:strip).reject { |line| line.empty? || line.match?(/\A(?:\d+:|\.)/) }
+  list_of_faults = []
+  counting_register = nil
+  list_of_lines.each_with_index do |line, index|
+    mnemonic = line[/\A[\w.]+/]
+    if line.match?(LOOP_BRANCH)
+      count_down = list_of_lines[index - 1].to_s.match(LOOP_COUNT_DOWN)
+      if count_down
+        counting_register = count_down[1] || count_down[2]
+      else
+        list_of_faults << "a conditional branch does not follow the block count: #{line}"
+      end
+    elsif line.match?(FORWARD_JUMP) || line.match?(LOOP_COUNT_DOWN)
+      next
+    elsif !CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS.include?(mnemonic)
+      list_of_faults << "instruction outside the constant-time list: #{line}"
+    end
+    list_of_faults << "memory indexed by a register: #{line}" if line.match?(REGISTER_INDEXED_MEMORY)
+  end
+  if counting_register
+    list_of_writes = list_of_lines.select do |line|
+      !line.match?(LOOP_COUNT_DOWN) && line.match?(/\A\w+ #{counting_register}\b|, %#{counting_register}\z/)
+    end
+    unless list_of_writes.size == 1 && list_of_writes[0].match?(/\Amov (?:#{counting_register}, \$\d+|\$\d+, %#{counting_register})\z/)
+      list_of_faults << "the block-counting register #{counting_register} is written by: #{list_of_writes.join(' | ')}"
+    end
+  end
+  list_of_faults
+end
 VALUE_TOKEN = /%"[^"]*"|%[\w.\-$]+/.freeze
 POINTER_PASSING_OPCODES = %w[bitcast addrspacecast ptrtoint inttoptr phi select add sub freeze insertvalue].freeze
 DIVISIONS = %w[udiv sdiv urem srem].freeze
@@ -111,7 +172,7 @@ end
 # One function's analysis: which values are secret, which pointers lead to
 # secret memory, and what was found.
 class SecretFlow
-  attr_reader :list_of_findings, :list_of_notes, :written_state_paths
+  attr_reader :list_of_findings, :list_of_notes, :written_state_paths, :assembly_statement_count
 
   def initialize(function, state_paths_by_compression_function)
     @function = function
@@ -129,6 +190,7 @@ class SecretFlow
     @list_of_findings = []
     @list_of_notes = []
     @written_state_paths = {}
+    @assembly_statement_count = 0
     function.parameters.each do |name, kind|
       @origin[name] = [name, ""] if kind == :pointer
       @secret_bases[name] = true if @is_compression && name == "%self"
@@ -140,6 +202,7 @@ class SecretFlow
       before = [@secret_values.size, @secret_bases.size, @secret_fields.size, @origin.size]
       @list_of_findings = []
       @list_of_notes = []
+      @assembly_statement_count = 0
       @function.list_of_instructions.each { |instruction| visit(instruction) }
       break if before == [@secret_values.size, @secret_bases.size, @secret_fields.size, @origin.size]
     end
@@ -230,7 +293,27 @@ class SecretFlow
     @origin[instruction.result] = [origin[0], "#{origin[1]}/#{step}"]
   end
 
+  # `call ... asm "template", "constraints"(arguments)`.
+  def visit_assembly(instruction)
+    template = instruction.text[/ asm (?:sideeffect |alignstack |inteldialect |unwind )*"((?:[^"\\]|\\.)*)"/, 1].to_s
+    template = template.gsub(/\\([0-9A-Fa-f]{2})/) { Regexp.last_match(1).hex.chr }
+    list_of_arguments = instruction.text[/"\((.*)\)\z/, 1].to_s.scan(VALUE_TOKEN).select { |token| @defined[token] }
+    if template.strip.empty?
+      @secret_values[instruction.result] = true if instruction.result && list_of_arguments.any? { |argument| secret?(argument) }
+      return
+    end
+
+    assembly_faults(template).each { |fault| @list_of_findings << Finding.new(@function.name, "assembly", fault[0, 160]) }
+    list_of_arguments.each do |argument|
+      mark_memory_secret(argument)
+      @list_of_findings << Finding.new(@function.name, "assembly is given a secret value", argument) if secret?(argument)
+    end
+    @assembly_statement_count += 1
+  end
+
   def visit_call(instruction, operands)
+    return visit_assembly(instruction) if instruction.text.match?(/\A(?:call|invoke) [^@]* asm /)
+
     callee = instruction.text[/@"((?:[^"\\]|\\.)*)"/, 1] || instruction.text[/@([\w.$]+)/, 1].to_s
     if callee.start_with?("llvm.memcpy", "llvm.memmove")
       destination, source = operands
@@ -250,7 +333,12 @@ class SecretFlow
     end
     if (state_paths = @state_paths_by_compression_function[callee])
       receiver = @origin[operands.first]
-      state_paths.each_key { |path| @secret_fields["#{receiver[0]}|#{receiver[1]}#{path}"] = true } if receiver
+      if receiver
+        state_paths.each_key do |path|
+          @secret_fields["#{receiver[0]}|#{receiver[1]}#{path}"] = true
+          @written_state_paths["#{receiver[1]}#{path}"] = true if receiver[0] == "%self"
+        end
+      end
     end
     # A returned slice or pointer is taken to point into the last buffer the
     # call was given (`final(dst)` returns `dst`), or else into fresh memory.
@@ -293,15 +381,25 @@ end
 abort "no Beryl::Crypto function found in #{path}" if list_of_functions.empty?
 
 # Compression functions first: the fields they write are the hash state.
+# A compression function may hand its blocks to another one (the choice
+# between processor instructions and portable code), so the fields are
+# collected until a pass adds none.
 state_paths_by_compression_function = {}
-list_of_functions.select { |function| function.name.match?(COMPRESSION_FUNCTION) }.each do |function|
-  state_paths_by_compression_function[function.name] = SecretFlow.new(function, {}).run.written_state_paths
+list_of_compression_functions = list_of_functions.select { |function| function.name.match?(COMPRESSION_FUNCTION) }
+loop do
+  path_count_before = state_paths_by_compression_function.values.sum(&:size)
+  list_of_compression_functions.each do |function|
+    state_paths_by_compression_function[function.name] = SecretFlow.new(function, state_paths_by_compression_function).run.written_state_paths
+  end
+  break if state_paths_by_compression_function.values.sum(&:size) == path_count_before
 end
 
 list_of_findings = []
 list_of_notes = []
+assembly_statement_count = 0
 list_of_functions.each do |function|
   flow = SecretFlow.new(function, state_paths_by_compression_function).run
+  assembly_statement_count += flow.assembly_statement_count
   list_of_findings.concat(flow.list_of_findings)
   list_of_notes.concat(flow.list_of_notes)
 end
@@ -309,6 +407,7 @@ end
 expected, unexpected = list_of_findings.partition { |finding| finding.function_name.match?(EXPECTED_LEAK) }
 puts "functions checked: #{list_of_functions.size} (#{state_paths_by_compression_function.size} compression functions)"
 list_of_functions.each { |function| puts "  #{function.name[0, 150]}" }
+puts "assembly statements checked by their text: #{assembly_statement_count}"
 puts "secret values passed on to another function (checked there): #{list_of_notes.uniq.size}"
 list_of_notes.uniq.each { |note| puts "  #{note[0, 260]}" }
 puts "findings in leaky_comparison (the deliberate leak): #{expected.size}"

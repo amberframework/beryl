@@ -32,6 +32,8 @@ jobs:
         run: crystal build --no-codegen src/beryl.cr
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
+      - name: Run the quick suite again on the portable code alone
+        run: crystal spec -Dberyl_portable_hashes
       - name: Run the PBKDF2 vectors of 16,777,216 iterations
         run: crystal spec --release --tag slow
       - name: Prove the library links no OpenSSL
@@ -76,10 +78,53 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl spec/probes/secret_flow.cr -o secret_flow
           ruby scripts/check_secret_flow.rb secret_flow.ll
+      - name: "Compiled code, portable code alone: no branch or index depends on a secret"
+        run: |
+          crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_hashes spec/probes/secret_flow.cr -o secret_flow_portable
+          ruby scripts/check_secret_flow.rb secret_flow_portable.ll
       - name: "Timing: HMAC takes the same time whatever the secret"
         run: crystal spec --release --tag constant_time
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
+
+  aarch64:
+    name: Linux on AArch64 (SHA instructions found at run time)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install Valgrind at its pinned version
+        run: |
+          sudo apt-get update
+          apt-cache policy valgrind
+          sudo apt-get install -y --no-install-recommends valgrind=1:3.22.0-0ubuntu3
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: List the processor's hash instructions
+        run: grep -m1 Features /proc/cpuinfo
+      - name: Run the quick suite (unit specs and every published vector)
+        run: crystal spec
+      - name: Run the PBKDF2 vectors of 16,777,216 iterations
+        run: crystal spec --release --tag slow
+      - name: "Memory checker: no branch or address depends on a secret"
+        run: |
+          crystal build --release -Dgc_none -Dwithout_openssl spec/probes/secret_taint.cr -o secret_taint
+          valgrind --error-exitcode=99 ./secret_taint
+      - name: "Memory checker: a leaky comparison is caught"
+        run: |
+          set +e
+          valgrind --error-exitcode=99 ./secret_taint leaky
+          exit_status=$?
+          set -e
+          echo "exit status $exit_status (99 means the leak was reported)"
+          test "$exit_status" -eq 99
+      - name: "Compiled code: no branch or index depends on a secret"
+        run: |
+          crystal build --release --emit llvm-ir -Dwithout_openssl spec/probes/secret_flow.cr -o secret_flow
+          ruby scripts/check_secret_flow.rb secret_flow.ll
 
   differential:
     name: Differential against libcrypto
