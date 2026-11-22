@@ -3,7 +3,10 @@
 # https://eprint.iacr.org/2016/1123).
 #
 # The function is timed many times on inputs from two classes, picked at
-# random for each measurement. If the two classes' timings come from the
+# random for each measurement. Inputs are laid out a batch at a time before
+# any of the batch is timed, and the step that runs between two timed calls
+# is the same code for both classes, so the classes differ in nothing but
+# the secret bytes the timed call reads. If the two classes' timings come from the
 # same distribution, Welch's t statistic stays small; dudect reads |t| over
 # 4.5 as evidence of a leak. Slow outliers (interrupts, garbage collection)
 # are cut at a ladder of percentile thresholds, and the largest |t| over the
@@ -12,7 +15,8 @@ class TimingLeakMeasurement
   # dudect's bound: |t| under this shows no leak at this sample size.
   LEAK_THRESHOLD = 4.5
 
-  WARM_UP_MEASUREMENT_COUNT = 10_000
+  WARM_UP_MEASUREMENT_COUNT = 10_240
+  BATCH_SIZE                =  1_024
   CROP_THRESHOLD_COUNT      =    100
 
   # Mean and variance of one class under one threshold, kept as running sums.
@@ -47,25 +51,27 @@ class TimingLeakMeasurement
     @list_of_crop_thresholds = [] of Float64
   end
 
-  # Times the block once per measurement. *prepare* is given the class
-  # (false for the first, true for the second) and puts that class's input
-  # in place; only the block that follows is timed.
-  def run(prepare : Bool -> Nil, &timed : -> Nil) : Nil
+  # Times the block once per measurement, in batches of `BATCH_SIZE`.
+  #
+  # *fill_batch* is given the class of each slot of the coming batch (false
+  # for the first class, true for the second) and lays out every slot's
+  # input. *prepare* is given a slot number and readies the timed call; it
+  # must do the same work for both classes. Only the block, which is given
+  # the slot number, is timed.
+  def run(fill_batch : Array(Bool) -> Nil, prepare : Int32 -> Nil, &timed : Int32 -> Nil) : Nil
+    list_of_classes = Array(Bool).new(BATCH_SIZE, false)
     list_of_warm_up_timings = Array(Float64).new(WARM_UP_MEASUREMENT_COUNT)
-    WARM_UP_MEASUREMENT_COUNT.times do
-      prepare.call(@generator.next_bool)
-      list_of_warm_up_timings << time_once { yield }
+    (WARM_UP_MEASUREMENT_COUNT // BATCH_SIZE).times do
+      time_one_batch(list_of_classes, fill_batch, prepare, timed) { |slot, nanoseconds| list_of_warm_up_timings << nanoseconds }
     end
     list_of_warm_up_timings.sort!
     @list_of_crop_thresholds = Array(Float64).new(CROP_THRESHOLD_COUNT) do |index|
       percentile = 1.0 - 0.5 ** (10.0 * (index + 1) / CROP_THRESHOLD_COUNT)
-      list_of_warm_up_timings[(percentile * (WARM_UP_MEASUREMENT_COUNT - 1)).to_i]
+      list_of_warm_up_timings[(percentile * (list_of_warm_up_timings.size - 1)).to_i]
     end
 
-    (2_i64 * @measurements_per_class).times do
-      is_second_class = @generator.next_bool
-      prepare.call(is_second_class)
-      record(is_second_class, time_once { yield })
+    (2_i64 * @measurements_per_class // BATCH_SIZE).times do
+      time_one_batch(list_of_classes, fill_batch, prepare, timed) { |slot, nanoseconds| record(list_of_classes[slot], nanoseconds) }
     end
 
     @largest_absolute_t = (0..CROP_THRESHOLD_COUNT).max_of do |index|
@@ -73,14 +79,21 @@ class TimingLeakMeasurement
     end
   end
 
-  def shows_no_leak? : Bool
-    @largest_absolute_t < LEAK_THRESHOLD
+  private def time_one_batch(list_of_classes : Array(Bool), fill_batch : Array(Bool) -> Nil, prepare : Int32 -> Nil,
+                             timed : Int32 -> Nil, & : Int32, Float64 -> Nil) : Nil
+    BATCH_SIZE.times { |slot| list_of_classes[slot] = @generator.next_bool }
+    fill_batch.call(list_of_classes)
+    BATCH_SIZE.times do |slot|
+      prepare.call(slot)
+      started_at = Time.instant
+      timed.call(slot)
+      nanoseconds = (Time.instant - started_at).total_nanoseconds
+      yield slot, nanoseconds
+    end
   end
 
-  private def time_once(&) : Float64
-    started_at = Time.instant
-    yield
-    (Time.instant - started_at).total_nanoseconds
+  def shows_no_leak? : Bool
+    @largest_absolute_t < LEAK_THRESHOLD
   end
 
   private def record(is_second_class : Bool, nanoseconds : Float64) : Nil
