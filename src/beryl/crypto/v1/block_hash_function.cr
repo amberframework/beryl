@@ -53,8 +53,9 @@ module Beryl::Crypto::V1
     end
 
     # Makes this instance continue from the exact point *source* has reached,
-    # without allocating. HMAC uses it to restart from a keyed state.
-    protected def copy_state_from(source : self) : Nil
+    # without allocating. HMAC uses it to restart from a keyed state. Both
+    # must be the same hash function.
+    def copy_state_from(source : self) : Nil
       {% for instance_variable in @type.instance_vars %}
         @{{ instance_variable.name }} = source.@{{ instance_variable.name }}
       {% end %}

@@ -59,19 +59,22 @@ module Beryl::Crypto::V1
 
       key_block_storage = StaticArray(UInt8, BlockHashFunction::LARGEST_BLOCK_SIZE).new(0_u8)
       padded_block_storage = uninitialized UInt8[BlockHashFunction::LARGEST_BLOCK_SIZE]
-      key_block = key_block_storage.to_slice[0, D::BLOCK_SIZE]
-      padded_block = padded_block_storage.to_slice[0, D::BLOCK_SIZE]
+      # Sizes come from the instance, which also works when an application
+      # subclasses the hash (a constant read through the type argument does not).
+      block_bytesize = @inner_hash.block_size
+      key_block = key_block_storage.to_slice[0, block_bytesize]
+      padded_block = padded_block_storage.to_slice[0, block_bytesize]
 
       key_bytes = key.to_slice
-      if key_bytes.size > D::BLOCK_SIZE
-        D.new.update(key_bytes).final(key_block[0, D::DIGEST_SIZE])
+      if key_bytes.size > block_bytesize
+        D.new.update(key_bytes).final(key_block[0, digest_size])
       else
         key_bytes.copy_to(key_block)
       end
 
-      D::BLOCK_SIZE.times { |index| padded_block[index] = key_block[index] ^ INNER_PADDING_BYTE }
+      block_bytesize.times { |index| padded_block[index] = key_block[index] ^ INNER_PADDING_BYTE }
       @inner_hash_after_key.update(padded_block)
-      D::BLOCK_SIZE.times { |index| padded_block[index] = key_block[index] ^ OUTER_PADDING_BYTE }
+      block_bytesize.times { |index| padded_block[index] = key_block[index] ^ OUTER_PADDING_BYTE }
       @outer_hash_after_key.update(padded_block)
 
       SecretWiping.wipe(key_block_storage.to_slice)
@@ -93,7 +96,7 @@ module Beryl::Crypto::V1
 
     # Returns the number of bytes in a full authentication tag.
     def digest_size : Int32
-      D::DIGEST_SIZE
+      @inner_hash.digest_size
     end
 
     # Finishes the authentication and returns whether *authentication_tag* is
@@ -140,7 +143,7 @@ module Beryl::Crypto::V1
       end
 
       inner_digest_storage = uninitialized UInt8[BlockHashFunction::LARGEST_DIGEST_SIZE]
-      inner_digest = inner_digest_storage.to_slice[0, D::DIGEST_SIZE]
+      inner_digest = inner_digest_storage.to_slice[0, digest_size]
       @inner_hash.final(inner_digest)
       @outer_hash.update(inner_digest)
       @outer_hash.final(dst)

@@ -161,3 +161,17 @@ describe Beryl::Crypto::V1::HashBasedMessageAuthenticationCode do
     end
   end
 end
+
+# An application's own subclass of a Beryl hash, as HMAC's type argument.
+private class ApplicationHash < Beryl::Crypto::V1::SHA256
+end
+
+describe "HMAC, HKDF and PBKDF2 when a hash has been subclassed" do
+  it "still build on the hash and on its subclass" do
+    Beryl::Crypto::V1::HMAC(ApplicationHash).authenticate(MESSAGE, key: KEY).should eq(TAG)
+    Beryl::Crypto::V1::HMAC(Beryl::Crypto::V1::SHA256).authenticate(MESSAGE, key: KEY).should eq(TAG)
+    Beryl::Crypto.derive_key("secret", bytesize: 16).size.should eq(16)
+    Beryl::Crypto::Compatibility::PBKDF2(Beryl::Crypto::V1::SHA256)
+      .derive_key("passwd", salt: "salt", iteration_count: 1, bytesize: 8).hexstring.should eq("55ac046e56e3089f")
+  end
+end

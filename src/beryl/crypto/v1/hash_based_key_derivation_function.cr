@@ -41,15 +41,16 @@ module Beryl::Crypto::V1
       if bytesize < 0
         raise DerivedKeySizeIsNegative.new("HKDF was asked for #{bytesize} bytes")
       end
-      maximum_bytesize = MAXIMUM_BLOCK_COUNT * D::DIGEST_SIZE
+      authentication = HMAC(D).new(pseudorandom_key)
+      digest_bytesize = authentication.digest_size
+      maximum_bytesize = MAXIMUM_BLOCK_COUNT * digest_bytesize
       if bytesize > maximum_bytesize
         raise DerivedKeyTooLong.new("HKDF on this hash gives at most #{maximum_bytesize} bytes, not #{bytesize}")
       end
 
       derived_key = Bytes.new(bytesize)
-      authentication = HMAC(D).new(pseudorandom_key)
       block_storage = uninitialized UInt8[BlockHashFunction::LARGEST_DIGEST_SIZE]
-      block = block_storage.to_slice[0, D::DIGEST_SIZE]
+      block = block_storage.to_slice[0, digest_bytesize]
       info_bytes = info.to_slice
       block_number = StaticArray[0_u8]
       bytes_written = 0
@@ -63,7 +64,7 @@ module Beryl::Crypto::V1
         authentication.update(block_number.to_slice)
         authentication.final(block)
 
-        bytes_taken = Math.min(D::DIGEST_SIZE, bytesize - bytes_written)
+        bytes_taken = Math.min(digest_bytesize, bytesize - bytes_written)
         block[0, bytes_taken].copy_to(derived_key[bytes_written, bytes_taken])
         bytes_written += bytes_taken
       end
@@ -89,7 +90,7 @@ module Beryl::Crypto::V1
 
     # Stops compilation when `D` is a hash this function is not offered on.
     private def self.ensure_the_hash_is_supported : Nil
-      {% unless [SecureHashWith256BitDigest, SecureHashWith384BitDigest, SecureHashWith512BitDigest, Compatibility::SecureHashAlgorithm1].includes?(D) %}
+      {% unless D <= SecureHashWith256BitDigest || D <= SecureHashWith384BitDigest || D <= SecureHashWith512BitDigest || D <= Compatibility::SecureHashAlgorithm1 %}
         {% raise "Beryl HKDF is built on SHA256, SHA384, SHA512 or Compatibility::SHA1, not on #{D}" %}
       {% end %}
     end

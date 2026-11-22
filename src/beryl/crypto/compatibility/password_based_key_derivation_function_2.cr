@@ -30,7 +30,7 @@ module Beryl::Crypto::Compatibility
       iteration_count : Int32,
       bytesize : Int32,
     ) : Bytes
-      {% unless [SecureHashAlgorithm1, V1::SecureHashWith256BitDigest, V1::SecureHashWith512BitDigest].includes?(D) %}
+      {% unless D <= SecureHashAlgorithm1 || D <= V1::SecureHashWith256BitDigest || D <= V1::SecureHashWith512BitDigest %}
         {% raise "Beryl's PBKDF2 is built on SHA1, SHA256 or SHA512, not on #{D}" %}
       {% end %}
       if iteration_count < 1
@@ -42,11 +42,12 @@ module Beryl::Crypto::Compatibility
 
       derived_key = Bytes.new(bytesize)
       authentication = V1::HMAC(D).new(password)
+      digest_bytesize = authentication.digest_size
       salt_bytes = salt.to_slice
       chained_storage = uninitialized UInt8[V1::BlockHashFunction::LARGEST_DIGEST_SIZE]
       block_storage = uninitialized UInt8[V1::BlockHashFunction::LARGEST_DIGEST_SIZE]
-      chained = chained_storage.to_slice[0, D::DIGEST_SIZE]
-      block = block_storage.to_slice[0, D::DIGEST_SIZE]
+      chained = chained_storage.to_slice[0, digest_bytesize]
+      block = block_storage.to_slice[0, digest_bytesize]
       block_number_bytes = uninitialized UInt8[4]
       block_number = 0_u32
       bytes_written = 0
@@ -66,10 +67,10 @@ module Beryl::Crypto::Compatibility
           authentication.reset
           authentication.update(chained)
           authentication.final(chained)
-          D::DIGEST_SIZE.times { |index| block[index] ^= chained[index] }
+          digest_bytesize.times { |index| block[index] ^= chained[index] }
         end
 
-        bytes_taken = Math.min(D::DIGEST_SIZE, bytesize - bytes_written)
+        bytes_taken = Math.min(digest_bytesize, bytesize - bytes_written)
         block[0, bytes_taken].copy_to(derived_key[bytes_written, bytes_taken])
         bytes_written += bytes_taken
       end
