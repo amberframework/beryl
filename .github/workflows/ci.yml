@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       run_differential:
-        description: Run the differential against libcrypto (1,000,000 cases per algorithm, about an hour)
+        description: Run the differential against libcrypto (1,000,000 cases per algorithm, one to two hours)
         type: boolean
         default: false
 

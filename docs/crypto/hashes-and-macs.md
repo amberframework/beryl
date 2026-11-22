@@ -106,7 +106,7 @@ Every error descends from `Beryl::Error` through `Beryl::Crypto::Error`:
 |---|---|---|
 | `crystal-alpha spec` | Unit specs and every published vector below, with the count per algorithm printed at the end | under a minute |
 | `crystal-alpha spec --release --tag slow` | The two PBKDF2 vectors of 16,777,216 iterations | seconds |
-| `crystal-alpha spec --release --tag differential` | Beryl against libcrypto on random inputs: 1,000,000 cases per hash and per HMAC (messages of 0 to 65,536 bytes, random `update` splits), 100,000 per HKDF, 10,000 per PBKDF2 (1 to 4,096 iterations). The seed is printed, and any failing case replays alone | about an hour; one algorithm at a time with `-e` |
+| `crystal-alpha spec --release --tag differential` | Beryl against libcrypto on random inputs: 1,000,000 cases per hash and per HMAC (messages of 0 to 65,536 bytes, random `update` splits), 100,000 per HKDF, 10,000 per PBKDF2 (1 to 4,096 iterations). The seed is printed, and any failing case replays alone | one to two hours of processor time; one algorithm at a time with `-e` |
 | `crystal-alpha spec --release --tag constant_time` | Constant time, by timing (the dudect method): HMAC `verify`, keying and tagging, 10,000,000 measurements per class, largest \|t\| under 4.5. Inputs are laid out a batch at a time before any is timed, so the two classes differ only in the secret bytes read | about a minute |
 | `valgrind --error-exitcode=99 ./secret_taint` on `spec/probes/secret_taint.cr` (Linux) | Constant time, by memory checker (the ctgrind method): every key, message, tag and password is undefined memory, so Memcheck reports any branch or address computed from one. `./secret_taint leaky` must be reported | seconds |
 | `scripts/check_secret_flow.rb` on the LLVM IR of `spec/probes/secret_flow.cr` | Constant time, in the compiled code: follows secrets through the optimized IR of every `Beryl::Crypto` function and reports a branch, a memory index or a division that depends on one. The probe's deliberate leak must be reported | seconds |
@@ -115,7 +115,7 @@ Every error descends from `Beryl::Error` through `Beryl::Crypto::Error`:
 
 The differential, the vector pin check and the benchmark are the only places this repository uses OpenSSL. The library requires none of it.
 
-CI (`.github/workflows/ci.yml`) runs the quick suite, the slow vectors, the linkage probe and all three constant-time checks on every pull request. The differential runs on request (`workflow_dispatch`), because it takes about an hour.
+CI (`.github/workflows/ci.yml`) runs the quick suite, the slow vectors, the linkage probe and all three constant-time checks on every pull request. The differential runs on request (`workflow_dispatch`), because it takes one to two hours.
 
 The compiled-code check is a taint analysis written for this code, one function at a time, and it was itself tested by planting leaks (an early-exit comparison in `verify`, a secret-dependent `raise` in a compression function, a secret-dependent `break` in PBKDF2): it reported each one. Its header states its limits.
 
