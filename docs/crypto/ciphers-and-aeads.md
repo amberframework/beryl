@@ -2,7 +2,7 @@
 
 `Beryl::Crypto` implements these ciphers in Crystal. Nothing here calls OpenSSL or any other C library.
 
-Status: milestone B2 of the Beryl cryptography plan. The code passes every published vector listed below, agrees with OpenSSL 4.1.0 on 8,000,000 random cases, and passes the three constant-time checks described in [hashes-and-macs.md](hashes-and-macs.md). Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge. It is not tuned for speed yet: see "Speed" for the measured gap.
+Status: milestones B2 (make it work) and F2 (make it fast) of the Beryl cryptography plan. The code passes every published vector listed below, agrees with OpenSSL 4.1.0 on 8,000,000 random cases, and passes the three constant-time checks described in [hashes-and-macs.md](hashes-and-macs.md). Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge. Its speed next to OpenSSL 4.1.0 is under "Speed".
 
 ## Which call to use
 
@@ -82,9 +82,11 @@ Each algorithm has two implementations behind the same interface. The processor'
 |---|---|---|
 | Published vectors | `crystal spec` | The table below |
 | Differential against libcrypto | `crystal spec --release --tag differential -e "cipher "` | 1,000,000 random cases per cipher: random key, nonce, associated data (0 to 64 bytes) and message (0 to 2,048 bytes, and one in a thousand up to 65,536); Beryl's output must equal libcrypto's, each must open the other's, and a changed copy must be refused by both. AES-GCM includes nonces of 1 to 64 bytes and tags of 12 to 15 bytes; AES-CBC includes altered ciphertexts, where both must agree on whether the padding is valid |
-| Timing statistics | `crystal spec --release --tag constant_time` | AES key schedule, AES block encryption and decryption, GHASH, Poly1305, ChaCha20, a forgery against each AEAD (first tag byte wrong against last tag byte wrong) and the CBC padding check, each with 10,000,000 measurements per class locally (1,000,000 in CI) |
+| Timing statistics | `crystal spec --release --tag constant_time` | AES key schedule, AES block encryption and decryption, GHASH, Poly1305, ChaCha20, a forgery against each AEAD (first tag byte wrong against last tag byte wrong), the CBC padding check, and the processor-instruction paths of ChaCha20-Poly1305, XChaCha20-Poly1305, AES-256-GCM and AES-256-CBC on 1 KiB under one fixed key against random keys, each with 10,000,000 measurements per class locally (1,000,000 in CI) |
 | Memory checker | CI, Linux | Valgrind with every key, message and intermediate value marked undefined; any branch or index that depends on one is an error. A deliberately leaky probe must be reported |
 | Compiled code | `scripts/check_secret_flow.rb` | The LLVM IR of the release build: no branch, memory index or variable-time instruction may depend on a secret, outside the listed declassifications |
+
+The timing check on the processor-instruction paths makes the key the secret class. A check that fixes the message instead cannot pass on Apple Silicon, for any code: on an M1 Max, at 10,000,000 measurements per class, a plain loop that XORs 1 KiB with random bytes gave |t| = 7.94 for one fixed message against random ones, and OpenSSL 4.1.0 gave 12.04 for AES-256-GCM and 7.65 for ChaCha20-Poly1305 (Beryl: 14.27, 8.66). The processor's timing moves with the values of the data it handles, not with any branch or address in the code. The message only ever meets the keystream in an XOR, and the instruction allowlist, Valgrind and the compiled-code checker show that no branch or address depends on it.
 
 ### Published vectors
 
