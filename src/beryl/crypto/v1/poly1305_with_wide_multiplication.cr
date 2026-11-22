@@ -36,8 +36,8 @@ module Beryl::Crypto::V1
 
     # Runs absorbed side by side, and the shortest run worth the
     # multiplications that join them.
-    private RUN_COUNT                =  4
-    private SHORTEST_RUN_BLOCK_COUNT = 16
+    private RUN_COUNT                = 4
+    private SHORTEST_RUN_BLOCK_COUNT = 8
 
     private LIMB_MASK_44 = 0xfffffffffff_u64
     private LIMB_MASK_42 = 0x3ffffffffff_u64
@@ -62,6 +62,42 @@ module Beryl::Crypto::V1
       accumulator = absorb_padded(accumulator, r0, r1, associated_data)
       accumulator = absorb_padded(accumulator, r0, r1, ciphertext)
       accumulator = absorb_block(accumulator, r0, r1, associated_data.size.to_u64!, ciphertext.size.to_u64!)
+      finish(accumulator, key, tag)
+    end
+
+    # Words of a state kept in memory, which the vector ChaCha20 assembly
+    # can also absorb into: the accumulator (low, high, top), then r's two
+    # words.
+    STATE_WORD_COUNT = 5
+
+    # Starts the state at *state* (`STATE_WORD_COUNT` words) for the
+    # one-time *key*.
+    def self.start(key : Bytes, state : Pointer(UInt64)) : Nil
+      raise KeySizeMismatch.new("a Poly1305 key is #{KEY_BYTESIZE} bytes, not #{key.size}") unless key.size == KEY_BYTESIZE
+
+      state[0] = 0_u64
+      state[1] = 0_u64
+      state[2] = 0_u64
+      state[3] = load_word(key.to_unsafe) & CLAMP_LOW
+      state[4] = load_word(key.to_unsafe + 8) & CLAMP_HIGH
+    end
+
+    # Absorbs *data* into the state at *state*, as whole blocks with the
+    # last one padded with zeros.
+    def self.absorb_padded(state : Pointer(UInt64), data : Bytes) : Nil
+      accumulator = absorb_padded(Accumulator.new(state[0], state[1], state[2]), state[3], state[4], data)
+      state[0] = accumulator.low
+      state[1] = accumulator.high
+      state[2] = accumulator.top
+    end
+
+    # Absorbs the block of both lengths and writes the tag into *tag*.
+    def self.finish_encrypted_message(state : Pointer(UInt64), key : Bytes, associated_data_bytesize : Int32,
+                                      ciphertext_bytesize : Int32, tag : Bytes) : Nil
+      raise OutputSizeMismatch.new("a Poly1305 tag is #{TAG_BYTESIZE} bytes") unless tag.size == TAG_BYTESIZE
+
+      accumulator = absorb_block(Accumulator.new(state[0], state[1], state[2]), state[3], state[4],
+        associated_data_bytesize.to_u64!, ciphertext_bytesize.to_u64!)
       finish(accumulator, key, tag)
     end
 
@@ -98,26 +134,26 @@ module Beryl::Crypto::V1
     # h = (h + m + 2^128) * r, partly reduced.
     @[AlwaysInline]
     private def self.absorb_block(accumulator : Accumulator, r0 : UInt64, r1 : UInt64, m0 : UInt64, m1 : UInt64) : Accumulator
-      s1 = r1 &+ (r1 >> 2)
+      s1 = r1 &+ r1.unsafe_shr(2)
       sum = accumulator.low.to_u128! &+ m0
       h0 = sum.to_u64!
-      sum = accumulator.high.to_u128! &+ m1 &+ (sum >> 64)
+      sum = accumulator.high.to_u128! &+ m1 &+ sum.unsafe_shr(64)
       h1 = sum.to_u64!
-      h2 = accumulator.top &+ (sum >> 64).to_u64! &+ 1_u64
+      h2 = accumulator.top &+ sum.unsafe_shr(64).to_u64! &+ 1_u64
       multiply_by_r(h0, h1, h2, r0, r1, s1)
     end
 
     @[AlwaysInline]
     private def self.multiply_by_r(h0 : UInt64, h1 : UInt64, h2 : UInt64, r0 : UInt64, r1 : UInt64, s1 : UInt64) : Accumulator
       d0 = h0.to_u128! &* r0 &+ h1.to_u128! &* s1
-      d1 = h0.to_u128! &* r1 &+ h1.to_u128! &* r0 &+ (h2 &* s1).to_u128! &+ (d0 >> 64)
-      d2 = h2 &* r0 &+ (d1 >> 64).to_u64!
+      d1 = h0.to_u128! &* r1 &+ h1.to_u128! &* r0 &+ (h2 &* s1).to_u128! &+ d0.unsafe_shr(64)
+      d2 = h2 &* r0 &+ d1.unsafe_shr(64).to_u64!
       # Bits from 2^130 up are worth 5 each: fold them back into the bottom.
-      carry = (d2 >> 2) &+ (d2 & ~3_u64)
+      carry = d2.unsafe_shr(2) &+ (d2 & ~3_u64)
       sum = d0.to_u64!.to_u128! &+ carry
       low = sum.to_u64!
-      sum = d1.to_u64!.to_u128! &+ (sum >> 64)
-      Accumulator.new(low, sum.to_u64!, (d2 & 3_u64) &+ (sum >> 64).to_u64!)
+      sum = d1.to_u64!.to_u128! &+ sum.unsafe_shr(64)
+      Accumulator.new(low, sum.to_u64!, (d2 & 3_u64) &+ sum.unsafe_shr(64).to_u64!)
     end
 
     # Absorbs 4 * *run_block_count* blocks as four runs side by side.
@@ -169,23 +205,23 @@ module Beryl::Crypto::V1
     # a few bits more, which the limb multiply allows).
     private def self.to_limbs(accumulator : Accumulator) : {UInt64, UInt64, UInt64}
       {accumulator.low & LIMB_MASK_44,
-       ((accumulator.low >> 44) | (accumulator.high << 20)) & LIMB_MASK_44,
-       (accumulator.high >> 24) | (accumulator.top << 40)}
+       (accumulator.low.unsafe_shr(44) | accumulator.high.unsafe_shl(20)) & LIMB_MASK_44,
+       accumulator.high.unsafe_shr(24) | accumulator.top.unsafe_shl(40)}
     end
 
     private def self.to_words(limbs : {UInt64, UInt64, UInt64}) : Accumulator
       limb1 = limbs[1] & LIMB_MASK_44
-      limb2 = limbs[2] &+ (limbs[1] >> 44)
-      Accumulator.new(limbs[0] | (limb1 << 44), (limb1 >> 20) | (limb2 << 24), limb2 >> 40)
+      limb2 = limbs[2] &+ limbs[1].unsafe_shr(44)
+      Accumulator.new(limbs[0] | limb1.unsafe_shl(44), limb1.unsafe_shr(20) | limb2.unsafe_shl(24), limb2.unsafe_shr(40))
     end
 
     private def self.add_limbs(a : {UInt64, UInt64, UInt64}, b : {UInt64, UInt64, UInt64}) : {UInt64, UInt64, UInt64}
       sum0 = a[0] &+ b[0]
-      sum1 = a[1] &+ b[1] &+ (sum0 >> 44)
-      sum2 = a[2] &+ b[2] &+ (sum1 >> 44)
-      sum0 = (sum0 & LIMB_MASK_44) &+ (sum2 >> 42) &* 5_u64
+      sum1 = a[1] &+ b[1] &+ sum0.unsafe_shr(44)
+      sum2 = a[2] &+ b[2] &+ sum1.unsafe_shr(44)
+      sum0 = (sum0 & LIMB_MASK_44) &+ sum2.unsafe_shr(42) &* 5_u64
       sum2 &= LIMB_MASK_42
-      sum1 = (sum1 & LIMB_MASK_44) &+ (sum0 >> 44)
+      sum1 = (sum1 & LIMB_MASK_44) &+ sum0.unsafe_shr(44)
       {sum0 & LIMB_MASK_44, sum1, sum2}
     end
 
@@ -197,13 +233,13 @@ module Beryl::Crypto::V1
       d0 = a[0].to_u128! &* b[0] &+ a[1].to_u128! &* s2 &+ a[2].to_u128! &* s1
       d1 = a[0].to_u128! &* b[1] &+ a[1].to_u128! &* b[0] &+ a[2].to_u128! &* s2
       d2 = a[0].to_u128! &* b[2] &+ a[1].to_u128! &* b[1] &+ a[2].to_u128! &* b[0]
-      d1 &+= d0 >> 44
+      d1 &+= d0.unsafe_shr(44)
       limb0 = d0.to_u64! & LIMB_MASK_44
-      d2 &+= d1 >> 44
+      d2 &+= d1.unsafe_shr(44)
       limb1 = d1.to_u64! & LIMB_MASK_44
       limb2 = d2.to_u64! & LIMB_MASK_42
-      limb0 &+= (d2 >> 42).to_u64! &* 5_u64
-      limb1 &+= limb0 >> 44
+      limb0 &+= d2.unsafe_shr(42).to_u64! &* 5_u64
+      limb1 &+= limb0.unsafe_shr(44)
       {limb0 & LIMB_MASK_44, limb1, limb2}
     end
 
@@ -211,26 +247,26 @@ module Beryl::Crypto::V1
     # modulo 2^128.
     private def self.finish(accumulator : Accumulator, key : Bytes, tag : Bytes) : Nil
       # Fully reduce: h is below 2^131 here, so fold the top once more.
-      carry = (accumulator.top >> 2) &* 5_u64
+      carry = accumulator.top.unsafe_shr(2) &* 5_u64
       sum = accumulator.low.to_u128! &+ carry
       h0 = sum.to_u64!
-      sum = accumulator.high.to_u128! &+ (sum >> 64)
+      sum = accumulator.high.to_u128! &+ sum.unsafe_shr(64)
       h1 = sum.to_u64!
-      h2 = (accumulator.top & 3_u64) &+ (sum >> 64).to_u64!
+      h2 = (accumulator.top & 3_u64) &+ sum.unsafe_shr(64).to_u64!
 
       # g = h + 5; h - p is g - 2^130, so take g when it reaches 2^130.
       sum = h0.to_u128! &+ 5_u64
       g0 = sum.to_u64!
-      sum = h1.to_u128! &+ (sum >> 64)
+      sum = h1.to_u128! &+ sum.unsafe_shr(64)
       g1 = sum.to_u64!
-      g2 = h2 &+ (sum >> 64).to_u64!
-      take_g = 0_u64 &- (g2 >> 2)
+      g2 = h2 &+ sum.unsafe_shr(64).to_u64!
+      take_g = 0_u64 &- g2.unsafe_shr(2)
       h0 = (h0 & ~take_g) | (g0 & take_g)
       h1 = (h1 & ~take_g) | (g1 & take_g)
 
       sum = h0.to_u128! &+ load_word(key.to_unsafe + 16)
       store_word(tag.to_unsafe, sum.to_u64!)
-      sum = h1.to_u128! &+ load_word(key.to_unsafe + 24) &+ (sum >> 64)
+      sum = h1.to_u128! &+ load_word(key.to_unsafe + 24) &+ sum.unsafe_shr(64)
       store_word(tag.to_unsafe + 8, sum.to_u64!)
     end
 
