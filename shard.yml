@@ -1,0 +1,8 @@
+name: beryl
+version: 0.1.0
+description: Security for Amber V2. Cryptography written in Crystal, with no C library underneath.
+authors:
+  - AgentC <agent_c@agentc.consulting>
+crystal: ">= 1.21.0"
+license: MIT
+repository: https://github.com/amberframework/beryl
