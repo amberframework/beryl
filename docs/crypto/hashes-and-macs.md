@@ -2,7 +2,7 @@
 
 `Beryl::Crypto` implements these standards in Crystal. Nothing here calls OpenSSL or any other C library.
 
-Status: milestone B1 of the Beryl cryptography plan. The code passes every published vector listed below and agrees with OpenSSL 4.1.0 on millions of random inputs. It has not had its independent audit yet, and it is not tuned for speed yet (hardware SHA instructions arrive in milestone F1).
+Status: milestone B1 of the Beryl cryptography plan. The code passes every published vector listed below and agrees with OpenSSL 4.1.0 on millions of random inputs. It passes the three constant-time checks described under "How it is tested". Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge. It is not tuned for speed yet (hardware SHA instructions arrive in milestone F1).
 
 ## Which call to use
 
@@ -107,11 +107,17 @@ Every error descends from `Beryl::Error` through `Beryl::Crypto::Error`:
 | `crystal-alpha spec` | Unit specs and every published vector below, with the count per algorithm printed at the end | under a minute |
 | `crystal-alpha spec --release --tag slow` | The two PBKDF2 vectors of 16,777,216 iterations | seconds |
 | `crystal-alpha spec --release --tag differential` | Beryl against libcrypto on random inputs: 1,000,000 cases per hash and per HMAC (messages of 0 to 65,536 bytes, random `update` splits), 100,000 per HKDF, 10,000 per PBKDF2 (1 to 4,096 iterations). The seed is printed, and any failing case replays alone | about an hour; one algorithm at a time with `-e` |
-| `crystal-alpha spec --release --tag constant_time` | A timing check of HMAC `verify` and keying (the dudect method), 10,000,000 measurements per class | about a minute |
+| `crystal-alpha spec --release --tag constant_time` | Constant time, by timing (the dudect method): HMAC `verify`, keying and tagging, 10,000,000 measurements per class, largest \|t\| under 4.5 | about a minute |
+| `valgrind --error-exitcode=99 ./secret_taint` on `spec/probes/secret_taint.cr` (Linux) | Constant time, by memory checker (the ctgrind method): every key, message, tag and password is undefined memory, so Memcheck reports any branch or address computed from one. `./secret_taint leaky` must be reported | seconds |
+| `scripts/check_secret_flow.rb` on the LLVM IR of `spec/probes/secret_flow.cr` | Constant time, in the compiled code: follows secrets through the optimized IR of every `Beryl::Crypto` function and reports a branch, a memory index or a division that depends on one. The probe's deliberate leak must be reported | seconds |
 | `crystal-alpha build --release -Dwithout_openssl spec/probes/no_libcrypto.cr` then `otool -L` | Proof that the library links no libssl and no libcrypto | seconds |
 | `bench/hashes_against_libcrypto.cr` | Baseline speed next to libcrypto, alternating arms | about four minutes |
 
 The differential, the vector pin check and the benchmark are the only places this repository uses OpenSSL. The library requires none of it.
+
+CI (`.github/workflows/ci.yml`) runs the quick suite, the slow vectors, the linkage probe and all three constant-time checks on every pull request. The differential runs on request (`workflow_dispatch`), because it takes about an hour.
+
+The compiled-code check is a taint analysis written for this code, one function at a time, and it was itself tested by planting leaks (an early-exit comparison in `verify`, a secret-dependent `raise` in a compression function, a secret-dependent `break` in PBKDF2): it reported each one. Its header states its limits.
 
 ### Published vectors
 

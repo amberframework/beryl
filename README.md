@@ -13,7 +13,7 @@ Status: design in progress. The integration plan lives with the Amber maintainer
 
 ## Cryptography
 
-`Beryl::Crypto` implements cryptographic standards in Crystal, with no C library underneath. It has not had its independent audit yet: it is opt-in, and nothing in Amber or Crystal uses it by default until that audit closes.
+`Beryl::Crypto` implements cryptographic standards in Crystal, with no C library underneath. It is opt-in today. It becomes a default once its own gates pass, and every pull request must pass them to merge: the published test vectors (NIST CAVP and the RFCs), Wycheproof, three constant-time checks (timing statistics after dudect, a Valgrind memory-checker run with every secret marked undefined, and a check of the compiled LLVM IR), and a differential against OpenSSL on random inputs.
 
 Available now (milestone B1): SHA-224, SHA-256, SHA-384, SHA-512 and SHA-512/256; HMAC; HKDF; and, for formats that already exist, MD5, SHA-1 and PBKDF2.
 
@@ -35,6 +35,7 @@ minecart install --frozen
 crystal-alpha spec                                 # unit specs and every published vector
 crystal-alpha spec --release --tag differential    # against libcrypto, random inputs
 crystal-alpha spec --release --tag constant_time   # timing check of HMAC
+/usr/bin/ruby scripts/check_secret_flow.rb FILE.ll # compiled-code check (see docs/crypto/hashes-and-macs.md)
 /usr/bin/ruby scripts/fetch_vectors.rb             # re-download the vectors and check their pins
 ```
 
