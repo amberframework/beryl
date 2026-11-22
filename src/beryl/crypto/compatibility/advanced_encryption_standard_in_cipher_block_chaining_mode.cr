@@ -1,7 +1,9 @@
 require "../declassification"
 require "../error"
 require "../secret_wiping"
+require "../processor_features"
 require "../v1/bitsliced_advanced_encryption_standard"
+require "./cipher_block_chaining_with_processor_instructions"
 
 module Beryl::Crypto::Compatibility
   # AES in cipher block chaining mode with PKCS#7 padding (FIPS 197,
@@ -22,14 +24,28 @@ module Beryl::Crypto::Compatibility
   class AdvancedEncryptionStandardInCipherBlockChainingMode
     BLOCK_BYTESIZE = 16
 
+    # The bitsliced round keys, or the encryption and decryption round keys
+    # as bytes for the processor's AES instructions; the set not in use is
+    # empty.
     @round_keys : Slice(UInt64)
+    @round_key_bytes : Bytes
+    @decryption_round_key_bytes : Bytes
     @round_count : Int32
 
     # Creates the cipher under *key* (16, 24 or 32 bytes).
     def initialize(key : Bytes)
       @round_count = V1::BitslicedAdvancedEncryptionStandard.round_count_for(key.size)
-      @round_keys = Slice(UInt64).new(V1::BitslicedAdvancedEncryptionStandard::ROUND_KEY_WORD_COUNT, 0_u64)
-      V1::BitslicedAdvancedEncryptionStandard.expand_key(key, @round_keys)
+      if ProcessorFeatures::HAS_AES_INSTRUCTIONS
+        @round_keys = Slice(UInt64).empty
+        @round_key_bytes = Bytes.new(CipherBlockChainingWithProcessorInstructions::ROUND_KEY_BYTESIZE)
+        @decryption_round_key_bytes = Bytes.new(CipherBlockChainingWithProcessorInstructions::ROUND_KEY_BYTESIZE)
+        CipherBlockChainingWithProcessorInstructions.prepare(key, @round_key_bytes, @decryption_round_key_bytes)
+      else
+        @round_keys = Slice(UInt64).new(V1::BitslicedAdvancedEncryptionStandard::ROUND_KEY_WORD_COUNT, 0_u64)
+        @round_key_bytes = Bytes.empty
+        @decryption_round_key_bytes = Bytes.empty
+        V1::BitslicedAdvancedEncryptionStandard.expand_key(key, @round_keys)
+      end
     end
 
     # Returns *plaintext*, padded to a whole number of blocks, encrypted
@@ -41,7 +57,11 @@ module Beryl::Crypto::Compatibility
       padding_bytesize = BLOCK_BYTESIZE - plaintext_bytes.size % BLOCK_BYTESIZE
       ciphertext = Bytes.new(plaintext_bytes.size + padding_bytesize, padding_bytesize.to_u8)
       plaintext_bytes.copy_to(ciphertext)
-      CipherBlockChaining.encrypt_in_place(@round_keys, @round_count, initialization_vector, ciphertext)
+      if ProcessorFeatures::HAS_AES_INSTRUCTIONS
+        CipherBlockChainingWithProcessorInstructions.encrypt_in_place(@round_key_bytes, @round_count, initialization_vector, ciphertext)
+      else
+        CipherBlockChaining.encrypt_in_place(@round_keys, @round_count, initialization_vector, ciphertext)
+      end
       ciphertext
     end
 
@@ -54,7 +74,12 @@ module Beryl::Crypto::Compatibility
       return nil if ciphertext.empty? || ciphertext.size % BLOCK_BYTESIZE != 0
 
       padded_plaintext = Bytes.new(ciphertext.size)
-      CipherBlockChaining.decrypt(@round_keys, @round_count, initialization_vector, ciphertext, padded_plaintext)
+      if ProcessorFeatures::HAS_AES_INSTRUCTIONS
+        CipherBlockChainingWithProcessorInstructions.decrypt(@decryption_round_key_bytes, @round_count, initialization_vector,
+          ciphertext, padded_plaintext)
+      else
+        CipherBlockChaining.decrypt(@round_keys, @round_count, initialization_vector, ciphertext, padded_plaintext)
+      end
       last_block = padded_plaintext[padded_plaintext.size - BLOCK_BYTESIZE, BLOCK_BYTESIZE]
       padding_bytesize = Beryl::Crypto::Declassification.reveal(CipherBlockChaining.padding_bytesize(last_block))
       if padding_bytesize == 0

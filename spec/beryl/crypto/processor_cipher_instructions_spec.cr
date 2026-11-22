@@ -155,4 +155,28 @@ describe "Beryl ciphers on the processor's instructions" do
       end
     end
   end
+
+  {% for key_bytesize in [16, 24, 32] %}
+    it "encrypts and decrypts AES-{{ key_bytesize * 8 }}-CBC as the portable code does, at every length that changes path" do
+      generator = Random.new(0x6362_6300 + {{ key_bytesize }})
+      (0..300).each do |message_bytesize|
+        key = generator.random_bytes({{ key_bytesize }})
+        initialization_vector = generator.random_bytes(16)
+        plaintext = generator.random_bytes(message_bytesize)
+        cipher = Beryl::Crypto::Compatibility::AESCBC.new(key)
+        ciphertext = cipher.encrypt(plaintext, initialization_vector: initialization_vector)
+
+        padding_bytesize = 16 - message_bytesize % 16
+        expected = Bytes.new(message_bytesize + padding_bytesize, padding_bytesize.to_u8)
+        plaintext.copy_to(expected)
+        round_count = Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard.round_count_for(key.size)
+        round_keys = Slice(UInt64).new(Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard::ROUND_KEY_WORD_COUNT, 0_u64)
+        Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard.expand_key(key, round_keys)
+        Beryl::Crypto::Compatibility::CipherBlockChaining.encrypt_in_place(round_keys, round_count, initialization_vector, expected)
+        fail "AES-{{ key_bytesize * 8 }}-CBC differs from the portable code at #{message_bytesize} bytes" unless ciphertext == expected
+
+        cipher.decrypt(ciphertext, initialization_vector: initialization_vector).should eq(plaintext)
+      end
+    end
+  {% end %}
 end

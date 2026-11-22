@@ -121,8 +121,11 @@ module Beryl::Crypto
 
     # Whether the processor has `eor3`, which XORs three registers in one
     # instruction (the SHA3 extension of ARMv8.2). The AArch64 GHASH and
-    # counter mode use it where it is present.
-    {% if flag?(:aarch64) && flag?(:darwin) %}
+    # counter mode use it where it is present; `-Dberyl_without_eor3` runs
+    # the code written without it, so the test suite covers both.
+    {% if flag?(:beryl_without_eor3) %}
+      HAS_THREE_WAY_EXCLUSIVE_OR = false
+    {% elsif flag?(:aarch64) && flag?(:darwin) %}
       HAS_THREE_WAY_EXCLUSIVE_OR = true
     {% elsif flag?(:aarch64) && flag?(:linux) %}
       HAS_THREE_WAY_EXCLUSIVE_OR = has_capability?(SHA3_CAPABILITY)
