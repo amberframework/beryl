@@ -94,23 +94,21 @@ module Beryl::Crypto::V1
       (self - other).zero_bit
     end
 
-    # Returns self^(p - 2), the inverse (zero for zero), by ref10's chain of
-    # 254 squarings and 11 multiplications.
+    # p = 2^255 - 19 for `DivstepInversion`.
+    DIVSTEP_MODULUS = Beryl::Crypto::FieldArithmetic::DivstepInversion.modulus_of(
+      StaticArray[0xffffffffffffffed_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0x7fffffffffffffff_u64])
+
+    # Returns the inverse (zero for zero), in constant time, by divsteps
+    # (`DivstepInversion`) on the canonical value: about twice as fast as
+    # ref10's chain of 254 squarings and 11 multiplications, which it
+    # replaced.
     def invert : self
-      z2 = square             # 2
-      z8 = z2.square_times(2) # 8
-      z9 = self * z8          # 9
-      z11 = z2 * z9           # 11
-      z22 = z11.square        # 22
-      z_5_0 = z9 * z22        # 2^5 - 2^0
-      z_10_0 = z_5_0.square_times(5) * z_5_0
-      z_20_0 = z_10_0.square_times(10) * z_10_0
-      z_40_0 = z_20_0.square_times(20) * z_20_0
-      z_50_0 = z_40_0.square_times(10) * z_10_0
-      z_100_0 = z_50_0.square_times(50) * z_50_0
-      z_200_0 = z_100_0.square_times(100) * z_100_0
-      z_250_0 = z_200_0.square_times(50) * z_50_0
-      z_250_0.square_times(5) * z11 # 2^255 - 21
+      encoded = to_bytes
+      words = StaticArray(UInt64, 4).new(0_u64)
+      32.times { |index| words[index >> 3] |= encoded[index].to_u64 << (8 * (index & 7)) }
+      inverse = Beryl::Crypto::FieldArithmetic::DivstepInversion.invert(words, DIVSTEP_MODULUS)
+      inverse_bytes = StaticArray(UInt8, 32).new { |index| (inverse[index >> 3] >> (8 * (index & 7))).to_u8! }
+      Curve25519FieldElement.new(Field.from_bytes(inverse_bytes))
     end
 
     # Returns self^((p - 5) / 8) = self^(2^252 - 3), the core of the square

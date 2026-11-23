@@ -38,6 +38,13 @@ module Beryl::Crypto::FieldArithmetic
   # -Dberyl_portable_curves builds the fiat-crypto translations alone, as CI
   # does once to keep that path tested.
   module FieldsInAssembly
+    # Words 1 and 3 of the P-256 prime (words 0 and 2 are all ones and
+    # zero), passed to the assembly as operands, so the compiler builds them
+    # once for a run of field operations instead of each statement building
+    # them.
+    P256_PRIME_WORD_1 = 0x00000000ffffffff_u64
+    P256_PRIME_WORD_3 = 0xffffffff00000001_u64
+
     {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
       AVAILABLE = true
     {% else %}
@@ -83,14 +90,18 @@ module Beryl::Crypto::FieldArithmetic
     # four end as the result), $8 to $11 scratch, $12 to $15 the words of a
     # and $16 to $19 the words of b (both little-endian). *square* builds
     # a squaring instead, which forms each cross product a_i·a_j once and
-    # doubles the sum; it reads only $12 to $15.
+    # doubles the sum by shifting it a bit (`extr`), not by adding it to
+    # itself; it reads only $12 to $15.
     #
     # The low half of the product is reduced word by word: for P-256,
     # -p^-1 = 1 mod 2^64, so the multiplier of each step is the low word w
-    # itself, and w·p = w·2^256 - w·2^224 + w·2^192 + w·2^96 - w needs no
-    # multiplication: adding it and dropping the low word adds w·2^32 to
-    # the next word and w·(2^64 - 2^32 + 1) = (w << 64) - (w << 32) + w to
-    # the two above it. The reduced low half (below p + 1) plus the high
+    # itself, and w·p = w·2^256 - w·2^224 + w·2^192 + w·2^96 - w: adding it
+    # and dropping the low word adds w·2^32 to the next word (two shifts)
+    # and w·(2^64 - 2^32 + 1) to the two above it. That product is formed
+    # with `mul` and `umulh` by word 3 of p ($21) rather than as
+    # (w << 64) - (w << 32) + w with `subs` and `sbc`: Apple's cores run
+    # about three flag-setting instructions per cycle and two
+    # multiplications, and the curve arithmetic is limited by the flags. The reduced low half (below p + 1) plus the high
     # half is below 2^257, and one conditional subtraction of p ends it.
     macro p256_aarch64_statement(square, first_factor, second_factor)
       {%
@@ -124,13 +135,13 @@ module Beryl::Crypto::FieldArithmetic
           lines << "umulh #{product[6].id}, #{a_words[2].id}, #{a_words[3].id}"
           lines << "adds #{product[5].id}, #{product[5].id}, #{scratch[0].id}"
           lines << "adc #{product[6].id}, #{product[6].id}, xzr"
-          lines << "adds #{product[1].id}, #{product[1].id}, #{product[1].id}"
+          lines << "lsr #{product[7].id}, #{product[6].id}, #63"
         %}
-        {% for index in 2..6 %}
-          {% lines << "adcs #{product[index].id}, #{product[index].id}, #{product[index].id}" %}
+        {% for index in [6, 5, 4, 3, 2] %}
+          {% lines << "extr #{product[index].id}, #{product[index].id}, #{product[index - 1].id}, #63" %}
         {% end %}
         {%
-          lines << "adc #{product[7].id}, xzr, xzr"
+          lines << "lsl #{product[1].id}, #{product[1].id}, #1"
           lines << "mul #{product[0].id}, #{a_words[0].id}, #{a_words[0].id}"
           lines << "umulh #{scratch[0].id}, #{a_words[0].id}, #{a_words[0].id}"
           lines << "mul #{scratch[1].id}, #{a_words[1].id}, #{a_words[1].id}"
@@ -185,8 +196,8 @@ module Beryl::Crypto::FieldArithmetic
           word = low[0]
           lines << "lsl #{scratch[0].id}, #{word.id}, #32"
           lines << "lsr #{scratch[1].id}, #{word.id}, #32"
-          lines << "subs #{scratch[2].id}, #{word.id}, #{scratch[0].id}"
-          lines << "sbc #{scratch[3].id}, #{word.id}, #{scratch[1].id}"
+          lines << "mul #{scratch[2].id}, #{word.id}, $21"
+          lines << "umulh #{scratch[3].id}, #{word.id}, $21"
           lines << "adds #{low[1].id}, #{low[1].id}, #{scratch[0].id}"
           lines << "adcs #{low[2].id}, #{low[2].id}, #{scratch[1].id}"
           lines << "adcs #{low[3].id}, #{low[3].id}, #{scratch[2].id}"
@@ -200,13 +211,10 @@ module Beryl::Crypto::FieldArithmetic
         lines << "adcs #{product[2].id}, #{product[2].id}, #{product[6].id}"
         lines << "adcs #{product[3].id}, #{product[3].id}, #{product[7].id}"
         lines << "adc #{product[4].id}, xzr, xzr"
-        lines << "mov #{product[5].id}, #0xffffffff"
-        lines << "lsl #{product[6].id}, #{product[5].id}, #32"
-        lines << "add #{product[6].id}, #{product[6].id}, #1"
         lines << "adds #{scratch[0].id}, #{product[0].id}, #1"
-        lines << "sbcs #{scratch[1].id}, #{product[1].id}, #{product[5].id}"
+        lines << "sbcs #{scratch[1].id}, #{product[1].id}, $20"
         lines << "sbcs #{scratch[2].id}, #{product[2].id}, xzr"
-        lines << "sbcs #{scratch[3].id}, #{product[3].id}, #{product[6].id}"
+        lines << "sbcs #{scratch[3].id}, #{product[3].id}, $21"
         lines << "sbcs xzr, #{product[4].id}, xzr"
       %}
       {% for index in 0..3 %}
@@ -218,7 +226,8 @@ module Beryl::Crypto::FieldArithmetic
                                    "=&r"(product_4), "=&r"(product_5), "=&r"(product_6), "=&r"(product_7),
                                    "=&r"(scratch_0), "=&r"(scratch_1), "=&r"(scratch_2), "=&r"(scratch_3)
                                  : "r"({{ first_factor }}.unsafe_fetch(0)), "r"({{ first_factor }}.unsafe_fetch(1)), "r"({{ first_factor }}.unsafe_fetch(2)), "r"({{ first_factor }}.unsafe_fetch(3)),
-                                   "r"({{ second_factor }}.unsafe_fetch(0)), "r"({{ second_factor }}.unsafe_fetch(1)), "r"({{ second_factor }}.unsafe_fetch(2)), "r"({{ second_factor }}.unsafe_fetch(3))
+                                   "r"({{ second_factor }}.unsafe_fetch(0)), "r"({{ second_factor }}.unsafe_fetch(1)), "r"({{ second_factor }}.unsafe_fetch(2)), "r"({{ second_factor }}.unsafe_fetch(3)),
+                                   "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_1), "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_3)
                                  : "cc")
       StaticArray[product_0, product_1, product_2, product_3]
     end
@@ -297,34 +306,60 @@ module Beryl::Crypto::FieldArithmetic
     end
 
     # The text of an AArch64 selection of entry *index* from *table*, a run
-    # of *entry_count* entries of *word_count* words, into *destination*:
-    # every entry from *first_entry* on is read, compared with *index* by
-    # `cmp`, and kept by `csel`, so the time does not depend on *index*.
-    # Nothing is written for an index below *first_entry* except zeros.
-    macro select_entry_aarch64_statement(word_count, entry_count, first_entry, destination, table, index)
+    # of *entry_count* entries of *word_count* words (even, at most 18),
+    # into *destination*, every entry from *first_entry* on read and none
+    # skipped, on the vector registers: each entry is loaded 32 bytes at a time
+    # (`ldp` of two q registers) and merged into the kept copy under a mask
+    # with `bit` (bitwise insert if true), which is all ones for the entry
+    # whose number equals *index* (`cmp`, `csel`, `dup`) and zero for every
+    # other. Every entry is read and every merge runs, so the time does not
+    # depend on *index*; an index past the table keeps zeros. This takes half
+    # the instructions of a selection by `csel` on general registers, and
+    # they run beside the field arithmetic, on the vector units. Registers: v16 to v24 the kept
+    # copy, v25 and v26 the words loaded, v27 the mask; x15 all ones, x16
+    # the address of the entry, x17 the mask.
+    macro select_entry_vector_statement(word_count, entry_count, first_entry, destination, table, index)
       {%
-        registers = %w(x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x19)
-        kept = registers[0...word_count]
-        loaded = registers[word_count]
-        lines = [] of StringLiteral
+        quad_count = word_count // 2
+        kept = (16...(16 + quad_count)).map { |number| "v#{number}" }
+        lines = ["mov x15, #-1"]
       %}
-      {% for word in 0...word_count %}
-        {% lines << "mov #{kept[word].id}, xzr" %}
+      {% for quad in 0...quad_count %}
+        {% lines << "movi #{kept[quad].id}.16b, #0" %}
       {% end %}
       {% for entry in first_entry...entry_count %}
-        {% lines << "cmp $2, ##{entry}" %}
-        {% for word in 0...word_count %}
-          {% lines << "ldr #{loaded.id}, [$1, ##{(entry * word_count + word) * 8}]" %}
-          {% lines << "csel #{kept[word].id}, #{loaded.id}, #{kept[word].id}, eq" %}
+        {%
+          lines << "cmp $2, ##{entry}"
+          lines << "csel x17, x15, xzr, eq"
+          lines << "dup v27.2d, x17"
+          lines << "add x16, $1, ##{entry * word_count * 8}"
+        %}
+        {% for quad in (0...quad_count).to_a.select { |number| number % 2 == 0 } %}
+          {% if quad + 1 < quad_count %}
+            {%
+              lines << "ldp q25, q26, [x16, ##{quad * 16}]"
+              lines << "bit #{kept[quad].id}.16b, v25.16b, v27.16b"
+              lines << "bit #{kept[quad + 1].id}.16b, v26.16b, v27.16b"
+            %}
+          {% else %}
+            {%
+              lines << "ldr q25, [x16, ##{quad * 16}]"
+              lines << "bit #{kept[quad].id}.16b, v25.16b, v27.16b"
+            %}
+          {% end %}
         {% end %}
       {% end %}
-      {% for word in 0...word_count %}
-        {% lines << "str #{kept[word].id}, [$0, ##{word * 8}]" %}
+      {% for quad in (0...quad_count).to_a.select { |number| number % 2 == 0 } %}
+        {% if quad + 1 < quad_count %}
+          {% lines << "stp q#{16 + quad}, q#{17 + quad}, [$0, ##{quad * 16}]" %}
+        {% else %}
+          {% lines << "str q#{16 + quad}, [$0, ##{quad * 16}]" %}
+        {% end %}
       {% end %}
       asm({{ lines.join("\n") }}
         :: "r"({{ destination }}), "r"({{ table }}), "r"({{ index }})
-        : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
-          "x16", "x17", "x19", "memory", "cc")
+        : "x15", "x16", "x17", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27",
+          "memory", "cc")
     end
 
     # The text of an AArch64 Montgomery multiplication modulo any odd
@@ -420,28 +455,25 @@ module Beryl::Crypto::FieldArithmetic
       @[AlwaysInline]
       def self.add(a : Limbs, b : Limbs) : Limbs
         sum_0 = sum_1 = sum_2 = sum_3 = carry = 0_u64
-        difference_0 = difference_1 = difference_2 = difference_3 = prime_1 = prime_3 = 0_u64
-        asm("adds $0, $11, $15
-          adcs $1, $12, $16
-          adcs $2, $13, $17
-          adcs $3, $14, $18
+        difference_0 = difference_1 = difference_2 = difference_3 = 0_u64
+        asm("adds $0, $9, $13
+          adcs $1, $10, $14
+          adcs $2, $11, $15
+          adcs $3, $12, $16
           adc $4, xzr, xzr
-          mov $9, #0xffffffff
-          lsl $10, $9, #32
-          add $10, $10, #1
           adds $5, $0, #1
-          sbcs $6, $1, $9
+          sbcs $6, $1, $17
           sbcs $7, $2, xzr
-          sbcs $8, $3, $10
+          sbcs $8, $3, $18
           sbcs xzr, $4, xzr
           csel $0, $0, $5, lo
           csel $1, $1, $6, lo
           csel $2, $2, $7, lo
           csel $3, $3, $8, lo" : "=&r"(sum_0), "=&r"(sum_1), "=&r"(sum_2), "=&r"(sum_3), "=&r"(carry),
-                                 "=&r"(difference_0), "=&r"(difference_1), "=&r"(difference_2), "=&r"(difference_3),
-                                 "=&r"(prime_1), "=&r"(prime_3)
+                                 "=&r"(difference_0), "=&r"(difference_1), "=&r"(difference_2), "=&r"(difference_3)
                                : "r"(a.unsafe_fetch(0)), "r"(a.unsafe_fetch(1)), "r"(a.unsafe_fetch(2)), "r"(a.unsafe_fetch(3)),
-                                 "r"(b.unsafe_fetch(0)), "r"(b.unsafe_fetch(1)), "r"(b.unsafe_fetch(2)), "r"(b.unsafe_fetch(3))
+                                 "r"(b.unsafe_fetch(0)), "r"(b.unsafe_fetch(1)), "r"(b.unsafe_fetch(2)), "r"(b.unsafe_fetch(3)),
+                                 "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_1), "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_3)
                                : "cc")
         StaticArray[sum_0, sum_1, sum_2, sum_3]
       end

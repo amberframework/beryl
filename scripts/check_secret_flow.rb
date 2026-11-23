@@ -80,7 +80,7 @@ SECRET_VALUE_FUNCTION = /FieldArithmetic::|Curve25519FieldElement[\#:]|DiffieHel
                          Edwards25519Group::(?:Point\#(?:add|double|negate|select|encode)|multiply_base|multiply_constant_time|
                          Scalar::(?:reduce|chunk|encode|multiply_add))|
                          ::Arithmetic::(?:Point\#(?:add|double|negate|replace_if)|multiply_constant_time|multiply_generator|
-                         multiples_of|to_affine|field_|scalar_power|reduce_once_modulo_order|limbs_|x_coordinate_modulo_order|below_bit)|
+                         multiples_of|signed_multiple|to_affine|field_|scalar_power|scalar_invert|reduce_once_modulo_order|limbs_|x_coordinate_modulo_order|below_bit)|
                          ConstantTimeSelection::|DeterministicSignatureNonce|SecretFlowProbe::leaky_limb_lookup/x.freeze
 PUBLIC_ARGUMENT = /\A%(?:exponent|count|start|bytesize)\z/.freeze
 
@@ -110,7 +110,7 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq pslld psrld
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
-  lsl lsr subs sbcs sbc csel cmp
+  lsl lsr extr subs sbcs sbc csel cmp bit
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze

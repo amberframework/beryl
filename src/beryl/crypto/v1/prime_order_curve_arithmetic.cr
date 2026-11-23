@@ -24,7 +24,8 @@ module Beryl::Crypto::V1
   # entries of one precomputed affine table per window, so [k]G needs no
   # doubling. Verification, whose inputs are public, uses width-7 and
   # width-5 non-adjacent forms and may branch. Inversion and square roots
-  # are exponentiations by public exponents (Fermat).
+  # are by divsteps on the 256-bit curves (`DivstepInversion`) and
+  # exponentiations by public exponents (Fermat) on P-384, as are square roots.
   #
   # Integers outside the Montgomery domain are big-endian `Bytes` of
   # *bytesize* bytes, as SEC 1 and FIPS 186-5 write them.
@@ -247,8 +248,35 @@ module Beryl::Crypto::V1
       power_by_public_exponent(ScalarField, base, exponent)
     end
 
+    {% if bytesize == 32 %}
+      # The field prime and the group order for `DivstepInversion`, and
+      # R^3 modulo each (R = 2^256): the inverse of a·R, as an integer, is
+      # a^-1·R^-1, and its Montgomery product with R^3 is a^-1·R, the
+      # Montgomery form of a^-1.
+      FIELD_DIVSTEP_MODULUS  = ::Beryl::Crypto::FieldArithmetic::DivstepInversion.modulus_of(limbs_from_big_endian(FIELD_PRIME))
+      FIELD_R_CUBED          = Field.to_montgomery(Field.to_montgomery(Field.set_one))
+      SCALAR_DIVSTEP_MODULUS = ::Beryl::Crypto::FieldArithmetic::DivstepInversion.modulus_of(limbs_from_big_endian(GROUP_ORDER))
+      SCALAR_R_CUBED         = ScalarField.to_montgomery(ScalarField.to_montgomery(ScalarField.set_one))
+    {% end %}
+
+    # Returns the inverse of *element* (Montgomery domain of the field
+    # prime), or zero for zero, in constant time: by divsteps for 256-bit
+    # curves (`DivstepInversion`), by Fermat's exponent p - 2 otherwise.
     def self.field_invert(element : Limbs) : Limbs
-      field_power(element, field_inverse_exponent)
+      {% if bytesize == 32 %}
+        Field.mul(::Beryl::Crypto::FieldArithmetic::DivstepInversion.invert(element, FIELD_DIVSTEP_MODULUS), FIELD_R_CUBED)
+      {% else %}
+        field_power(element, field_inverse_exponent)
+      {% end %}
+    end
+
+    # `field_invert` modulo the group order.
+    def self.scalar_invert(element : Limbs) : Limbs
+      {% if bytesize == 32 %}
+        ScalarField.mul(::Beryl::Crypto::FieldArithmetic::DivstepInversion.invert(element, SCALAR_DIVSTEP_MODULUS), SCALAR_R_CUBED)
+      {% else %}
+        scalar_power(element, scalar_inverse_exponent)
+      {% end %}
     end
 
     # Returns 1 when two field elements are equal, else 0.
@@ -314,21 +342,24 @@ module Beryl::Crypto::V1
         ConstantTimeSelection.equal_bit(Field.nonzero(Field.sub(first, second)), 0_u64)
       end
 
+      # The multiples of 2 are arranged as OpenSSL's
+      # `ecp_nistz256_point_double` arranges them, with 12 field additions
+      # instead of the 14 of the formula as written: 4·Y^2 and 8·Y^4 come
+      # from doubling Y^2 and squaring that, and 8·X·Y^2 from doubling
+      # X·4·Y^2.
       def double : Point
         delta = Field.square(@z)
         gamma = Field.square(@y)
-        beta = Field.mul(@x, gamma)
+        gamma_2 = Field.add(gamma, gamma)
+        gamma_4 = Field.add(gamma_2, gamma_2)
+        beta_4 = Field.mul(@x, gamma_4)
+        beta_8 = Field.add(beta_4, beta_4)
         alpha_part = Field.mul(Field.sub(@x, delta), Field.add(@x, delta))
         alpha = Field.add(Field.add(alpha_part, alpha_part), alpha_part)
-        beta_2 = Field.add(beta, beta)
-        beta_4 = Field.add(beta_2, beta_2)
-        beta_8 = Field.add(beta_4, beta_4)
         new_x = Field.sub(Field.square(alpha), beta_8)
         y_z = Field.mul(@y, @z)
         new_z = Field.add(y_z, y_z)
-        gamma_squared = Field.square(gamma)
-        gamma_squared_2 = Field.add(gamma_squared, gamma_squared)
-        gamma_squared_4 = Field.add(gamma_squared_2, gamma_squared_2)
+        gamma_squared_4 = Field.square(gamma_2)
         gamma_squared_8 = Field.add(gamma_squared_4, gamma_squared_4)
         new_y = Field.sub(Field.mul(alpha, Field.sub(beta_4, new_x)), gamma_squared_8)
         Point.new(new_x, new_y, new_z)
@@ -450,6 +481,11 @@ module Beryl::Crypto::V1
       {Field.mul(point.x, inverse_z_squared), Field.mul(point.y, Field.mul(inverse_z, inverse_z_squared))}
     end
 
+    # The affine x coordinate of *point* alone (ECDH and ECDSA need no y).
+    def self.to_affine_x(point : Point) : Limbs
+      Field.mul(point.x, Field.square(field_invert(point.z)))
+    end
+
     # The affine form of each point of *list_of_points* (public, none at
     # infinity except where an entry is never read), with one inversion
     # for all of them (Montgomery's trick).
@@ -488,12 +524,30 @@ module Beryl::Crypto::V1
       multiples
     end
 
+    # `multiples_of` for a point given in affine coordinates (Z = 1), as a
+    # decoded public key is: each odd entry is a mixed addition of P
+    # (8M + 3S rather than 12M + 4S), with the same argument that its two
+    # operands differ.
+    def self.multiples_of_affine(point : AffinePoint) : StaticArray(Point, 16)
+      multiples = StaticArray(Point, 16).new(Point.from_affine(point))
+      2.upto(16) do |multiple|
+        multiples[multiple - 1] = multiple.even? ? multiples[multiple // 2 - 1].double : multiples[multiple - 2].add_affine(point, 0_u64)
+      end
+      multiples
+    end
+
+    # Returns whether the public *point* has Z = 1, so that its X and Y are
+    # its affine coordinates. Variable time: for public points only.
+    def self.public_point_has_unit_z?(point : Point) : Bool
+      point.z == Field.set_one
+    end
+
     # Returns entry *index* of the 16 points at *multiples*, reading all 16.
     @[AlwaysInline]
     def self.select_multiple(multiples : Pointer(Point), index : UInt64) : Point
       {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
         selected = uninitialized Point
-        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_aarch64_statement({{ bytesize // 8 * 3 }}, 16, 0,
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_vector_statement({{ bytesize // 8 * 3 }}, 16, 0,
           pointerof(selected), multiples, index)
         selected
       {% else %}
@@ -511,7 +565,7 @@ module Beryl::Crypto::V1
     def self.select_affine(table : Pointer(AffinePoint), index : UInt64) : AffinePoint
       {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
         selected = uninitialized AffinePoint
-        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_aarch64_statement({{ bytesize // 8 * 2 }}, 16, 0,
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_vector_statement({{ bytesize // 8 * 2 }}, 16, 0,
           pointerof(selected), table, index)
         selected
       {% else %}
@@ -539,17 +593,28 @@ module Beryl::Crypto::V1
     # sum is infinity (handled by mask); otherwise 32·H >= 32 > |d_i| and
     # 32·H - d_i = H_i - 2·d_i lies strictly between 0 and n, so the two
     # operands are never equal.
+    #
+    # The top window starts the sum directly: doubling infinity five times
+    # and adding [d]P to it would give [d]P all the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
-      result = Point.neutral
-      (GENERATOR_WINDOW_COUNT - 1).downto(0) do |window_index|
+      multiples_pointer = pointerof(multiples).as(Point*)
+      result = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
+      (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         5.times { result = result.double }
-        digit, is_negative = booth_digit(scalar, window_index)
-        selected = select_multiple(pointerof(multiples).as(Point*), digit &- 1_u64)
-        selected = Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z)
-        selected = selected.replace_if(ConstantTimeSelection.equal_bit(digit, 0_u64), Point.neutral)
-        result = result.add(selected)
+        result = result.add(signed_multiple(scalar, window_index, multiples_pointer))
       end
       result
+    end
+
+    # Returns [d]P for the signed digit d of *scalar* at *window_index*,
+    # from the 16 points at *multiples*: the multiple picked by reading all 16, negated by mask when d < 0,
+    # and infinity (by mask) when d = 0.
+    @[AlwaysInline]
+    def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : Point
+      digit, is_negative = booth_digit(scalar, window_index)
+      selected = select_multiple(multiples, digit &- 1_u64)
+      selected = Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z)
+      selected.replace_if(ConstantTimeSelection.equal_bit(digit, 0_u64), Point.neutral)
     end
 
     # Returns the magnitude (0 to 16) and the sign (1 when negative) of the
@@ -740,8 +805,7 @@ module Beryl::Crypto::V1
     # The x coordinate of *point* reduced modulo n, outside the Montgomery
     # domain (the r of ECDSA).
     def self.x_coordinate_modulo_order(point : Point) : Limbs
-      x, _ = to_affine(point)
-      reduce_once_modulo_order(field_element_to_big_endian(x))
+      reduce_once_modulo_order(field_element_to_big_endian(to_affine_x(point)))
     end
 
     # Returns whether the x coordinate of the public *point* (not at
