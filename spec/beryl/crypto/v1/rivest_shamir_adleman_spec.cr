@@ -4,12 +4,29 @@ private alias RSA = Beryl::Crypto::V1::RSA
 private alias SHA1 = Beryl::Crypto::Compatibility::SHA1
 private alias SHA256 = Beryl::Crypto::V1::SHA256
 
-# A 2,048-bit key with all eight components, from a Wycheproof file.
-private def test_key_components : RsaKeyComponents::Components
-  test_file = Wycheproof::TestFile(Wycheproof::RsaOaepTestGroup).from_json(
-    VectorFile.read("wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json")
-  )
-  RsaKeyComponents.from_wycheproof(test_file.list_of_test_groups.first.private_key)
+# A 2,048-bit key with all eight components, from a Wycheproof file, read
+# when an example first needs it (a run filtered to other specs, such as a
+# differential, never reads the file).
+module RsaUnitSpecKey
+  class_getter components : RsaKeyComponents::Components do
+    test_file = Wycheproof::TestFile(Wycheproof::RsaOaepTestGroup).from_json(
+      VectorFile.read("wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json")
+    )
+    RsaKeyComponents.from_wycheproof(test_file.list_of_test_groups.first.private_key)
+  end
+  class_getter private_key : Beryl::Crypto::V1::RSA::PrivateKey { components.private_key }
+end
+
+private def components : RsaKeyComponents::Components
+  RsaUnitSpecKey.components
+end
+
+private def private_key : Beryl::Crypto::V1::RSA::PrivateKey
+  RsaUnitSpecKey.private_key
+end
+
+private def public_key : Beryl::Crypto::V1::RSA::PublicKey
+  RsaUnitSpecKey.private_key.public_key
 end
 
 private def private_key_with(components : RsaKeyComponents::Components, **changes) : RSA::PrivateKey
@@ -29,10 +46,6 @@ private def plus_two(bytes : Bytes) : Bytes
 end
 
 describe Beryl::Crypto::V1::RivestShamirAdleman do
-  components = test_key_components
-  private_key = components.private_key
-  public_key = private_key.public_key
-
   describe RSA::PublicKey do
     it "takes the public exponent as bytes or as an integer" do
       RSA::PublicKey.new(components.modulus, Bytes[0x01, 0x00, 0x01]).public_exponent.should eq(65_537_u64)
