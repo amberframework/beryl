@@ -34,6 +34,9 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     @public_exponent : UInt64
 
     @modulus : OddModulus
+    # R^e mod n, so that each private operation's check under the public
+    # exponent takes one multiplication fewer.
+    @public_exponent_correction : Slice(UInt64)
     @first_prime : OddModulus
     @second_prime : OddModulus
     @first_prime_exponent : Bytes
@@ -58,6 +61,7 @@ module Beryl::Crypto::V1::RivestShamirAdleman
                    second_prime_exponent : Bytes, coefficient : Bytes)
       @modulus = PublicKey.read_modulus(modulus, SMALLEST_MODULUS_BIT_COUNT, LARGEST_MODULUS_BIT_COUNT)
       @public_exponent = PublicKey.read_public_exponent(public_exponent)
+      @public_exponent_correction = @modulus.public_exponent_correction(@public_exponent)
       @modulus_bytesize = @modulus.bytesize
       @public_key = PublicKey.new(modulus, @public_exponent)
 
@@ -239,7 +243,7 @@ module Beryl::Crypto::V1::RivestShamirAdleman
           @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus)
 
         check_words = Slice(UInt64).new(word_count)
-        @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent)
+        @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent, @public_exponent_correction)
         is_correct = MontgomeryArithmetic.equal_bit(check_words, input_words) | (is_in_range ^ 1_u64)
         wipe_words(check_words)
         wipe_words(input_words)
