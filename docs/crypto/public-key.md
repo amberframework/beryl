@@ -2,7 +2,7 @@
 
 `Beryl::Crypto` implements these standards in Crystal. Nothing here calls OpenSSL or any other C library.
 
-Status: milestone B3 (make it work) of the Beryl cryptography plan, with the first portable speed work. Each section below lists the published vectors the code passes, its differential against OpenSSL, and its three constant-time checks. Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge.
+Status: milestone B3 (make it work) of the Beryl cryptography plan, and milestone F3 (speed: assembly field and RSA arithmetic on AArch64). Each section below lists the published vectors the code passes, its differential against OpenSSL, and its three constant-time checks. Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge.
 
 ## Elliptic curves
 
@@ -46,7 +46,7 @@ Bytes that are not a key raise `Beryl::Crypto::InvalidPublicKey` or `InvalidPriv
 ### How the code avoids leaking secrets
 
 - **Field arithmetic is fiat-crypto's** (machine-checked correct and branch-free): `scripts/generate_field_arithmetic.rb` translates fiat-crypto's pinned JSON output (commit `3d2880ef`, sha256 checked) into `src/beryl/crypto/field_arithmetic/`, and `--check` proves the files match. A program compares every translated function with fiat-crypto's own C on 100,000,000 inputs each.
-- **Field arithmetic in assembly** (milestone F3): on AArch64 the P-256 field (multiplication, squaring, addition, subtraction, negation), the P-256 group order and the P-384 field and order (multiplication and squaring) run in inline assembly written out by macros in `src/beryl/crypto/field_arithmetic/fields_in_assembly.cr`; on x86-64, P-256 multiplication does. Montgomery multiplication word by word has one result for every input, so the assembly must return fiat-crypto's output bit for bit, and the equality program checks that it does on the same 100,000,000 inputs per function (CI runs 1,000,000). The assembly has no branch and no address computed from data; `-Dberyl_portable_curves` builds fiat-crypto's code alone, and CI runs the suite both ways.
+- **Field arithmetic in assembly** (milestone F3): on AArch64 the P-256 field (multiplication, squaring, addition, subtraction, negation), the P-256 group order and the P-384 field and order (multiplication and squaring) run in inline assembly written out by macros in `src/beryl/crypto/field_arithmetic/fields_in_assembly.cr`; other processors, x86-64 among them, run fiat-crypto's code. (An x86-64 P-256 multiplication was tried and taken out: it matched fiat-crypto on its own, but ECDH built with `--release` gave wrong shared secrets in CI.) Montgomery multiplication word by word has one result for every input, so the assembly must return fiat-crypto's output bit for bit, and the equality program checks that it does on the same 100,000,000 inputs per function (CI runs 1,000,000). The assembly has no branch and no address computed from data; `-Dberyl_portable_curves` builds fiat-crypto's code alone, and CI runs the suite both ways.
 - **X25519** is the Montgomery ladder of RFC 7748 with a masked swap. Public keys come from the edwards25519 tables below, mapped by u = (Z + Y) / (Z - Y), which equals the ladder on u = 9.
 - **Ed25519** uses the complete addition formulas of RFC 8032, so no input takes a special branch; a secret scalar is processed four bits at a time and every table lookup reads all 16 entries.
 - **P-256 and P-384** use Jacobian coordinates (dbl-2001-b and add-1998-cmo-2 for a = -3), with infinity handled by masks. Those formulas are wrong only when both operands are the same point, and each constant-time caller shows that it never adds a point to itself: a secret scalar is written in signed 5-bit windows (Booth's recoding, as in OpenSSL's nistz256), and before window i is added the running sum is [32·H]P with 0 < 32·H − d < n, so the operands differ. Every table lookup reads all 16 entries with `csel`.
@@ -89,22 +89,22 @@ The slow suite (`--tag slow`) also runs the RFC 7748 iteration to 1,000,000 step
 
 ### Speed
 
-`bench/public_key_against_libcrypto.cr` against OpenSSL 4.1.0, on m4-mini-01 (Apple M4) with two reserved cores while other jobs ran beside it (a ten-core slot never came free): ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time, so both see the same load. Commit 9517d54.
+`bench/public_key_against_libcrypto.cr` against OpenSSL (the bench prints its version as 4.0.1), on m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time, so both see the same load. Milestone F3, commit b3c72ee, Data Independent Timing on.
 
 | Algorithm | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
 |---|---|---|---|---|---|---|
-| X25519 | key generation | 69197 | 60536 | 1.14× as fast | 1.14× as fast to 1.15× as fast | yes |
-| X25519 | shared secret | 51131 | 54040 | 1.057× slower | 1.057× slower to 1.057× slower | no |
-| Ed25519 | key generation | 68236 | 59619 | 1.14× as fast | 1.13× as fast to 1.15× as fast | yes |
-| Ed25519 | sign | 65136 | 60389 | 1.079× as fast | 1.077× as fast to 1.081× as fast | yes |
-| Ed25519 | verify | 34054 | 24682 | 1.38× as fast | 1.38× as fast to 1.38× as fast | yes |
-| P-256 | key generation | 50016 | 129564 | 2.6× slower | 2.63× slower to 2.59× slower | no |
-| P-256 ECDSA | sign | 31198 | 83249 | 2.66× slower | 2.67× slower to 2.66× slower | no |
-| P-256 ECDSA | verify | 11153 | 29580 | 2.65× slower | 2.65× slower to 2.65× slower | no |
-| P-256 ECDH | shared secret | 13756 | 40517 | 2.95× slower | 2.95× slower to 2.95× slower | no |
-| P-384 ECDSA | verify | 3583 | 4828 | 1.35× slower | 1.35× slower to 1.35× slower | no |
+| X25519 | key generation | 72159 | 62854 | 1.15× as fast | 1.15× as fast to 1.15× as fast | yes |
+| X25519 | shared secret | 54439 | 55109 | 1.013× slower | 1.014× slower to 1.012× slower | no |
+| Ed25519 | key generation | 71756 | 61908 | 1.16× as fast | 1.16× as fast to 1.16× as fast | yes |
+| Ed25519 | sign | 67827 | 62245 | 1.088× as fast | 1.085× as fast to 1.091× as fast | yes |
+| Ed25519 | verify | 34522 | 24954 | 1.38× as fast | 1.38× as fast to 1.38× as fast | yes |
+| P-256 | key generation | 189622 | 132884 | 1.43× as fast | 1.42× as fast to 1.43× as fast | yes |
+| P-256 ECDSA | sign | 83198 | 89264 | 1.074× slower | 1.074× slower to 1.072× slower | no |
+| P-256 ECDSA | verify | 33757 | 30808 | 1.096× as fast | 1.095× as fast to 1.097× as fast | yes |
+| P-256 ECDH | shared secret | 37323 | 41159 | 1.1× slower | 1.1× slower to 1.1× slower | no |
+| P-384 ECDSA | verify | 6856 | 4870 | 1.41× as fast | 1.41× as fast to 1.41× as fast | yes |
 
-Ed25519 and X25519 key generation run on the precomputed tables and are faster than OpenSSL; Ed25519 verification is too. X25519 key agreement is within 6%. P-256 is about 2.6 to 3 times slower: OpenSSL runs P-256 on hand-written Arm assembly (nistz256), and Beryl's field multiplication is fiat-crypto's portable code. Closing that gap (a P-256 field in assembly or in 52-bit limbs, a wider window for verification) is the next speed milestone. P-384 verification is 1.35 times slower.
+Before milestone F3, P-256 ran 2.5 to 3 times slower and P-384 verification 1.35 times slower. With the field in assembly, Jacobian coordinates and Booth windows, P-256 key generation is now 1.43 times as fast as OpenSSL, ECDSA verification 1.096 times as fast and P-384 verification 1.41 times as fast. P-256 signing (1.074 times slower) and ECDH (1.1 times slower) are still behind OpenSSL's nistz256 assembly, as is X25519 key agreement (1.013 times slower). Ed25519 and X25519 key generation and Ed25519 signing and verification are faster than OpenSSL.
 
 ## RSA
 
@@ -218,27 +218,27 @@ The Wycheproof files that carry private keys (`rsa_oaep_*`, `rsa_pkcs1_*_sig_gen
 
 ### Speed
 
-`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL 4.1.0, in the same way as the cipher bench. On m4-mini-01 (Apple M4, two reserved cores on a shared machine, commit 9517d54), ten rounds of 2 s per arm:
+`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL (version 4.0.1 as the bench prints it), in the same way as the cipher bench. On m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run, milestone F3 commit b3c72ee, ten rounds of 2 s per arm:
 
 | Key | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
 |---|---|---|---|---|---|---|
-| RSA-2048 | PKCS#1 v1.5 sign | 1737.9 | 3095.9 | 1.78× slower | 1.78× slower to 1.78× slower | no |
-| RSA-2048 | PSS sign | 1736.4 | 3095.5 | 1.78× slower | 1.78× slower to 1.78× slower | no |
-| RSA-2048 | PKCS#1 v1.5 verify | 58783.7 | 115558.9 | 1.97× slower | 1.97× slower to 1.96× slower | no |
-| RSA-2048 | PSS verify | 57106.6 | 110493.3 | 1.94× slower | 1.94× slower to 1.93× slower | no |
-| RSA-2048 | OAEP encrypt | 56658.0 | 109728.8 | 1.94× slower | 1.95× slower to 1.91× slower | no |
-| RSA-2048 | OAEP decrypt | 1667.6 | 2965.7 | 1.78× slower | 1.78× slower to 1.75× slower | no |
-| RSA-3072 | PKCS#1 v1.5 sign | 510.1 | 1070.9 | 2.1× slower | 2.11× slower to 2.08× slower | no |
-| RSA-3072 | PSS sign | 502.2 | 1052.9 | 2.1× slower | 2.1× slower to 2.1× slower | no |
-| RSA-3072 | PKCS#1 v1.5 verify | 25751.7 | 53731.3 | 2.09× slower | 2.17× slower to 2.07× slower | no |
-| RSA-3072 | PSS verify | 24990.1 | 51478.6 | 2.06× slower | 2.07× slower to 2.01× slower | no |
-| RSA-3072 | OAEP encrypt | 24855.3 | 51121.2 | 2.05× slower | 2.07× slower to 2.0× slower | no |
-| RSA-3072 | OAEP decrypt | 477.4 | 995.9 | 2.09× slower | 2.09× slower to 2.09× slower | no |
-| RSA-4096 | PKCS#1 v1.5 sign | 212.1 | 469.2 | 2.21× slower | 2.22× slower to 2.19× slower | no |
-| RSA-4096 | PSS sign | 203.8 | 449.8 | 2.21× slower | 2.22× slower to 2.18× slower | no |
-| RSA-4096 | PKCS#1 v1.5 verify | 14687.9 | 31532.6 | 2.14× slower | 2.15× slower to 2.14× slower | no |
-| RSA-4096 | PSS verify | 14501.2 | 30851.0 | 2.13× slower | 2.2× slower to 2.12× slower | no |
-| RSA-4096 | OAEP encrypt | 14374.5 | 30529.2 | 2.12× slower | 2.13× slower to 2.11× slower | no |
-| RSA-4096 | OAEP decrypt | 214.9 | 475.3 | 2.21× slower | 2.22× slower to 2.18× slower | no |
+| RSA-2048 | PKCS#1 v1.5 sign | 3240.4 | 3032.4 | 1.069× as fast | 1.068× as fast to 1.069× as fast | yes |
+| RSA-2048 | PSS sign | 3239.6 | 3018.9 | 1.073× as fast | 1.073× as fast to 1.074× as fast | yes |
+| RSA-2048 | PKCS#1 v1.5 verify | 77418.2 | 116139.2 | 1.5× slower | 1.5× slower to 1.5× slower | no |
+| RSA-2048 | PSS verify | 74343.5 | 110651.5 | 1.49× slower | 1.49× slower to 1.49× slower | no |
+| RSA-2048 | OAEP encrypt | 73874.6 | 109943.9 | 1.49× slower | 1.49× slower to 1.49× slower | no |
+| RSA-2048 | OAEP decrypt | 3239.4 | 3005.5 | 1.078× as fast | 1.077× as fast to 1.078× as fast | yes |
+| RSA-3072 | PKCS#1 v1.5 sign | 686.5 | 1039.5 | 1.51× slower | 1.51× slower to 1.51× slower | no |
+| RSA-3072 | PSS sign | 686.4 | 1039.1 | 1.51× slower | 1.51× slower to 1.51× slower | no |
+| RSA-3072 | PKCS#1 v1.5 verify | 35212.5 | 55510.9 | 1.58× slower | 1.58× slower to 1.57× slower | no |
+| RSA-3072 | PSS verify | 34326.9 | 53836.7 | 1.57× slower | 1.57× slower to 1.57× slower | no |
+| RSA-3072 | OAEP encrypt | 34123.9 | 53587.1 | 1.57× slower | 1.57× slower to 1.57× slower | no |
+| RSA-3072 | OAEP decrypt | 686.2 | 1037.2 | 1.51× slower | 1.51× slower to 1.51× slower | no |
+| RSA-4096 | PKCS#1 v1.5 sign | 294.5 | 477.5 | 1.62× slower | 1.62× slower to 1.62× slower | no |
+| RSA-4096 | PSS sign | 294.4 | 477.2 | 1.62× slower | 1.62× slower to 1.62× slower | no |
+| RSA-4096 | PKCS#1 v1.5 verify | 20005.5 | 32529.6 | 1.63× slower | 1.63× slower to 1.63× slower | no |
+| RSA-4096 | PSS verify | 19645.8 | 31611.8 | 1.61× slower | 1.61× slower to 1.61× slower | no |
+| RSA-4096 | OAEP encrypt | 19578.3 | 31562.1 | 1.61× slower | 1.61× slower to 1.61× slower | no |
+| RSA-4096 | OAEP decrypt | 294.4 | 476.5 | 1.62× slower | 1.62× slower to 1.62× slower | no |
 
-RSA runs about 1.8 times slower at 2,048 bits and 2.1 to 2.2 times slower at 3,072 and 4,096 bits; the private operation also runs under Data Independent Timing and checks its result with the public exponent before releasing it.
+Milestone F3 moved RSA's Montgomery multiplication, squaring and table selection into AArch64 assembly. RSA-2048 private operations (signing, OAEP decryption) are now 1.07 to 1.08 times as fast as OpenSSL, up from 1.7 times slower. Public operations at 2,048 bits are 1.5 times slower (from 1.95), and every operation at 3,072 and 4,096 bits is 1.5 to 1.63 times slower (from 2.0 to 2.2). The private operation runs under Data Independent Timing and checks its result with the public exponent before releasing it.

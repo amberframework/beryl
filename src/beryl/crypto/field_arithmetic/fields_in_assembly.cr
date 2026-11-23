@@ -7,11 +7,16 @@ module Beryl::Crypto::FieldArithmetic
   # :nodoc:
   #
   # Montgomery multiplication, squaring, addition and subtraction written in
-  # assembly for AArch64 and x86-64, for the prime-order curves (milestone
+  # AArch64 assembly, for the prime-order curves (milestone
   # F3 of plans/BERYL_TLS_CRYPTO.md). The fiat-crypto translations are
   # correct and constant time, but LLVM compiles their carry chains through
   # 128-bit integers into about twice the instructions a hand-written chain
-  # of `adds`/`adcs` (or `add`/`adc`) needs.
+  # of `adds`/`adcs` needs. Other processors (x86-64 among them) run the
+  # fiat-crypto translations. (An x86-64 P-256 multiplication in
+  # `mulq`/`adcq` matched fiat-crypto on its own, 100 million random inputs
+  # under Rosetta, yet ECDH built with --release gave wrong shared secrets
+  # where a debug build did not; it was taken out of milestone F3 until
+  # that is understood.)
   #
   # Each function returns exactly what the fiat-crypto function of the same
   # name returns, for every input inside fiat-crypto's input bounds (every
@@ -26,15 +31,14 @@ module Beryl::Crypto::FieldArithmetic
   # the same integer, and so is the result.
   #
   # Constant time: the assembly has no branch and no memory address computed
-  # from data; a result is chosen with `csel` (AArch64) or `cmovnc` (x86-64),
-  # which do not branch. `mul`, `umulh` and `mulq` take a fixed time on the
-  # processors Beryl supports (with Data Independent Timing on, on Arm).
+  # from data; a result is chosen with `csel`, which does not branch. `mul`
+  # and `umulh` take a fixed time with Data Independent Timing on.
   # `scripts/check_secret_flow.rb` checks the text of every statement.
   #
   # -Dberyl_portable_curves builds the fiat-crypto translations alone, as CI
   # does once to keep that path tested.
   module FieldsInAssembly
-    {% if (flag?(:aarch64) || flag?(:x86_64)) && !flag?(:beryl_portable_curves) %}
+    {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
       AVAILABLE = true
     {% else %}
       AVAILABLE = false
@@ -217,98 +221,6 @@ module Beryl::Crypto::FieldArithmetic
                                    "r"({{ second_factor }}.unsafe_fetch(0)), "r"({{ second_factor }}.unsafe_fetch(1)), "r"({{ second_factor }}.unsafe_fetch(2)), "r"({{ second_factor }}.unsafe_fetch(3))
                                  : "cc")
       StaticArray[product_0, product_1, product_2, product_3]
-    end
-
-    # The text of an x86-64 Montgomery multiplication modulo the P-256 prime
-    # on memory: $0 points at the result, $1 at a, $2 at b. The product
-    # words live in r8 to r15; rax, rdx and rcx are scratch. The reduction
-    # is the one described for AArch64.
-    macro p256_x86_64_statement(result, a, b)
-      {%
-        product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
-        lines = [] of StringLiteral
-        lines << "movq 0($1), %rax"
-        lines << "mulq 0($2)"
-        lines << "movq %rax, #{product[0].id}"
-        lines << "movq %rdx, #{product[1].id}"
-      %}
-      {% for column in 1..3 %}
-        {%
-          lines << "movq 0($1), %rax"
-          lines << "mulq #{8 * column}($2)"
-          lines << "addq %rax, #{product[column].id}"
-          lines << "adcq $$0, %rdx"
-          lines << "movq %rdx, #{product[column + 1].id}"
-        %}
-      {% end %}
-      {% for row in 1..3 %}
-        {%
-          lines << "movq #{8 * row}($1), %rax"
-          lines << "mulq 0($2)"
-          lines << "addq %rax, #{product[row].id}"
-          lines << "adcq $$0, %rdx"
-          lines << "movq %rdx, %rcx"
-        %}
-        {% for column in 1..3 %}
-          {%
-            lines << "movq #{8 * row}($1), %rax"
-            lines << "mulq #{8 * column}($2)"
-            lines << "addq %rcx, %rax"
-            lines << "adcq $$0, %rdx"
-            lines << "addq %rax, #{product[row + column].id}"
-            lines << "adcq $$0, %rdx"
-            lines << "movq %rdx, %rcx"
-          %}
-        {% end %}
-        {% lines << "movq %rcx, #{product[row + 4].id}" %}
-      {% end %}
-      {% low = [product[0], product[1], product[2], product[3]] %}
-      {% for step in 0..3 %}
-        {%
-          word = low[0]
-          lines << "movq #{word.id}, %rax"
-          lines << "shlq $$32, %rax"
-          lines << "movq #{word.id}, %rdx"
-          lines << "shrq $$32, %rdx"
-          lines << "movq #{word.id}, %rcx"
-          lines << "subq %rax, %rcx"
-          lines << "sbbq %rdx, #{word.id}"
-          lines << "addq %rax, #{low[1].id}"
-          lines << "adcq %rdx, #{low[2].id}"
-          lines << "adcq %rcx, #{low[3].id}"
-          lines << "adcq $$0, #{word.id}"
-          low = [low[1], low[2], low[3], low[0]]
-        %}
-      {% end %}
-      {%
-        lines << "addq #{product[4].id}, #{product[0].id}"
-        lines << "adcq #{product[5].id}, #{product[1].id}"
-        lines << "adcq #{product[6].id}, #{product[2].id}"
-        lines << "adcq #{product[7].id}, #{product[3].id}"
-        lines << "movl $$0, %ecx"
-        lines << "adcq $$0, %rcx"
-      %}
-      {% for index in 0..3 %}
-        {% lines << "movq #{product[index].id}, #{product[index + 4].id}" %}
-      {% end %}
-      {%
-        lines << "movl $$0xffffffff, %eax"
-        lines << "movabsq $$0xffffffff00000001, %rdx"
-        lines << "subq $$-1, #{product[4].id}"
-        lines << "sbbq %rax, #{product[5].id}"
-        lines << "sbbq $$0, #{product[6].id}"
-        lines << "sbbq %rdx, #{product[7].id}"
-        lines << "sbbq $$0, %rcx"
-      %}
-      {% for index in 0..3 %}
-        {% lines << "cmovncq #{product[index + 4].id}, #{product[index].id}" %}
-      {% end %}
-      {% for index in 0..3 %}
-        {% lines << "movq #{product[index].id}, #{8 * index}($0)" %}
-      {% end %}
-      asm({{ lines.join("\n") }}
-        :: "r"(pointerof({{ result }})), "r"(pointerof({{ a }})), "r"(pointerof({{ b }}))
-        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "cc")
     end
 
     # The text of an AArch64 Montgomery multiplication modulo any odd
@@ -560,32 +472,6 @@ module Beryl::Crypto::FieldArithmetic
       @[AlwaysInline]
       def self.opp(a : Limbs) : Limbs
         sub(Limbs.new(0_u64), a)
-      end
-    {% elsif flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
-      def self.mul(a : Limbs, b : Limbs) : Limbs
-        result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_statement(result, a, b)
-        result
-      end
-
-      @[AlwaysInline]
-      def self.square(a : Limbs) : Limbs
-        mul(a, a)
-      end
-
-      @[AlwaysInline]
-      def self.add(a : Limbs, b : Limbs) : Limbs
-        P256Field.add(a, b)
-      end
-
-      @[AlwaysInline]
-      def self.sub(a : Limbs, b : Limbs) : Limbs
-        P256Field.sub(a, b)
-      end
-
-      @[AlwaysInline]
-      def self.opp(a : Limbs) : Limbs
-        P256Field.opp(a)
       end
     {% else %}
       @[AlwaysInline]

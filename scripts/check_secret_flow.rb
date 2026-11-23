@@ -111,7 +111,6 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
   lsl lsr subs sbcs sbc csel cmp
-  movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
