@@ -17,6 +17,8 @@ Status: design in progress. The integration plan lives with the Amber maintainer
 
 Available now (milestones B1 and B2, and F1 and F2 for speed): SHA-224, SHA-256, SHA-384, SHA-512 and SHA-512/256; HMAC; HKDF; authenticated encryption with XChaCha20-Poly1305, ChaCha20-Poly1305 and AES-GCM; and, for formats that already exist, MD5, SHA-1, PBKDF2 and AES-CBC. The hashes and ciphers run on the processor's own SHA, AES, carry-less multiply and vector instructions on Apple Silicon, Linux AArch64 and x86-64, and on portable code everywhere else. Measured against OpenSSL 4.1.0 on an Apple M1 Max, all 42 hash and HMAC measurements (64 B, 1 KiB and 1 MiB) and all 32 authenticated-encryption measurements (sealing and opening at 64 B, 1 KiB, 16 KiB and 1 MiB) are at least as fast, with the whole 95% interval on that side; the tables are in the documents below.
 
+Public-key cryptography (milestone B3): X25519, Ed25519, ECDSA and ECDH on P-256, ECDSA verification on P-384, and RSA (PKCS #1 v1.5 and PSS signatures, OAEP) at 2,048 to 4,096 bits. Against OpenSSL 4.1.0, Ed25519 and X25519 are about as fast or faster; P-256 and RSA are still slower (about 2 to 3 times), and [docs/crypto/public-key.md](docs/crypto/public-key.md) states each measured ratio.
+
 ```crystal
 require "beryl"
 
@@ -26,9 +28,12 @@ Beryl::Crypto.verify_authentication("message", tag, key: secret_key)   # => true
 Beryl::Crypto.derive_key(shared_secret, info: "cookies", bytesize: 32) # HKDF-SHA256
 sealed = Beryl::Crypto.encrypt("message", key: key_of_32_bytes)         # XChaCha20-Poly1305
 Beryl::Crypto.decrypt(sealed, key: key_of_32_bytes)                    # => Bytes, or nil if changed
+signing_key = Beryl::Crypto.generate_signing_key                         # Ed25519
+signature = Beryl::Crypto.sign("message", signing_key: signing_key)
+Beryl::Crypto.verify_signature("message", signature, verification_key: signing_key.verification_key) # => true
 ```
 
-The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones. See [docs/crypto/hashes-and-macs.md](docs/crypto/hashes-and-macs.md) and [docs/crypto/ciphers-and-aeads.md](docs/crypto/ciphers-and-aeads.md) for the full list, the test vectors, how to run each check and the measured speed against OpenSSL.
+The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones. See [docs/crypto/hashes-and-macs.md](docs/crypto/hashes-and-macs.md) [docs/crypto/ciphers-and-aeads.md](docs/crypto/ciphers-and-aeads.md) and [docs/crypto/public-key.md](docs/crypto/public-key.md) for the full list, the test vectors, how to run each check and the measured speed against OpenSSL.
 
 ## Development
 
@@ -38,9 +43,11 @@ crystal-alpha spec                                 # unit specs and every publis
 crystal-alpha spec -Dberyl_portable_hashes         # the same, on the portable hashes alone
 crystal-alpha spec -Dberyl_portable_ciphers        # the same, on the portable ciphers alone
 crystal-alpha spec --release --tag differential    # against libcrypto, random inputs
-crystal-alpha spec --release --tag constant_time   # timing checks of the hashes and ciphers
+crystal-alpha spec --release --tag constant_time   # timing checks of the hashes, ciphers and curves
 /usr/bin/ruby scripts/check_secret_flow.rb FILE.ll # compiled-code check (see docs/crypto/hashes-and-macs.md)
 /usr/bin/ruby scripts/fetch_vectors.rb             # re-download the vectors and check their pins
+/usr/bin/ruby scripts/fetch_vectors.rb --missing   # install the vectors kept out of git (once, after cloning)
+/usr/bin/ruby scripts/generate_field_arithmetic.rb --check # the field arithmetic is fiat-crypto pinned output
 ```
 
 ## License

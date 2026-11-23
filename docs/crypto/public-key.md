@@ -4,6 +4,91 @@
 
 Status: milestone B3 (make it work) of the Beryl cryptography plan, with the first portable speed work. Each section below lists the published vectors the code passes, its differential against OpenSSL, and its three constant-time checks. Those gates, not an outside audit, decide when Beryl becomes a default, and every pull request must pass them to merge.
 
+## Elliptic curves
+
+| Name | Module | Operations | Standard |
+|---|---|---|---|
+| `X25519` | `DiffieHellmanOverCurve25519` | key agreement | RFC 7748 |
+| `Ed25519` | `EdwardsCurveSignaturesOverCurve25519` | signing and verification (pure Ed25519) | RFC 8032 |
+| `P256` | `EllipticCurveP256` | ECDSA signing (RFC 6979 nonces) and verification, ECDH | FIPS 186-5, SP 800-186, RFC 6979, SEC 1 |
+| `P384` | `EllipticCurveP384` | ECDSA verification | FIPS 186-5, SP 800-186 |
+
+```crystal
+require "beryl"
+
+# The recommended choices: Ed25519 to sign, X25519 to agree on a secret.
+signing_key = Beryl::Crypto.generate_signing_key
+signature = Beryl::Crypto.sign("a message", signing_key: signing_key)
+Beryl::Crypto.verify_signature("a message", signature, verification_key: signing_key.verification_key) # => true
+
+alice = Beryl::Crypto.generate_key_agreement_key
+bob = Beryl::Crypto.generate_key_agreement_key
+Beryl::Crypto.agree_on_shared_secret(alice, bob.public_key) # => 32 bytes, or nil for a peer key of small order
+
+# P-256, for TLS and certificates. Signatures are DER by default; FixedWidth is r || s (COSE, JOSE, WebCrypto).
+alias P256 = Beryl::Crypto::V1::P256
+private_key = P256::PrivateKey.generate
+der_signature = private_key.sign("a message")
+private_key.public_key.verify("a message", der_signature) # => true
+P256::PublicKey.new(private_key.public_key.to_compressed)   # SEC 1 points, compressed or uncompressed
+```
+
+Bytes that are not a key raise `Beryl::Crypto::InvalidPublicKey` or `InvalidPrivateKey`; a key of the wrong length raises `KeySizeMismatch`. Verification returns `false` for any signature it does not accept, including malformed encodings.
+
+### Choices that differ from some other libraries
+
+- **Ed25519 verification is cofactorless and strict:** S must be below L, A and R must be canonical encodings (y < p). The check is encode([S]B + [k](-A)) == R, negating the point as ref10 and OpenSSL do, so a key with a small-order component gets the same verdict as in OpenSSL on every Wycheproof case.
+- **ECDSA signatures are strict DER:** short length forms only, minimal positive INTEGERs, nothing after the SEQUENCE.
+- **Hybrid points (prefix 0x06 or 0x07) are refused**, as RFC 5480 §2.2 requires; OpenSSL reads them. The differential checks that Beryl refuses each one and that OpenSSL's verdict equals Beryl's on the same point written uncompressed.
+- **P-256 signing is deterministic** (RFC 6979 with HMAC over the curve's hash), so a broken random source cannot leak the key through a repeated nonce.
+- **P-384 is verification only** (certificate chains need it); signing waits for a user.
+
+### How the code avoids leaking secrets
+
+- **Field arithmetic is fiat-crypto's** (machine-checked correct and branch-free): `scripts/generate_field_arithmetic.rb` translates fiat-crypto's pinned JSON output (commit `3d2880ef`, sha256 checked) into `src/beryl/crypto/field_arithmetic/`, and `--check` proves the files match. A program compares every translated function with fiat-crypto's own C on 100,000,000 inputs each.
+- **X25519** is the Montgomery ladder of RFC 7748 with a masked swap. Public keys come from the edwards25519 tables below, mapped by u = (Z + Y) / (Z - Y), which equals the ladder on u = 9.
+- **Ed25519 and the P-curves** use complete addition formulas (RFC 8032 for edwards25519; Renes, Costello and Batina 2016 for a = -3), so no input takes a special branch. A secret scalar is processed four bits at a time and every table lookup reads all 16 entries.
+- **Fixed-base multiplication** ([k]G, [k]B) uses one precomputed table per 4-bit window, so it needs 64 additions and no doubling, with the same full scan.
+- **Data Independent Timing:** on Apple M4, an X25519 multiplication by a scalar with few set bits ran measurably faster than by a random scalar (|t| up to 25), though the compiled ladder has no branch or index on the scalar. Arm allows that unless the processor's DIT mode is on. Every operation on a private key (and RSA's private operation) now runs inside `DataIndependentTiming.run`, which turns the mode on where the processor has it and restores it afterward; with it on, every case is clean.
+- **Verification is variable time on purpose:** its inputs are public.
+
+### How it is tested
+
+#### Published vectors: 2,957 cases
+
+| Algorithm | NIST CAVP | RFC | Wycheproof | Total |
+|---|---|---|---|---|
+| X25519 | | 5 | 518 | 523 |
+| Ed25519 | | 5 | 210 | 215 |
+| P-256 ECDH | | | 355 | 355 |
+| P-256 ECDSA | 157 | 10 | 746 | 913 |
+| P-384 ECDSA | 157 | 10 | 784 | 951 |
+
+The slow suite (`--tag slow`) also runs the RFC 7748 iteration to 1,000,000 steps. Every Wycheproof `valid` case is accepted and every `invalid` case refused; `acceptable` cases are printed with the decision taken. Two Wycheproof files (`x25519_test.json`, `ecdh_secp256r1_ecpoint_test.json`) carry private-key fields that match the commit secret scan, so they are not committed; `scripts/fetch_vectors.rb --missing` installs them and checks their sha256.
+
+#### Differential against OpenSSL
+
+`spec/differential/libcrypto_curve_differential_spec.cr`, against OpenSSL 4.1.0 on the build Mac and against the runner's OpenSSL on every pull request (x86-64 and AArch64):
+
+| Algorithm | Cases | Altered cases | Mismatches |
+|---|---|---|---|
+| X25519 | 1,000,000 (public key and shared secret each) | | 0 |
+| Ed25519 | 200,000 (key, signature, verdict) | 200,000 | 0 |
+| P-256 ECDH | 200,000 | altered points | 0 |
+| P-256 ECDSA | 200,000 (each side verifies the other) | 200,000 | 0 |
+| P-384 ECDSA | 200,000 | 200,000 | 0 |
+| Wycheproof, X25519 and Ed25519 | every case | | same verdict as OpenSSL |
+
+#### Constant time, three methods
+
+- **Timing** (`spec/constant_time/public_key_timing_spec.cr`, dudect method, |t| below 4.5): X25519 multiplication and public key, Ed25519 key derivation and signing, P-256 generator and shared-secret multiplication, signing and the RFC 6979 nonce, each under a fixed secret (all zero, or 1) against random secrets. 1,000,000 measurements per class on the build Mac; CI runs 100,000.
+- **Memory checker** (`spec/probes/secret_taint.cr` under Valgrind): the keys, seeds and scalars are undefined memory; Memcheck reports any branch or address computed from them. The points where a verdict or a signature is meant to become public tell Memcheck so.
+- **Compiled code** (`scripts/check_secret_flow.rb` on the optimized LLVM IR): secrets passed by value (limbs, points) are followed as well as those in buffers; a planted table lookup indexed by a limb must be reported.
+
+### Speed
+
+SPEED_TABLE_PLACEHOLDER
+
 ## RSA
 
 `Beryl::Crypto::V1::RivestShamirAdleman` (`RSA` for short) implements RFC 8017: PKCS #1 v1.5 signatures (§8.2), PSS signatures (§8.1) and OAEP encryption (§7.1). TLS and certificates need the signatures; MySQL's `caching_sha2_password` encrypts the password with OAEP over SHA-1.
