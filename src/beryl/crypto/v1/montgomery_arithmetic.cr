@@ -143,46 +143,72 @@ module Beryl::Crypto::V1
     # still reduces to below the modulus). *result* may be *a* or *b*.
     # *scratch* holds at least `modulus.size + 2` words.
     #
-    # Coarsely integrated operand scanning: for each word of *b*, add a·b[i]
-    # to the accumulator, then add the multiple of the modulus that clears
-    # its low word and shift it down a word. The accumulator stays below
-    # twice the modulus, so one subtraction, kept or dropped by mask,
-    # finishes the reduction.
     def self.multiply(result : Slice(UInt64), a : Slice(UInt64), b : Slice(UInt64), modulus : Slice(UInt64),
                       negated_inverse : UInt64, scratch : Slice(UInt64)) : Nil
-      word_count = modulus.size
-      accumulator = scratch.to_unsafe
-      a_pointer = a.to_unsafe
-      b_pointer = b.to_unsafe
-      modulus_pointer = modulus.to_unsafe
-      (word_count + 2).times { |index| accumulator[index] = 0_u64 }
-
-      word_count.times do |outer|
-        b_word = b_pointer[outer].to_u128
-        carry = 0_u64
-        word_count.times do |inner|
-          product = a_pointer[inner].to_u128 &* b_word &+ accumulator[inner].to_u128 &+ carry.to_u128
-          accumulator[inner] = product.to_u64!
-          carry = (product >> 64).to_u64!
-        end
-        sum = accumulator[word_count].to_u128 &+ carry.to_u128
-        accumulator[word_count] = sum.to_u64!
-        accumulator[word_count + 1] = (sum >> 64).to_u64!
-
-        factor = (accumulator[0] &* negated_inverse).to_u128
-        product = modulus_pointer[0].to_u128 &* factor &+ accumulator[0].to_u128
-        carry = (product >> 64).to_u64!
-        (1...word_count).each do |inner|
-          product = modulus_pointer[inner].to_u128 &* factor &+ accumulator[inner].to_u128 &+ carry.to_u128
-          accumulator[inner - 1] = product.to_u64!
-          carry = (product >> 64).to_u64!
-        end
-        sum = accumulator[word_count].to_u128 &+ carry.to_u128
-        accumulator[word_count - 1] = sum.to_u64!
-        accumulator[word_count] = accumulator[word_count + 1] &+ (sum >> 64).to_u64!
+      result_pointer, a_pointer, b_pointer = result.to_unsafe, a.to_unsafe, b.to_unsafe
+      modulus_pointer, accumulator = modulus.to_unsafe, scratch.to_unsafe
+      {% begin %}
+      case modulus.size
+      {% for word_count in SPECIALIZED_WORD_COUNTS %}
+      when {{ word_count }}
+        multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator)
+      {% end %}
+      else
+        multiply_any(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator, modulus.size)
       end
+      {% end %}
+    end
 
-      subtract_modulus_when_not_below(result, Slice.new(accumulator, word_count), accumulator[word_count], modulus)
+    # The word counts of the moduli and primes of 2,048, 3,072 and 4,096-bit
+    # keys. A copy of the multiplication is compiled for each, so that the
+    # word count is a constant the optimizer can unroll the loops by.
+    SPECIALIZED_WORD_COUNTS = [16, 24, 32, 48, 64]
+
+    # The body of a Montgomery multiplication on raw word pointers, for
+    # *word_count* words (a constant in each specialized copy).
+    #
+    # Finely integrated operand scanning: for each word of *b*, one pass
+    # adds a·b[i] and u·m to the accumulator and shifts it down a word,
+    # where u = (t[0] + a[0]·b[i])·(-m⁻¹) mod 2^64 clears the low word. The
+    # accumulator stays below twice the modulus (n words and one bit), so
+    # one subtraction, kept or dropped by mask, finishes the reduction.
+    private macro montgomery_multiplication_body(word_count)
+      {{ word_count }}.times { |index| accumulator[index] = 0_u64 }
+      high_bit = 0_u64
+      {{ word_count }}.times do |outer|
+        b_word = b_pointer[outer].to_u128
+        product = a_pointer[0].to_u128 &* b_word &+ accumulator[0].to_u128
+        product_carry = (product >> 64).to_u64!
+        factor = (product.to_u64! &* negated_inverse).to_u128
+        reduction = modulus_pointer[0].to_u128 &* factor &+ product.to_u64!.to_u128
+        reduction_carry = (reduction >> 64).to_u64!
+        (1...{{ word_count }}).each do |inner|
+          product = a_pointer[inner].to_u128 &* b_word &+ accumulator[inner].to_u128 &+ product_carry.to_u128
+          product_carry = (product >> 64).to_u64!
+          reduction = modulus_pointer[inner].to_u128 &* factor &+ product.to_u64!.to_u128 &+ reduction_carry.to_u128
+          accumulator[inner - 1] = reduction.to_u64!
+          reduction_carry = (reduction >> 64).to_u64!
+        end
+        top = high_bit.to_u128 &+ product_carry.to_u128 &+ reduction_carry.to_u128
+        accumulator[{{ word_count }} - 1] = top.to_u64!
+        high_bit = (top >> 64).to_u64!
+      end
+      subtract_modulus_when_not_below(Slice.new(result_pointer, {{ word_count }}), Slice.new(accumulator, {{ word_count }}),
+        high_bit, Slice.new(modulus_pointer, {{ word_count }}))
+    end
+
+    {% for word_count in SPECIALIZED_WORD_COUNTS %}
+      # :nodoc:
+      def self.multiply_{{ word_count }}(result_pointer : UInt64*, a_pointer : UInt64*, b_pointer : UInt64*, modulus_pointer : UInt64*,
+                                         negated_inverse : UInt64, accumulator : UInt64*) : Nil
+        montgomery_multiplication_body({{ word_count }})
+      end
+    {% end %}
+
+    # :nodoc:
+    def self.multiply_any(result_pointer : UInt64*, a_pointer : UInt64*, b_pointer : UInt64*, modulus_pointer : UInt64*,
+                          negated_inverse : UInt64, accumulator : UInt64*, word_count : Int32) : Nil
+      montgomery_multiplication_body(word_count)
     end
 
     # Sets *result* to *value* minus *modulus* when the number made of
@@ -241,7 +267,7 @@ module Beryl::Crypto::V1
     # modulo the modulus 64n + n times, giving R·2^n mod m, and six
     # Montgomery squarings take R·2^a to R·2^(2a) each, ending at
     # R·2^(64n) = R² mod m. The modulus must be odd and above 1.
-    # *scratch* holds `modulus.size + 2` words.
+    # *scratch* holds `2 * modulus.size` words.
     def self.compute_r_squared(result : Slice(UInt64), modulus : Slice(UInt64), negated_inverse : UInt64,
                                scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
@@ -291,7 +317,7 @@ module Beryl::Crypto::V1
 
     # The number of words of scratch `exponentiate` needs.
     def self.exponentiation_scratch_word_count(word_count : Int32) : Int32
-      TABLE_ENTRY_COUNT * word_count + 2 * word_count + 2
+      TABLE_ENTRY_COUNT * word_count + 3 * word_count
     end
 
     # Sets *result* to base^exponent·R mod *modulus* (the Montgomery form
@@ -306,7 +332,7 @@ module Beryl::Crypto::V1
       word_count = modulus.size
       table = scratch[0, TABLE_ENTRY_COUNT * word_count]
       selected = scratch[TABLE_ENTRY_COUNT * word_count, word_count]
-      multiplication_scratch = scratch[TABLE_ENTRY_COUNT * word_count + word_count, word_count + 2]
+      multiplication_scratch = scratch[TABLE_ENTRY_COUNT * word_count + word_count, 2 * word_count]
 
       # table[0] = R mod m (one, in Montgomery form), table[1] = base,
       # table[i] = table[i - 1]·base.
@@ -363,13 +389,13 @@ module Beryl::Crypto::V1
     # Sets *result* to base^exponent mod *modulus* for a public *exponent*
     # (an RSA public exponent), by left-to-right square and multiply. Its
     # time depends on the exponent's bits, which are public, and not on
-    # the base. *scratch* holds `2 * modulus.size + 2` words.
+    # the base. *scratch* holds `3 * modulus.size` words.
     def self.exponentiate_by_public_exponent(result : Slice(UInt64), base : Slice(UInt64), exponent : UInt64,
                                              modulus : Slice(UInt64), r_squared : Slice(UInt64),
                                              negated_inverse : UInt64, scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
       base_in_montgomery_form = scratch[0, word_count]
-      multiplication_scratch = scratch[word_count, word_count + 2]
+      multiplication_scratch = scratch[word_count, 2 * word_count]
       multiply(base_in_montgomery_form, base, r_squared, modulus, negated_inverse, multiplication_scratch)
       base_in_montgomery_form.copy_to(result)
       highest_bit = 63 - exponent.leading_zeros_count

@@ -30,7 +30,7 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     def initialize(@words : Slice(UInt64), @bit_count : Int32)
       @negated_inverse = MontgomeryArithmetic.negated_inverse_of_low_word(@words[0])
       @r_squared = Slice(UInt64).new(@words.size)
-      MontgomeryArithmetic.compute_r_squared(@r_squared, @words, @negated_inverse, scratch_of(@words.size + 2))
+      MontgomeryArithmetic.compute_r_squared(@r_squared, @words, @negated_inverse, scratch_of(2 * @words.size + 2))
     end
 
     def word_count : Int32
@@ -59,7 +59,7 @@ module Beryl::Crypto::V1::RivestShamirAdleman
 
     # Sets *result* to base^exponent mod m for a public exponent.
     def exponentiate_by_public_exponent(result : Slice(UInt64), base : Slice(UInt64), exponent : UInt64) : Nil
-      scratch = scratch_of(2 * word_count + 2)
+      scratch = scratch_of(3 * word_count)
       MontgomeryArithmetic.exponentiate_by_public_exponent(result, base, exponent, @words, @r_squared, @negated_inverse, scratch)
       wipe(scratch)
     end
