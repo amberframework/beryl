@@ -87,7 +87,22 @@ The slow suite (`--tag slow`) also runs the RFC 7748 iteration to 1,000,000 step
 
 ### Speed
 
-SPEED_TABLE_PLACEHOLDER
+`bench/public_key_against_libcrypto.cr` against OpenSSL 4.1.0, on m4-mini-01 (Apple M4) with two reserved cores while other jobs ran beside it (a ten-core slot never came free): ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time, so both see the same load. Commit 9517d54.
+
+| Algorithm | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
+|---|---|---|---|---|---|---|
+| X25519 | key generation | 69197 | 60536 | 1.14× as fast | 1.14× as fast to 1.15× as fast | yes |
+| X25519 | shared secret | 51131 | 54040 | 1.057× slower | 1.057× slower to 1.057× slower | no |
+| Ed25519 | key generation | 68236 | 59619 | 1.14× as fast | 1.13× as fast to 1.15× as fast | yes |
+| Ed25519 | sign | 65136 | 60389 | 1.079× as fast | 1.077× as fast to 1.081× as fast | yes |
+| Ed25519 | verify | 34054 | 24682 | 1.38× as fast | 1.38× as fast to 1.38× as fast | yes |
+| P-256 | key generation | 50016 | 129564 | 2.6× slower | 2.63× slower to 2.59× slower | no |
+| P-256 ECDSA | sign | 31198 | 83249 | 2.66× slower | 2.67× slower to 2.66× slower | no |
+| P-256 ECDSA | verify | 11153 | 29580 | 2.65× slower | 2.65× slower to 2.65× slower | no |
+| P-256 ECDH | shared secret | 13756 | 40517 | 2.95× slower | 2.95× slower to 2.95× slower | no |
+| P-384 ECDSA | verify | 3583 | 4828 | 1.35× slower | 1.35× slower to 1.35× slower | no |
+
+Ed25519 and X25519 key generation run on the precomputed tables and are faster than OpenSSL; Ed25519 verification is too. X25519 key agreement is within 6%. P-256 is about 2.6 to 3 times slower: OpenSSL runs P-256 on hand-written Arm assembly (nistz256), and Beryl's field multiplication is fiat-crypto's portable code. Closing that gap (a P-256 field in assembly or in 52-bit limbs, a wider window for verification) is the next speed milestone. P-384 verification is 1.35 times slower.
 
 ## RSA
 
@@ -201,4 +216,27 @@ The Wycheproof files that carry private keys (`rsa_oaep_*`, `rsa_pkcs1_*_sig_gen
 
 ### Speed
 
-`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL 4.1.0, in the same way as the cipher bench. The table for this page comes from the build Mac named in the pull request.
+`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL 4.1.0, in the same way as the cipher bench. On m4-mini-01 (Apple M4, two reserved cores on a shared machine, commit 9517d54), ten rounds of 2 s per arm:
+
+| Key | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
+|---|---|---|---|---|---|---|
+| RSA-2048 | PKCS#1 v1.5 sign | 1737.9 | 3095.9 | 1.78× slower | 1.78× slower to 1.78× slower | no |
+| RSA-2048 | PSS sign | 1736.4 | 3095.5 | 1.78× slower | 1.78× slower to 1.78× slower | no |
+| RSA-2048 | PKCS#1 v1.5 verify | 58783.7 | 115558.9 | 1.97× slower | 1.97× slower to 1.96× slower | no |
+| RSA-2048 | PSS verify | 57106.6 | 110493.3 | 1.94× slower | 1.94× slower to 1.93× slower | no |
+| RSA-2048 | OAEP encrypt | 56658.0 | 109728.8 | 1.94× slower | 1.95× slower to 1.91× slower | no |
+| RSA-2048 | OAEP decrypt | 1667.6 | 2965.7 | 1.78× slower | 1.78× slower to 1.75× slower | no |
+| RSA-3072 | PKCS#1 v1.5 sign | 510.1 | 1070.9 | 2.1× slower | 2.11× slower to 2.08× slower | no |
+| RSA-3072 | PSS sign | 502.2 | 1052.9 | 2.1× slower | 2.1× slower to 2.1× slower | no |
+| RSA-3072 | PKCS#1 v1.5 verify | 25751.7 | 53731.3 | 2.09× slower | 2.17× slower to 2.07× slower | no |
+| RSA-3072 | PSS verify | 24990.1 | 51478.6 | 2.06× slower | 2.07× slower to 2.01× slower | no |
+| RSA-3072 | OAEP encrypt | 24855.3 | 51121.2 | 2.05× slower | 2.07× slower to 2.0× slower | no |
+| RSA-3072 | OAEP decrypt | 477.4 | 995.9 | 2.09× slower | 2.09× slower to 2.09× slower | no |
+| RSA-4096 | PKCS#1 v1.5 sign | 212.1 | 469.2 | 2.21× slower | 2.22× slower to 2.19× slower | no |
+| RSA-4096 | PSS sign | 203.8 | 449.8 | 2.21× slower | 2.22× slower to 2.18× slower | no |
+| RSA-4096 | PKCS#1 v1.5 verify | 14687.9 | 31532.6 | 2.14× slower | 2.15× slower to 2.14× slower | no |
+| RSA-4096 | PSS verify | 14501.2 | 30851.0 | 2.13× slower | 2.2× slower to 2.12× slower | no |
+| RSA-4096 | OAEP encrypt | 14374.5 | 30529.2 | 2.12× slower | 2.13× slower to 2.11× slower | no |
+| RSA-4096 | OAEP decrypt | 214.9 | 475.3 | 2.21× slower | 2.22× slower to 2.18× slower | no |
+
+RSA runs about 1.8 times slower at 2,048 bits and 2.1 to 2.2 times slower at 3,072 and 4,096 bits; the private operation also runs under Data Independent Timing and checks its result with the public exponent before releasing it.
