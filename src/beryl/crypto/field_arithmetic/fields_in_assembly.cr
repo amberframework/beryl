@@ -56,18 +56,23 @@ module Beryl::Crypto::FieldArithmetic
     # bit. Constant time: the parity becomes a mask.
     @[AlwaysInline]
     def self.half_portable(a : StaticArray(UInt64, N), modulus : StaticArray(UInt64, N)) : StaticArray(UInt64, N) forall N
+      # The empty assembly is a value barrier: without it the optimizer
+      # turns the mask back into a branch on the parity.
       mask = 0_u64 &- (a.unsafe_fetch(0) & 1_u64)
+      asm("" : "=r"(mask) : "0"(mask))
       sum = StaticArray(UInt64, N).new(0_u64)
+      sum_pointer = sum.to_unsafe
       carry = 0_u64
       N.times do |index|
         total = a.unsafe_fetch(index).to_u128 &+ (modulus.unsafe_fetch(index) & mask).to_u128 &+ carry.to_u128
-        sum[index] = total.to_u64!
+        sum_pointer[index] = total.to_u64!
         carry = (total >> 64).to_u64!
       end
-      StaticArray(UInt64, N).new do |index|
-        high = index + 1 < N ? sum.unsafe_fetch(index + 1) : carry
-        (sum.unsafe_fetch(index) >> 1) | (high << 63)
-      end
+      result = StaticArray(UInt64, N).new(0_u64)
+      result_pointer = result.to_unsafe
+      (N - 1).times { |index| result_pointer[index] = (sum_pointer[index] >> 1) | (sum_pointer[index + 1] << 63) }
+      result_pointer[N - 1] = (sum_pointer[N - 1] >> 1) | (carry << 63)
+      result
     end
 
     # Defines, in the module it is called in, the fiat-crypto functions the
