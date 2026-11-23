@@ -1,5 +1,6 @@
-# Linkage probe: proves that Beryl's hashes, HMAC, key derivation and ciphers
-# link no OpenSSL. It requires only `beryl/crypto`, uses each family once, and is
+# Linkage probe: proves that Beryl's hashes, HMAC, key derivation, ciphers and
+# certificate code link no OpenSSL. It requires only `beryl/crypto` and
+# `beryl/certificates`, uses each family once, and is
 # built without the standard library's OpenSSL bindings:
 #
 #     crystal-alpha build --release -Dwithout_openssl spec/probes/no_libcrypto.cr -o no_libcrypto
@@ -7,6 +8,7 @@
 #
 # The output of `otool -L` must list neither libssl nor libcrypto.
 require "../../src/beryl/crypto"
+require "../../src/beryl/certificates"
 
 digest = Beryl::Crypto.digest("abc")
 tag = Beryl::Crypto.authenticate("what do ya want for nothing?", key: "Jefe")
@@ -55,7 +57,17 @@ STDOUT.puts "AES-128-GCM tag (GCM test case 4)  #{aes_gcm_sealed[-16, 16].hexstr
 STDOUT.puts "AES-256-CBC round trip             #{aes_cbc_plaintext == sunscreen.to_slice}"
 STDOUT.puts "Beryl::Crypto.encrypt round trip   #{opened_note == "a private note".to_slice}"
 
-is_correct = digest.hexstring == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+# Every Mozilla root read, and each one Beryl can use checked against its own
+# self-signature.
+list_of_roots = Beryl::Certificates::TrustStore.mozilla.list_of_certificates
+self_signed_count = list_of_roots.count do |root|
+  key = root.subject_public_key_info.verification_key
+  key ? root.signed_by?(key) : false
+end
+STDOUT.puts "Mozilla roots, self-signatures    #{self_signed_count} of #{list_of_roots.size} verified"
+
+is_correct = self_signed_count >= 100 &&
+             digest.hexstring == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
              tag.hexstring == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843" &&
              tag_is_accepted &&
              derived_key.hexstring == "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8" &&

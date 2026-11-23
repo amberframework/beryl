@@ -1454,6 +1454,34 @@
           "sha256": "1d33551c1a199b1fc2b0e4075cdfd52d4830503ef37e6b16f04ce617d524f3f1"
         }
       ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdh_secp256r1_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "cdb8bd5d1206fddb6618c69ffa18f303b4752caba321d348d4aacae3f20cbec4",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/ecdh_secp256r1_test.json",
+          "sha256": "cdb8bd5d1206fddb6618c69ffa18f303b4752caba321d348d4aacae3f20cbec4"
+        }
+      ]
+    },
+    {
+      "source": "x509-limbo",
+      "license": "Apache-2.0 (C2SP/x509-limbo)",
+      "url": "https://raw.githubusercontent.com/C2SP/x509-limbo/b12423782a88abead01141fa6582254e3eb49e74/limbo.json",
+      "pinned_at": "commit b12423782a88abead01141fa6582254e3eb49e74 (2026-11-17)",
+      "kind": "file",
+      "sha256": "56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca",
+      "list_of_files": [
+        {
+          "stored_path": "x509-limbo/limbo.json",
+          "sha256": "56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca"
+        }
+      ]
     }
   ]
 }

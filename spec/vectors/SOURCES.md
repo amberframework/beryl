@@ -356,6 +356,10 @@ License: Apache-2.0 (C2SP/wycheproof)
   - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
   - Download sha256: `e27344bf6daae75fa19663620883809f91c79fc4b4420eff9eae8036b34476be`
   - `spec/vectors/wycheproof/ecdsa_secp384r1_sha384_p1363_test.json` sha256 `e27344bf6daae75fa19663620883809f91c79fc4b4420eff9eae8036b34476be`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdh_secp256r1_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `cdb8bd5d1206fddb6618c69ffa18f303b4752caba321d348d4aacae3f20cbec4`
+  - `spec/vectors/wycheproof/ecdh_secp256r1_test.json` sha256 `cdb8bd5d1206fddb6618c69ffa18f303b4752caba321d348d4aacae3f20cbec4`
 
 ## rfc
 
@@ -405,3 +409,12 @@ License: IETF Trust Legal Provisions (RFC text reproduced unmodified)
   - Pinned at: retrieved 2026-11-22 (RFCs are immutable once published)
   - Download sha256: `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701`
   - `spec/vectors/rfc/rfc6979.txt` sha256 `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701`
+
+## x509-limbo
+
+License: Apache-2.0 (C2SP/x509-limbo)
+
+- Download: https://raw.githubusercontent.com/C2SP/x509-limbo/b12423782a88abead01141fa6582254e3eb49e74/limbo.json
+  - Pinned at: commit b12423782a88abead01141fa6582254e3eb49e74 (2026-11-17)
+  - Download sha256: `56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca`
+  - `spec/vectors/x509-limbo/limbo.json` sha256 `56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca`

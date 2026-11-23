@@ -9,6 +9,7 @@
 # scripts/fetch_vectors.rb --missing installs them, checked by sha256.
 /spec/vectors/wycheproof/x25519_test.json
 /spec/vectors/wycheproof/ecdh_secp256r1_ecpoint_test.json
+/spec/vectors/wycheproof/ecdh_secp256r1_test.json
 /spec/vectors/wycheproof/rsa_oaep_2048_sha1_mgf1sha1_test.json
 /spec/vectors/wycheproof/rsa_oaep_2048_sha224_mgf1sha224_test.json
 /spec/vectors/wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json
@@ -23,3 +24,10 @@
 /spec/vectors/wycheproof/rsa_pkcs1_2048_sig_gen_test.json
 /spec/vectors/wycheproof/rsa_pkcs1_3072_sig_gen_test.json
 /spec/vectors/wycheproof/rsa_pkcs1_4096_sig_gen_test.json
+
+# x509-limbo carries test private keys (peer_certificate_key) that match the
+# secret scan; scripts/fetch_vectors.rb --missing installs it, checked by sha256.
+/spec/vectors/x509-limbo/
+
+# The Certificate Transparency corpus (scripts/fetch_certificate_corpus.rb), kept out of git for its size.
+/spec/vectors/corpus/
