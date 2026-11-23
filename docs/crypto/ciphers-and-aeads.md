@@ -107,15 +107,54 @@ Every Wycheproof case marked `valid` is accepted and every case marked `invalid`
 
 ## Speed
 
-Step one was to make it correct and constant-time; step two (milestone F1) makes it fast. Measured on an Apple M1 Max with `bench/ciphers_against_libcrypto.cr` (10 rounds, Beryl then libcrypto in each, 2 seconds per arm) against OpenSSL 4.1.0, which uses the ARMv8 AES and polynomial-multiply instructions and hand-written NEON:
+Every cipher runs on the processor's instructions where it has them (see "How the code avoids leaking secrets"), and on the portable code everywhere else. Measured on an Apple M1 Max with `bench/ciphers_against_libcrypto.cr` against OpenSSL 4.1.0, which uses the same ARMv8 instructions and hand-written NEON: 10 rounds, the two arms taking turns of about 2 MiB within each round until each has used 2 seconds of processor time, with a 16-byte tag and 13 bytes of associated data. Each cell is the median of the rounds; "at least as fast" means the whole paired 95% interval over the rounds is at or above 1.
+
+| Cipher | Direction | 64 B | 1 KiB | 16 KiB | 1 MiB |
+|---|---|---|---|---|---|
+| ChaCha20-Poly1305 | seal | 1.23× as fast | 1.044× as fast | 1.13× as fast | 1.15× as fast |
+| ChaCha20-Poly1305 | open | 1.21× as fast | 1.035× as fast | 1.053× as fast | 1.076× as fast |
+| XChaCha20-Poly1305 | seal | 2.01× as fast | 1.31× as fast | 1.16× as fast | 1.16× as fast |
+| XChaCha20-Poly1305 | open | 1.93× as fast | 1.3× as fast | 1.098× as fast | 1.063× as fast |
+| AES-128-GCM | seal | 1.49× as fast | 1.078× as fast | 1.063× as fast | 1.048× as fast |
+| AES-128-GCM | open | 1.27× as fast | 1.049× as fast | 1.054× as fast | 1.053× as fast |
+| AES-256-GCM | seal | 1.45× as fast | 1.078× as fast | 1.087× as fast | 1.08× as fast |
+| AES-256-GCM | open | 1.24× as fast | 1.04× as fast | 1.068× as fast | 1.07× as fast |
+
+All 32 are at least as fast, with the whole interval on that side. The machine was running other work at the same time (load average 17 to 58); each arm is charged its processor time, not wall time.
+
+libcrypto has no XChaCha20-Poly1305, so that row runs against the construction a program on libcrypto would build: HChaCha20 from one block of libcrypto's raw ChaCha20, then libcrypto's ChaCha20-Poly1305 under the subkey. Both arms must produce the same bytes. Against plain ChaCha20-Poly1305, which skips HChaCha20, Beryl's XChaCha20-Poly1305 is 1.047× and 1.051× slower at 64 B (seal, open), 1.077× and 1.075× slower at 1 KiB, and from 1.049× to 1.15× as fast at 16 KiB and 1 MiB. HChaCha20 is one chain of about 240 dependent instructions that every message pays before anything else can start.
+
+AES-CBC, which does not authenticate:
+
+| Cipher | Direction | 64 B | 1 KiB | 16 KiB | 1 MiB |
+|---|---|---|---|---|---|
+| AES-128-CBC | encrypt | 1.47× as fast | 1.038× as fast | 1.005× slower | 1.008× slower |
+| AES-128-CBC | decrypt | 4.92× as fast | 1.46× as fast | 1.043× slower | 1.073× slower |
+| AES-256-CBC | encrypt | 1.29× as fast | 1.005× slower | 1.004× slower | 1.001× as fast |
+| AES-256-CBC | decrypt | 3.26× as fast | 1.24× as fast | 1.38× as fast | 1.44× as fast |
+
+CBC encryption is one chain of AES rounds from the first block to the last, so both sides run at the latency of the AES instructions and land within 1% of each other from 16 KiB up. Decryption has no chain and runs eight blocks side by side; for AES-128 at 16 KiB and above, where ten rounds leave little work to overlap, libcrypto's decryption stays 1.043× to 1.073× ahead.
+
+Before this work the ciphers ran only on the portable code. Milestone B2, same machine and benchmark, 10 rounds of 2 seconds:
 
 | Cipher | 64 B | 1 KiB | 16 KiB | 1 MiB |
 |---|---|---|---|---|
-| ChaCha20-Poly1305 | 1.0× as fast | 2.67× slower | 3.64× slower | 3.73× slower |
-| AES-128-GCM | 9.29× slower | 33.16× slower | 51.03× slower | 54.11× slower |
-| AES-256-GCM | 11.28× slower | 38.61× slower | 47.53× slower | 54.6× slower |
+| ChaCha20-Poly1305 | 1.03× slower | 2.96× slower | 3.6× slower | 3.64× slower |
+| AES-128-GCM | 9.3× slower | 34.52× slower | 51.55× slower | 53.14× slower |
+| AES-256-GCM | 11.02× slower | 38.99× slower | 54.32× slower | 55.64× slower |
 
-The machine was busy with other work during the run (load average near 90), so treat each figure as approximate; the rounds for one cell spread by up to a factor of two. In absolute terms Beryl's ChaCha20-Poly1305 moved 206 to 291 MB/s, and its AES-GCM 34 to 139 MB/s. A session cookie is at most 4 KiB, which at those rates is about 15 to 20 microseconds of ChaCha20-Poly1305. The AES gap is the cost of portable bitsliced code against hardware AES; F1 adds the hardware instructions behind the same interface and the same gates.
+The portable code for the rows B2 did not measure, from a shorter run (3 rounds of 0.5 seconds) of the same benchmark built with `-Dberyl_portable_ciphers`; XChaCha20-Poly1305 against the libcrypto construction above:
+
+| Cipher | Direction | 64 B | 1 KiB | 16 KiB | 1 MiB |
+|---|---|---|---|---|---|
+| XChaCha20-Poly1305 | seal | 1.53× as fast | 2.08× slower | 3.43× slower | 3.61× slower |
+| XChaCha20-Poly1305 | open | 1.48× as fast | 2.13× slower | 3.51× slower | 3.67× slower |
+| AES-128-CBC | encrypt | 17.3× slower | 29.92× slower | 30.88× slower | 31.03× slower |
+| AES-128-CBC | decrypt | 10.96× slower | 42.8× slower | 73.61× slower | 77.74× slower |
+| AES-256-CBC | encrypt | 19.92× slower | 29.62× slower | 30.43× slower | 29.57× slower |
+| AES-256-CBC | decrypt | 16.07× slower | 50.47× slower | 51.26× slower | 51.57× slower |
+
+Every log is kept with the pull request that added the processor paths.
 
 ## Design notes
 
