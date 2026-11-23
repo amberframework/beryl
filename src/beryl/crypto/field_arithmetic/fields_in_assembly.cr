@@ -51,6 +51,25 @@ module Beryl::Crypto::FieldArithmetic
       AVAILABLE = false
     {% end %}
 
+    # Returns a/2 mod *modulus* for *a* below the odd *modulus* (little-endian
+    # words): a + modulus when a is odd, which is even, shifted right one
+    # bit. Constant time: the parity becomes a mask.
+    @[AlwaysInline]
+    def self.half_portable(a : StaticArray(UInt64, N), modulus : StaticArray(UInt64, N)) : StaticArray(UInt64, N) forall N
+      mask = 0_u64 &- (a.unsafe_fetch(0) & 1_u64)
+      sum = StaticArray(UInt64, N).new(0_u64)
+      carry = 0_u64
+      N.times do |index|
+        total = a.unsafe_fetch(index).to_u128 &+ (modulus.unsafe_fetch(index) & mask).to_u128 &+ carry.to_u128
+        sum[index] = total.to_u64!
+        carry = (total >> 64).to_u64!
+      end
+      StaticArray(UInt64, N).new do |index|
+        high = index + 1 < N ? sum.unsafe_fetch(index + 1) : carry
+        (sum.unsafe_fetch(index) >> 1) | (high << 63)
+      end
+    end
+
     # Defines, in the module it is called in, the fiat-crypto functions the
     # curve code uses that have no assembly: they are fast already.
     macro forward_to_fiat_crypto(fiat_module)
@@ -505,6 +524,34 @@ module Beryl::Crypto::FieldArithmetic
       def self.opp(a : Limbs) : Limbs
         sub(Limbs.new(0_u64), a)
       end
+
+      # a/2 mod p for a below p: p is added when a is odd (the mask comes
+      # from the low bit, so the addition is the only flag work), and the
+      # five-word sum is shifted right one bit with `extr`.
+      @[AlwaysInline]
+      def self.half(a : Limbs) : Limbs
+        half_0 = half_1 = half_2 = half_3 = mask = masked_1 = masked_3 = sum_0 = sum_1 = sum_2 = sum_3 = top = 0_u64
+        asm("and $4, $12, #1
+          sub $4, xzr, $4
+          and $5, $4, $16
+          and $6, $4, $17
+          adds $7, $12, $4
+          adcs $8, $13, $5
+          adcs $9, $14, xzr
+          adcs $10, $15, $6
+          adc $11, xzr, xzr
+          extr $0, $8, $7, #1
+          extr $1, $9, $8, #1
+          extr $2, $10, $9, #1
+          extr $3, $11, $10, #1" : "=&r"(half_0), "=&r"(half_1), "=&r"(half_2), "=&r"(half_3), "=&r"(mask),
+                                   "=&r"(masked_1), "=&r"(masked_3), "=&r"(sum_0), "=&r"(sum_1), "=&r"(sum_2), "=&r"(sum_3),
+                                   "=&r"(top)
+                                 : "r"(a.unsafe_fetch(0)), "r"(a.unsafe_fetch(1)), "r"(a.unsafe_fetch(2)), "r"(a.unsafe_fetch(3)),
+                                   "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_1),
+                                   "r"(::Beryl::Crypto::FieldArithmetic::FieldsInAssembly::P256_PRIME_WORD_3)
+                                 : "cc")
+        StaticArray[half_0, half_1, half_2, half_3]
+      end
     {% else %}
       @[AlwaysInline]
       def self.mul(a : Limbs, b : Limbs) : Limbs
@@ -530,7 +577,15 @@ module Beryl::Crypto::FieldArithmetic
       def self.opp(a : Limbs) : Limbs
         P256Field.opp(a)
       end
+
+      @[AlwaysInline]
+      def self.half(a : Limbs) : Limbs
+        FieldsInAssembly.half_portable(a, PRIME_WORDS)
+      end
     {% end %}
+
+    # The prime as little-endian words, for `half`.
+    PRIME_WORDS = StaticArray[0xffffffffffffffff_u64, FieldsInAssembly::P256_PRIME_WORD_1, 0_u64, FieldsInAssembly::P256_PRIME_WORD_3]
 
     FieldsInAssembly.forward_to_fiat_crypto(P256Field)
   end
@@ -599,6 +654,12 @@ module Beryl::Crypto::FieldArithmetic
       @[AlwaysInline]
       def self.opp(a : Limbs) : Limbs
         {{ fiat_module }}.opp(a)
+      end
+
+      # a/2 mod the modulus, for a below it.
+      @[AlwaysInline]
+      def self.half(a : Limbs) : Limbs
+        FieldsInAssembly.half_portable(a, MODULUS_WORDS)
       end
 
       FieldsInAssembly.forward_to_fiat_crypto({{ fiat_module }})

@@ -342,26 +342,23 @@ module Beryl::Crypto::V1
         ConstantTimeSelection.equal_bit(Field.nonzero(Field.sub(first, second)), 0_u64)
       end
 
-      # The multiples of 2 are arranged as OpenSSL's
-      # `ecp_nistz256_point_double` arranges them, with 12 field additions
-      # instead of the 14 of the formula as written: 4·Y^2 and 8·Y^4 come
-      # from doubling Y^2 and squaring that, and 8·X·Y^2 from doubling
-      # X·4·Y^2.
+      # The steps are those of OpenSSL's `ecp_nistz256_point_double`, which
+      # compute the same formula with 10 field additions and one halving
+      # instead of 14 additions: 4·Y^2 is (2·Y)^2, 8·Y^4 is half of its
+      # square, 4·X·Y^2 is X·(2·Y)^2 and 8·X·Y^2 its double.
       def double : Point
+        twice_y = Field.add(@y, @y)
         delta = Field.square(@z)
-        gamma = Field.square(@y)
-        gamma_2 = Field.add(gamma, gamma)
-        gamma_4 = Field.add(gamma_2, gamma_2)
-        beta_4 = Field.mul(@x, gamma_4)
-        beta_8 = Field.add(beta_4, beta_4)
-        alpha_part = Field.mul(Field.sub(@x, delta), Field.add(@x, delta))
-        alpha = Field.add(Field.add(alpha_part, alpha_part), alpha_part)
-        new_x = Field.sub(Field.square(alpha), beta_8)
+        four_y_squared = Field.square(twice_y)
         y_z = Field.mul(@y, @z)
         new_z = Field.add(y_z, y_z)
-        gamma_squared_4 = Field.square(gamma_2)
-        gamma_squared_8 = Field.add(gamma_squared_4, gamma_squared_4)
-        new_y = Field.sub(Field.mul(alpha, Field.sub(beta_4, new_x)), gamma_squared_8)
+        alpha_part = Field.mul(Field.add(@x, delta), Field.sub(@x, delta))
+        alpha = Field.add(Field.add(alpha_part, alpha_part), alpha_part)
+        eight_y_fourth = Field.half(Field.square(four_y_squared))
+        beta_4 = Field.mul(four_y_squared, @x)
+        beta_8 = Field.add(beta_4, beta_4)
+        new_x = Field.sub(Field.square(alpha), beta_8)
+        new_y = Field.sub(Field.mul(Field.sub(beta_4, new_x), alpha), eight_y_fourth)
         Point.new(new_x, new_y, new_z)
       end
 
