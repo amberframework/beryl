@@ -3,3 +3,19 @@
 /.shards/
 /docs/api/
 *.dwarf
+
+# Published vectors whose private-key fields match the commit secret scan; scripts/fetch_vectors.rb --missing installs them, checked by sha256.
+/spec/vectors/wycheproof/rsa_oaep_2048_sha1_mgf1sha1_test.json
+/spec/vectors/wycheproof/rsa_oaep_2048_sha224_mgf1sha224_test.json
+/spec/vectors/wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json
+/spec/vectors/wycheproof/rsa_oaep_2048_sha384_mgf1sha384_test.json
+/spec/vectors/wycheproof/rsa_oaep_2048_sha512_mgf1sha512_test.json
+/spec/vectors/wycheproof/rsa_oaep_3072_sha256_mgf1sha256_test.json
+/spec/vectors/wycheproof/rsa_oaep_3072_sha512_256_mgf1sha512_256_test.json
+/spec/vectors/wycheproof/rsa_oaep_3072_sha512_mgf1sha512_test.json
+/spec/vectors/wycheproof/rsa_oaep_4096_sha256_mgf1sha256_test.json
+/spec/vectors/wycheproof/rsa_oaep_4096_sha512_mgf1sha512_test.json
+/spec/vectors/wycheproof/rsa_oaep_misc_test.json
+/spec/vectors/wycheproof/rsa_pkcs1_2048_sig_gen_test.json
+/spec/vectors/wycheproof/rsa_pkcs1_3072_sig_gen_test.json
+/spec/vectors/wycheproof/rsa_pkcs1_4096_sig_gen_test.json
