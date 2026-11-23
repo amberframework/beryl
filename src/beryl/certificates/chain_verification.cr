@@ -40,8 +40,9 @@ module Beryl::Certificates
   # webpki, Go and x509-limbo apply):
   # - version 3; no unknown critical extension; the authority and subject
   #   key identifiers, authority information access and policy constraints
-  #   marked as RFC 5280 requires; a serial number that is positive and at
-  #   most 20 bytes; a non-empty issuer;
+  #   marked as RFC 5280 requires; a non-empty issuer; below the anchor, a
+  #   serial number that is positive and at most 20 bytes (some Mozilla
+  #   roots have a serial number of 0);
   # - inside its validity period at the validation time (anchors included);
   # - a key Beryl verifies with (RSA of 2,048 to 8,192 bits, P-256, P-384,
   #   Ed25519) and, for every certificate below an anchor, a signature by
@@ -49,21 +50,24 @@ module Beryl::Certificates
   #
   # Issuers (intermediates and anchors): basic constraints present,
   # critical and with cA set; keyCertSign when key usage is present; a
-  # subject key identifier; a non-empty subject; path length constraints
-  # met, self-issued intermediates not counted; well-formed name
-  # constraints, applied to every certificate below them except self-issued
-  # intermediates. Intermediates also need an authority key identifier
-  # and, when they carry extended key usage, the purpose asked for; an
-  # anchor may not carry extended key usage, and its authority key
-  # identifier, when present, must hold only a key identifier equal to its
-  # subject key identifier.
+  # non-empty subject; path length constraints met, self-issued
+  # intermediates not counted; well-formed name constraints, applied to
+  # every certificate below them except self-issued intermediates.
+  # Intermediates also need authority and subject key identifiers and,
+  # when they carry extended key usage, the purpose asked for. An anchor
+  # needs no subject key identifier (Mozilla's TWCA Global Root CA has
+  # none) and may not carry extended key usage; its authority key
+  # identifier, when present, must hold only a key identifier, equal to
+  # its subject key identifier when the anchor is self-issued.
   #
   # The leaf: not a CA, no keyCertSign, no name constraints, an authority
   # key identifier, and extended key usage either absent or non-critical,
   # without anyExtendedKeyUsage and with the purpose asked for. A server
   # leaf needs a subject alternative name (critical exactly when the
-  # subject is empty), and each common name in its subject must repeat one
-  # of its dNSName or iPAddress entries character for character (CA/Browser
+  # subject is empty). A common name is not matched against the reference
+  # identity (RFC 9525 §6.1), but it must be well formed: an IP address in
+  # canonical form, ASCII only, and an exact copy of a dNSName entry when
+  # it holds an A-label or equals one apart from letter case (CA/Browser
   # Forum baseline requirements §7.1.4.3).
   class ChainVerification
     # The bounds on one verification, for chains from untrusted peers.

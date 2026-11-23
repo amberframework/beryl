@@ -180,3 +180,67 @@ describe Beryl::Certificates do
     Beryl::Certificates::TrustStore.mozilla.includes?(path.last).should be_true
   end
 end
+
+private def read_name(attribute_value : Bytes) : Beryl::Certificates::DistinguishedName
+  name = DerWriter.sequence(DerWriter.element(0x31_u8, DerWriter.sequence(DerWriter.object_identifier("2.5.4.3"), attribute_value)))
+  reader = Beryl::Encoding::DER::Reader.new(name)
+  Beryl::Certificates::DistinguishedName.read(reader)
+end
+
+describe Beryl::Certificates::DistinguishedName do
+  it "reads the string types names use" do
+    read_name(DerWriter.element(0x0c_u8, "café".to_slice)).list_of_common_names.first.should eq("café".to_slice)
+    read_name(DerWriter.element(0x13_u8, "Example, Inc.".to_slice)).list_of_common_names.size.should eq(1)
+    read_name(DerWriter.element(0x1e_u8, Bytes[0x00, 0x41])).list_of_common_names.size.should eq(1)
+  end
+
+  # Values the mutation differential found OpenSSL 4.1.0 refusing.
+  {
+    "a UTF8String that is not UTF-8"         => DerWriter.element(0x0c_u8, Bytes[0xc3, 0x28]),
+    "a PrintableString with an @"            => DerWriter.element(0x13_u8, "a@b".to_slice),
+    "an IA5String with a byte outside ASCII" => DerWriter.element(0x16_u8, Bytes[0x41, 0xe9]),
+    "a BMPString of odd length"              => DerWriter.element(0x1e_u8, Bytes[0x00, 0x41, 0x00]),
+    "a BMPString holding a surrogate"        => DerWriter.element(0x1e_u8, Bytes[0xd8, 0x00]),
+    "a UniversalString past U+10FFFF"        => DerWriter.element(0x1c_u8, Bytes[0x41, 0x42, 0x43, 0x44]),
+    "an INTEGER value"                       => DerWriter.small_integer(1),
+    "a GraphicString value"                  => DerWriter.element(0x19_u8, "a".to_slice),
+    "a context-specific value"               => DerWriter.element(0x80_u8, "a".to_slice),
+  }.each do |description, value|
+    it "refuses #{description}" do
+      expect_raises(Beryl::Encoding::MalformedEncoding) { read_name(value) }
+    end
+  end
+end
+
+describe "Beryl::Encoding::DER::Reader#check_universal_contents" do
+  it "accepts well-formed values of any class and refuses malformed universal ones" do
+    good = DerWriter.sequence(Bytes[0x01, 0x01, 0xff], Bytes[0x05, 0x00], DerWriter.element(0x80_u8, Bytes[0x01, 0x01, 0x05]))
+    read_with(good) { |reader| reader.check_universal_contents(reader.read_element) }
+    {Bytes[0x01, 0x02, 0x00, 0x00], Bytes[0x05, 0x01, 0x00], Bytes[0x24, 0x00], Bytes[0x17, 0x01, 0x30]}.each do |bad|
+      expect_raises(Beryl::Encoding::MalformedEncoding) do
+        read_with(DerWriter.sequence(bad)) { |reader| reader.check_universal_contents(reader.read_element) }
+      end
+    end
+  end
+end
+
+describe Beryl::Certificates::ExtensionDecoding do
+  it "refuses a key usage with no bit set (RFC 5280 §4.2.1.3)" do
+    expect_raises(Beryl::Encoding::MalformedEncoding) do
+      read_with(Bytes[0x03, 0x01, 0x00]) { |reader| Beryl::Certificates::ExtensionDecoding.key_usage(reader) }
+    end
+  end
+
+  it "reads CRL distribution points and refuses a malformed full name" do
+    uri = DerWriter.element(0x86_u8, "http://crl.example/ca.crl".to_slice)
+    good = DerWriter.sequence(DerWriter.sequence(DerWriter.context(0, DerWriter.context(0, uri))))
+    read_with(good) { |reader| Beryl::Certificates::ExtensionDecoding.distribution_points(reader).should eq(1) }
+
+    # An ediPartyName whose contents are not EDIPartyName.
+    edi = DerWriter.element(0xa5_u8, "http://crl.example/ca.crl".to_slice)
+    bad = DerWriter.sequence(DerWriter.sequence(DerWriter.context(0, DerWriter.context(0, edi))))
+    expect_raises(Beryl::Encoding::MalformedEncoding) do
+      read_with(bad) { |reader| Beryl::Certificates::ExtensionDecoding.distribution_points(reader) }
+    end
+  end
+end

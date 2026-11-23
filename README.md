@@ -35,6 +35,15 @@ Beryl::Crypto.verify_signature("message", signature, verification_key: signing_k
 
 The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones. See [docs/crypto/hashes-and-macs.md](docs/crypto/hashes-and-macs.md) [docs/crypto/ciphers-and-aeads.md](docs/crypto/ciphers-and-aeads.md) and [docs/crypto/public-key.md](docs/crypto/public-key.md) for the full list, the test vectors, how to run each check and the measured speed against OpenSSL.
 
+## Certificates
+
+`Beryl::Certificates` (milestone B4) reads X.509 certificates, CRLs and private key files and verifies certificate chains for TLS against the pinned Mozilla root set or the system bundle, with host names checked as RFC 9525 says. Every applicable case of x509-limbo passes, and its verdicts match OpenSSL 4.1.0 on 40,960 Certificate Transparency log entries. See [docs/certificates.md](docs/certificates.md).
+
+```crystal
+chain = Beryl::Certificates.read_pem_chain(File.read("chain.pem"))
+Beryl::Certificates.verify_server_chain(chain, hostname: "example.com") # => the verified path, or raises
+```
+
 ## Development
 
 ```sh
@@ -48,6 +57,8 @@ crystal-alpha spec --release --tag constant_time   # timing checks of the hashes
 /usr/bin/ruby scripts/fetch_vectors.rb             # re-download the vectors and check their pins
 /usr/bin/ruby scripts/fetch_vectors.rb --missing   # install the vectors kept out of git (once, after cloning)
 /usr/bin/ruby scripts/generate_field_arithmetic.rb --check # the field arithmetic is fiat-crypto pinned output
+/usr/bin/ruby scripts/fetch_certificate_corpus.rb  # the CT corpus for the certificate differential (checked by sha256)
+/usr/bin/ruby scripts/update_certificate_data.rb PSL_COMMIT # refresh the Mozilla roots and the Public Suffix List
 ```
 
 ## License

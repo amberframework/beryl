@@ -193,10 +193,15 @@ module Beryl::Certificates
           when ObjectIdentifiers::CERTIFICATE_POLICIES     then ExtensionDecoding.certificate_policies(contents)
           when ObjectIdentifiers::AUTHORITY_INFORMATION_ACCESS
             @authority_information_access_count = ExtensionDecoding.information_access(contents)
+          when ObjectIdentifiers::CRL_DISTRIBUTION_POINTS, ObjectIdentifiers::FRESHEST_CRL
+            ExtensionDecoding.distribution_points(contents)
+          when ObjectIdentifiers::ISSUER_ALTERNATIVE_NAME
+            GeneralName.read_list(contents)
           else
-            # Not read: skip the contents.
+            # Not interpreted: the contents must still be DER (RFC 5280
+            # §4.1 says extnValue holds a DER encoding).
             until contents.at_end?
-              contents.read_element
+              contents.check_universal_contents(contents.read_element)
             end
           end
         end

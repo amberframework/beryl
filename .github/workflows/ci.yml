@@ -40,6 +40,11 @@ jobs:
           crystal build --no-codegen bench/ciphers_against_libcrypto.cr
           crystal build --no-codegen bench/rsa_against_libcrypto.cr
           crystal build --no-codegen bench/public_key_against_libcrypto.cr
+          crystal build --no-codegen bench/certificates_against_libcrypto.cr
+      - name: Type-check the certificate differential and the DER fuzzer
+        run: |
+          crystal build --no-codegen spec/differential/libcrypto_certificate_differential.cr
+          crystal build --no-codegen spec/fuzz/der_parser_fuzz.cr
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
       - name: Run the quick suite again on the portable code alone
@@ -276,6 +281,36 @@ jobs:
         run: crystal build --release spec/differential/libcrypto_curve_differential_spec.cr -o curve_differential_spec
       - name: Run the differential (X25519 1,000,000 cases, the others 200,000, every Wycheproof case)
         run: ./curve_differential_spec --tag differential -e "curve "
+
+  certificates:
+    name: Certificates against libcrypto, and the DER fuzzer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Fetch the published vectors kept out of git (checked by sha256)
+        run: ruby scripts/fetch_vectors.rb --missing
+      - name: Fetch the Certificate Transparency corpus (40,960 log entries, checked by sha256)
+        run: ruby scripts/fetch_certificate_corpus.rb
+      - name: Show the libcrypto this job compares against
+        run: openssl version
+      - name: Build the differential and the fuzzer
+        run: |
+          crystal build --release spec/differential/libcrypto_certificate_differential.cr -o certificate_differential
+          crystal build --release spec/fuzz/der_parser_fuzz.cr -o der_parser_fuzz
+      - name: "Differential: every corpus certificate read as libcrypto reads it"
+        run: ./certificate_differential parse
+      - name: "Differential: every logged chain verified as libcrypto verifies it"
+        run: ./certificate_differential verify
+      - name: "Differential: 200,000 mutated certificates, no crash and no slow reading"
+        run: ./certificate_differential mutate 200000 "${{ github.run_id }}"
+      - name: "Fuzz: 1,000,000 mutated inputs through every reader, no finding"
+        run: ./der_parser_fuzz 1000000 "${{ github.run_id }}" spec/vectors/x509-limbo/limbo.json
 
 
   differential:

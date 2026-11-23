@@ -28,3 +28,6 @@
 # x509-limbo carries test private keys (peer_certificate_key) that match the
 # secret scan; scripts/fetch_vectors.rb --missing installs it, checked by sha256.
 /spec/vectors/x509-limbo/
+
+# The Certificate Transparency corpus (scripts/fetch_certificate_corpus.rb), kept out of git for its size.
+/spec/vectors/corpus/

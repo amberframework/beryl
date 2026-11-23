@@ -1,6 +1,9 @@
+require "log"
 require "../error"
 
 module Beryl::Certificates
+  Log = ::Log.for(self)
+
   # The base of every error raised by `Beryl::Certificates`.
   class Error < Beryl::Error
   end

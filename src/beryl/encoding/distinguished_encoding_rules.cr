@@ -293,6 +293,45 @@ module Beryl::Encoding
         result
       end
 
+      # Checks *element* (already read), and everything inside it, for
+      # contents its universal type allows: a BOOLEAN of 0x00 or 0xFF, a
+      # minimal INTEGER or ENUMERATED, a valid BIT STRING, an empty NULL, a
+      # well-formed OBJECT IDENTIFIER, a UTCTime or GeneralizedTime in its
+      # DER form, SEQUENCE and SET constructed and every other universal
+      # type primitive. Tags of the other classes are left uninterpreted.
+      # For values Beryl keeps without reading, such as the parameters of
+      # a key algorithm it does not use. Raises `MalformedEncoding`.
+      def check_universal_contents(element : Element) : Nil
+        tag = element.tag
+        return unless tag.tag_class.universal?
+
+        if tag.number == 16 || tag.number == 17
+          enter(element) do |inner|
+            until inner.at_end?
+              inner.check_universal_contents(inner.read_element)
+            end
+          end
+          return
+        end
+        malformed("a constructed #{tag}, which DER encodes primitive", element.offset) if tag.is_constructed
+
+        content = element.content
+        case tag.number
+        when 1
+          malformed("a DER BOOLEAN is 0x00 or 0xFF", element.offset) unless content.size == 1 && (content[0] == 0x00 || content[0] == 0xff)
+        when 2, 10
+          DistinguishedEncodingRules.check_minimal_integer(element)
+        when 3
+          DistinguishedEncodingRules.decode_bit_string(element)
+        when 5
+          malformed("a NULL with contents", element.offset) unless content.empty?
+        when 6
+          DistinguishedEncodingRules.check_object_identifier(element)
+        when 23, 24
+          DistinguishedEncodingRules.decode_time(element)
+        end
+      end
+
       # Yields a reader over *bytes* that sit inside an element read
       # earlier (the contents of an OCTET STRING or BIT STRING that hold
       # DER of their own), one level deeper.

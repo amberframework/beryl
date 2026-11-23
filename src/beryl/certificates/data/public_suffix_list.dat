@@ -5,9 +5,6 @@
 // Please pull this list from, and only from https://publicsuffix.org/list/public_suffix_list.dat,
 // rather than any other VCS sites. Pulling from any other URL is not guaranteed to be supported.
 
-// VERSION: 2026-11-21_04-33-45_UTC
-// COMMIT: 87a2c1b8de5886a133ff4da21b2aa6fec88d8739
-
 // Instructions on pulling and using this list can be found at https://publicsuffix.org/list/.
 
 // ===BEGIN ICANN DOMAINS===

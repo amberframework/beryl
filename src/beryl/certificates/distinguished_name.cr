@@ -43,7 +43,11 @@ module Beryl::Certificates
             until set.at_end?
               attribute = set.read_sequence do |pair|
                 type = pair.read_object_identifier
-                Attribute.new(type, pair.read_element)
+                value = pair.read_element
+                if reason = DistinguishedName.malformed_value_reason(value)
+                  raise Encoding::MalformedEncoding.new(reason, value.offset)
+                end
+                Attribute.new(type, value)
               end
               attributes << attribute
             end
@@ -55,6 +59,65 @@ module Beryl::Certificates
         relative_names
       end
       DistinguishedName.new(element.encoded, list_of_relative_names)
+    end
+
+    # Why *value* cannot be an attribute value, or `nil` when it can. A
+    # value is a UTF8String, PrintableString, TeletexString, IA5String,
+    # NumericString, UniversalString or BMPString with contents that type
+    # allows, a BIT STRING (x500UniqueIdentifier) or a SEQUENCE: the types
+    # OpenSSL accepts in names. RFC 5280 declares AttributeValue as
+    # ANY, but every other type is refused so that a name means the same
+    # here as in other verifiers.
+    def self.malformed_value_reason(value : Encoding::DER::Element) : String?
+      tag = value.tag
+      return "a name attribute value has a #{tag} tag" unless tag.tag_class.universal?
+      if tag.is_constructed
+        return tag.number == 16 ? nil : "a name attribute value has a #{tag} tag"
+      end
+
+      content = value.content
+      case tag.number
+      when 3
+        Encoding::DER.decode_bit_string(value)
+        nil
+      when 12
+        String.new(content).valid_encoding? ? nil : "a UTF8String that is not UTF-8"
+      when 18
+        content.all? { |byte| byte.unsafe_chr.ascii_number? || byte == 0x20 } ? nil : "a NumericString with a character outside digits and space"
+      when 19
+        content.all? { |byte| printable_string_byte?(byte) } ? nil : "a PrintableString with a character outside its alphabet"
+      when 22
+        content.all? { |byte| byte < 0x80 } ? nil : "an IA5String with a byte outside ASCII"
+      when 28
+        return "a UniversalString whose length is not a multiple of 4" unless content.size % 4 == 0
+        valid = (0...content.size // 4).all? do |index|
+          scalar_value?(IO::ByteFormat::BigEndian.decode(UInt32, content[index * 4, 4]))
+        end
+        valid ? nil : "a UniversalString with a value that is not a Unicode character"
+      when 30
+        return "a BMPString whose length is odd" unless content.size.even?
+        valid = (0...content.size // 2).all? do |index|
+          scalar_value?(IO::ByteFormat::BigEndian.decode(UInt16, content[index * 2, 2]).to_u32)
+        end
+        valid ? nil : "a BMPString with a surrogate code unit"
+      when 20
+        nil
+      else
+        "a name attribute value has a #{tag} tag"
+      end
+    end
+
+    # Whether *value* is a Unicode scalar value: at most 0x10FFFF and
+    # outside the surrogates.
+    private def self.scalar_value?(value : UInt32) : Bool
+      value <= 0x10FFFF && !(0xD800 <= value <= 0xDFFF)
+    end
+
+    # The PrintableString alphabet (X.680 §41.4), with `*` and `&`, which
+    # issued certificates use and Go accepts.
+    private def self.printable_string_byte?(byte : UInt8) : Bool
+      character = byte.unsafe_chr
+      character.ascii_alphanumeric? || " '()+,-./:=?*&".includes?(character)
     end
 
     def empty? : Bool

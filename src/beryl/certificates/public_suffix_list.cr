@@ -12,7 +12,7 @@ module Beryl::Certificates
   # does not carry, so those rules are left out.
   module PublicSuffixList
     # The sha256 of `data/public_suffix_list.dat`, checked by a spec.
-    SHA256 = "017501d3fa7911c60ac7e0f68df4122b07216c585c15dc30e0f0c74b8d13a2b9"
+    SHA256 = "00a0af2ed2379634523b9ca80de3469d1466893915c252a91264e248c92d69d8"
     # The upstream commit the file was taken at.
     COMMIT = "87a2c1b8de5886a133ff4da21b2aa6fec88d8739"
 

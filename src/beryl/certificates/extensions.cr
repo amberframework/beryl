@@ -68,6 +68,7 @@ module Beryl::Certificates
       9.times do |index|
         usage |= KeyUsage.new(1_u16 << index) if bit_string.bit_set?(index)
       end
+      raise Encoding::MalformedEncoding.new("a key usage with no bit set (RFC 5280 §4.2.1.3)") if usage.none?
       usage
     end
 
@@ -161,6 +162,55 @@ module Beryl::Certificates
           count += 1
         end
         count
+      end
+    end
+
+    # CRL distribution points and freshest CRL (RFC 5280 §4.2.1.13 and
+    # §4.2.1.15): read for structure, as OpenSSL reads them. Returns the
+    # number of distribution points.
+    def self.distribution_points(reader : DER::Reader) : Int32
+      reader.read_sequence do |sequence|
+        count = 0
+        until sequence.at_end?
+          sequence.read_sequence do |point|
+            if name = point.read_optional_element(DER::Tag.context_specific(0, is_constructed: true))
+              point.enter(name) do |choice|
+                if full_name = choice.read_optional_element(DER::Tag.context_specific(0, is_constructed: true))
+                  choice.enter(full_name) { |names| read_general_names(names) }
+                else
+                  relative_name = choice.read_element(DER::Tag.context_specific(1, is_constructed: true))
+                  choice.enter(relative_name) do |set|
+                    raise Encoding::MalformedEncoding.new("an empty nameRelativeToCRLIssuer", relative_name.offset) if set.at_end?
+                    until set.at_end?
+                      set.read_sequence do |pair|
+                        pair.read_object_identifier
+                        pair.read_element
+                      end
+                    end
+                  end
+                end
+              end
+            end
+            if reasons = point.read_optional_element(DER::Tag.context_specific(1, is_constructed: false))
+              DER.decode_bit_string(reasons)
+            end
+            if issuer = point.read_optional_element(DER::Tag.context_specific(2, is_constructed: true))
+              point.enter(issuer) { |names| read_general_names(names) }
+            end
+          end
+          count += 1
+        end
+        raise Encoding::MalformedEncoding.new("an empty list of distribution points") if count == 0
+        count
+      end
+    end
+
+    # Reads the GeneralName elements of an implicitly tagged GeneralNames
+    # (SIZE (1..MAX)) up to the end of *reader*.
+    private def self.read_general_names(reader : DER::Reader) : Nil
+      raise Encoding::MalformedEncoding.new("an empty GeneralNames") if reader.at_end?
+      until reader.at_end?
+        GeneralName.read(reader)
       end
     end
 

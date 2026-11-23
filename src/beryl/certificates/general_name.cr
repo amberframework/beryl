@@ -56,11 +56,43 @@ module Beryl::Certificates
       when .other_name?
         reader.enter(element) do |inner|
           inner.read_object_identifier
-          inner.read_element(Encoding::DER::Tag.context_specific(0, is_constructed: true))
+          value = inner.read_element(Encoding::DER::Tag.context_specific(0, is_constructed: true))
+          inner.enter(value) { |explicit| explicit.check_universal_contents(explicit.read_element) }
         end
         GeneralName.new(kind, element.content)
-      else
+      when .electronic_data_interchange?
+        # EDIPartyName ::= SEQUENCE { nameAssigner [0] DirectoryString
+        # OPTIONAL, partyName [1] DirectoryString }, each explicitly tagged.
+        reader.enter(element) do |inner|
+          if assigner = inner.read_optional_element(Encoding::DER::Tag.context_specific(0, is_constructed: true))
+            read_directory_string(inner, assigner)
+          end
+          read_directory_string(inner, inner.read_element(Encoding::DER::Tag.context_specific(1, is_constructed: true)))
+        end
         GeneralName.new(kind, element.content)
+      when .internet_protocol_address?
+        GeneralName.new(kind, element.content)
+      else
+        # An X.400 address: kept as it is, its contents checked as DER.
+        reader.enter(element) do |inner|
+          until inner.at_end?
+            inner.check_universal_contents(inner.read_element)
+          end
+        end
+        GeneralName.new(kind, element.content)
+      end
+    end
+
+    # Reads the one DirectoryString inside the explicit tag *element*.
+    private def self.read_directory_string(reader : Encoding::DER::Reader, element : Encoding::DER::Element) : Nil
+      reader.enter(element) do |explicit|
+        value = explicit.read_element
+        unless value.tag.tag_class.universal? && {12_u32, 19_u32, 20_u32, 28_u32, 30_u32}.includes?(value.tag.number)
+          raise Encoding::MalformedEncoding.new("a DirectoryString with tag #{value.tag}", value.offset)
+        end
+        if reason = DistinguishedName.malformed_value_reason(value)
+          raise Encoding::MalformedEncoding.new(reason, value.offset)
+        end
       end
     end
 

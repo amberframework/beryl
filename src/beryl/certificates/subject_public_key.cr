@@ -42,7 +42,9 @@ module Beryl::Certificates
       reader.enter(element) do |sequence|
         algorithm, parameters = sequence.read_sequence do |identifier|
           oid = identifier.read_object_identifier
-          {oid, identifier.at_end? ? nil : identifier.read_element}
+          parameter_element = identifier.at_end? ? nil : identifier.read_element
+          identifier.check_universal_contents(parameter_element) if parameter_element
+          {oid, parameter_element}
         end
         key_bytes = sequence.read_byte_aligned_bit_string
         SubjectPublicKeyInfo.new(algorithm, parameters, key_bytes, element.encoded)
