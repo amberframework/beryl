@@ -16,11 +16,14 @@
 # (scripts/fetch_certificate_corpus.rb).
 #
 # Rows:
-# - "parse 256 certificates": the first 256 distinct certificates of the
-#   corpus, each read and its public key decoded. Beryl: `Certificate.new`
-#   and `verification_key`. libcrypto: `d2i_X509` (which decodes the key)
-#   and `X509_get_extension_flags` (which decodes the extensions), then
-#   `X509_free`.
+# - "read 256 certificates, public keys decoded": the first 256 distinct
+#   certificates of the corpus, each read and its public key decoded.
+#   Beryl: `Certificate.new` and `verification_key`. libcrypto: `d2i_X509`
+#   (which decodes the key) and `X509_get_extension_flags` (which decodes
+#   the extensions), then `X509_free`.
+# - "read 256 certificates, Beryl leaving keys until used": the same, with
+#   Beryl's `Certificate.new` alone (it decodes a key when a signature is
+#   first checked with it).
 # - "verify chain": one logged chain verified against the Mozilla root set
 #   at the log time, with the host name checked, the certificates read once
 #   beforehand. Beryl: `ChainVerification#verify`. libcrypto: a new
@@ -180,7 +183,15 @@ module CertificatesAgainstLibcrypto
       end
       nil
     end
-    measure(io, settings, "X.509", "parse #{PARSE_BATCH_SIZE} certificates", beryl_arm, libcrypto_arm)
+    measure(io, settings, "X.509", "read #{PARSE_BATCH_SIZE} certificates, public keys decoded", beryl_arm, libcrypto_arm)
+
+    # Beryl decodes a certificate's key when it is first used (to verify
+    # a signature); `d2i_X509` still decodes every key here.
+    reading_arm = -> do
+      batch.each { |der| Beryl::Certificates::Certificate.new(der) }
+      nil
+    end
+    measure(io, settings, "X.509", "read #{PARSE_BATCH_SIZE} certificates, Beryl leaving keys until used", reading_arm, libcrypto_arm)
   end
 
   def self.measure_verify(io : IO, settings : Settings, label : String, entry : CertificateCorpus::Entry, store : LibCrypto::X509_STORE) : Nil
