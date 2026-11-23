@@ -96,7 +96,8 @@ DECLASSIFICATION = /Beryl::Crypto::Declassification::reveal/.freeze
 SKIPPED_FUNCTION = /Exception::new|raise</.freeze
 EXPECTED_LEAK = /SecretFlowProbe::leaky_/.freeze
 LIST_OF_EXPECTED_LEAKS = [/SecretFlowProbe::leaky_comparison</, /SecretFlowProbe::leaky_comparison_of_round_keys</,
-                          /SecretFlowProbe::leaky_limb_lookup</, /SecretFlowProbe::leaky_table_selection</].freeze
+                          /SecretFlowProbe::leaky_limb_lookup</, /SecretFlowProbe::leaky_table_selection</,
+                          /SecretFlowProbe::leaky_flags_clobber</].freeze
 COMPRESSION_FUNCTION = /#compress(?:_with_portable_code)?</.freeze
 
 # Instructions allowed in assembly: none of them takes a time that depends on
@@ -111,7 +112,15 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
   lsl lsr subs sbcs sbc csel cmp
+  movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
 ].freeze
+# Instructions that write the condition flags. LLVM drops a clobber name it
+# does not know without a word, and the flags are "cc" on AArch64 but "flags"
+# on x86-64: a statement that writes them without the right name lets the
+# optimizer keep a flag value live across it (milestone F3's x86-64 P-256
+# multiplication broke ECDH that way in --release builds).
+AARCH64_FLAG_WRITERS = %w[adds adcs subs sbcs cmp cmn tst ands bics].freeze
+X86_FLAG_WRITERS = /\A(?:add|adc|sub|sbb|inc|dec|neg|cmp|test|and|or|xor|shl|shr|sar|rol|ror|mul|imul)[bwlq]?\z/.freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
 FORWARD_JUMP = /\A(?:b|jmp) 9f\z/.freeze
@@ -149,6 +158,25 @@ def assembly_faults(template)
     end
   end
   list_of_faults
+end
+
+# Returns the fault of a statement that writes the condition flags without
+# naming the clobber its processor's LLVM backend knows, or nil. *x86* says
+# whether the IR targets x86-64 (from its target triple).
+def flags_clobber_fault(template, constraints, x86)
+  list_of_mnemonics = template.split("\n").map { |line| line.strip[/\A[\w.]+/] }.compact
+  list_of_clobbers = constraints.scan(/~\{(\w+)\}/).flatten
+  if x86
+    writer = list_of_mnemonics.find { |mnemonic| mnemonic.match?(X86_FLAG_WRITERS) }
+    return nil unless writer && !list_of_clobbers.include?("flags")
+
+    "x86-64 statement writes the flags (#{writer}) without the \"flags\" clobber"
+  else
+    writer = list_of_mnemonics.find { |mnemonic| AARCH64_FLAG_WRITERS.include?(mnemonic) }
+    return nil unless writer && !list_of_clobbers.include?("cc")
+
+    "AArch64 statement writes the flags (#{writer}) without the \"cc\" clobber"
+  end
 end
 VALUE_TOKEN = /%"[^"]*"|%[\w.\-$]+/.freeze
 POINTER_PASSING_OPCODES = %w[bitcast addrspacecast ptrtoint inttoptr phi select add sub freeze insertvalue].freeze
@@ -388,6 +416,9 @@ class SecretFlow
 
     @freshly_stored_public.clear
     assembly_faults(template).each { |fault| @list_of_findings << Finding.new(@function.name, "assembly", fault[0, 160]) }
+    constraints = instruction.text[/ asm (?:sideeffect |alignstack |inteldialect |unwind )*"(?:[^"\\]|\\.)*", "([^"]*)"/, 1].to_s
+    clobber_fault = flags_clobber_fault(template, constraints, TARGETS_X86_64)
+    @list_of_findings << Finding.new(@function.name, "assembly", clobber_fault) if clobber_fault
     # A statement with no branch at all (the field arithmetic) may take
     # secrets in registers: its text passed the instruction list above, so
     # nothing in it takes a time that depends on them, and its results are
@@ -487,6 +518,7 @@ class SecretFlow
 end
 
 path = ARGV.fetch(0) { abort "usage: check_secret_flow.rb <file.ll>" }
+TARGETS_X86_64 = File.foreach(path).any? { |line| line.start_with?("target triple") && line.include?("x86_64") }
 list_of_functions = read_functions(path).select do |function|
   function.name.match?(ANALYZED_FUNCTION) && !function.name.match?(SKIPPED_FUNCTION) && !function.name.match?(PUBLIC_DATA_FUNCTION)
 end
