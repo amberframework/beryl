@@ -283,6 +283,37 @@ module Beryl::Crypto::V1
         : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x9", "x10", "x11", "x12", "x13", "x14", "memory", "cc")
     end
 
+    # Copies entry $2 of the 16 entries of *word_count* words at $1 into
+    # $0, reading every word of every entry and keeping one by `csel`, 16
+    # words at a time in x0 to x15 (x16 holds the word just loaded).
+    macro select_entry_statement(word_count, destination, table, index)
+      {%
+        kept = %w(x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15)
+        lines = [] of StringLiteral
+      %}
+      {% for chunk_index in 0...((word_count + 15) // 16) %}
+        {% chunk_start = chunk_index * 16 %}
+        {% chunk_size = word_count - chunk_start < 16 ? word_count - chunk_start : 16 %}
+        {% for word in 0...chunk_size %}
+          {% lines << "mov #{kept[word].id}, xzr" %}
+        {% end %}
+        {% for entry in 0...16 %}
+          {% lines << "cmp $2, ##{entry}" %}
+          {% for word in 0...chunk_size %}
+            {% lines << "ldr x16, [$1, ##{(entry * word_count + chunk_start + word) * 8}]" %}
+            {% lines << "csel #{kept[word].id}, x16, #{kept[word].id}, eq" %}
+          {% end %}
+        {% end %}
+        {% for word in 0...chunk_size %}
+          {% lines << "str #{kept[word].id}, [$0, ##{(chunk_start + word) * 8}]" %}
+        {% end %}
+      {% end %}
+      asm({{ lines.join("\n") }}
+        :: "r"({{ destination }}), "r"({{ table }}), "r"({{ index }})
+        : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+          "x16", "memory", "cc")
+    end
+
     {% if flag?(:aarch64) && !flag?(:beryl_portable_rsa) %}
       # Sets result to a·b/R mod m for 16-word numbers; *result* may be *a*
       # or *b*.
@@ -297,6 +328,14 @@ module Beryl::Crypto::V1
                          scratch_pointer : UInt64*) : Nil
         square_16_words_statement(result_pointer, a_pointer, modulus_pointer, negated_inverse, scratch_pointer)
       end
+
+      {% for word_count in [16, 24, 32, 48, 64] %}
+        # Copies entry *index* (below 16) of the table of 16 entries of
+        # {{ word_count }} words into *destination*, reading every entry.
+        def self.select_entry_{{ word_count }}(destination_pointer : UInt64*, table_pointer : UInt64*, index : UInt64) : Nil
+          select_entry_statement({{ word_count }}, destination_pointer, table_pointer, index)
+        end
+      {% end %}
 
       {% for word_count in [24, 32, 48, 64] %}
         # Sets result to a·b/R mod m for {{ word_count }}-word numbers, with

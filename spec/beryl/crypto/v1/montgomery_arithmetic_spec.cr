@@ -94,3 +94,17 @@ describe "Beryl::Crypto::V1::MontgomeryArithmetic.square" do
     end
   end
 end
+
+describe "Beryl::Crypto::V1::MontgomeryArithmetic.select_table_entry" do
+  it "copies the entry asked for, for every entry and every specialized word count" do
+    random = Random::PCG32.new(16_u64)
+    {16, 24, 32, 48, 64}.each do |word_count|
+      table = random_words(random, 16 * word_count)
+      selected = Slice(UInt64).new(word_count)
+      16.times do |entry|
+        MontgomeryArithmetic.select_table_entry(selected, table, entry.to_u64, word_count)
+        selected.should eq(table[entry * word_count, word_count])
+      end
+    end
+  end
+end

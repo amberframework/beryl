@@ -404,6 +404,17 @@ module Beryl::Crypto::V1
     # Copies entry *window* of *table* into *selected*, reading every entry.
     @[AlwaysInline]
     def self.select_table_entry(selected : Slice(UInt64), table : Slice(UInt64), window : UInt64, word_count : Int32) : Nil
+      {% if flag?(:aarch64) && !flag?(:beryl_portable_rsa) %}
+        {% begin %}
+          case word_count
+          {% for count in SPECIALIZED_WORD_COUNTS %}
+          when {{ count }}
+            MontgomeryMultiplicationInAssembly.select_entry_{{ count }}(selected.to_unsafe, table.to_unsafe, window)
+            return
+          {% end %}
+          end
+        {% end %}
+      {% end %}
       selected_pointer = selected.to_unsafe
       table_pointer = table.to_unsafe
       word_count.times { |index| selected_pointer[index] = 0_u64 }
