@@ -126,13 +126,13 @@ crystal-alpha build --release spec/fuzz/der_parser_fuzz.cr -o der_parser_fuzz
 
 ## Speed
 
-`bench/certificates_against_libcrypto.cr` against OpenSSL 4.1.0, on m4-mini-01 (Apple M4) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time. Inputs are the first 256 distinct certificates of the corpus and two logged chains verified against the Mozilla roots at their log time with the host name checked. B4 code as merged (commit 4735c87).
+`bench/certificates_against_libcrypto.cr` against OpenSSL 4.0.1, on m4-mini-01 (Apple M4) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time. Inputs are the first 256 distinct certificates of the corpus and two logged chains verified against the Mozilla roots at their log time with the host name checked. Milestone F3b code (commit 05d1481).
 
 | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
 |---|---|---|---|---|---|
-| read 256 certificates, Beryl leaving keys until used | 1472 | 235 | 6.26× as fast | 6.26× as fast to 6.27× as fast | yes |
-| read 256 certificates, public keys decoded | 57 | 234 | 4.09× slower | 4.1× slower to 4.08× slower | no |
-| verify a chain with an ECDSA leaf (two ECDSA signatures and one RSA signature) | 2666 | 4096 | 1.54× slower | 1.54× slower to 1.53× slower | no |
-| verify a chain with an RSA leaf (three RSA signatures) | 11469 | 23099 | 2.01× slower | 2.02× slower to 2.01× slower | no |
+| read 256 certificates, Beryl leaving keys until used | 1478 | 238 | 6.21× as fast | 6.2× as fast to 6.22× as fast | yes |
+| read 256 certificates, public keys decoded | 1264 | 241 | 5.27× as fast | 5.25× as fast to 5.29× as fast | yes |
+| verify a chain with an ECDSA leaf (two ECDSA signatures and one RSA signature) | 5461 | 4071 | 1.34× as fast | 1.34× as fast to 1.34× as fast | yes |
+| verify a chain with an RSA leaf (three RSA signatures) | 27230 | 23201 | 1.17× as fast | 1.17× as fast to 1.17× as fast | yes |
 
-Reading a certificate takes Beryl about 2.7 µs and OpenSSL about 16.6 µs, but `d2i_X509` also builds every public key, and Beryl builds a key only when a signature is first checked with it. Counting that work, Beryl is 4.1 times slower, nearly all of it in RSA keys: `RSA::PublicKey.new` takes about 128 µs, against 0.3 µs for a P-256 key, because it computes the Montgomery constant R² mod n up front. Chain verification is 1.5 to 2 times slower for the same reason as the signature speeds in [crypto/public-key.md](crypto/public-key.md): P-256 and RSA run on portable arithmetic, while OpenSSL's run on hand-written assembly. Both are the subject of the F3 speed milestone.
+Reading a certificate takes Beryl about 2.7 µs and OpenSSL about 16.6 µs. `d2i_X509` also builds every public key, and Beryl builds a key only when a signature is first checked with it; counting that work, Beryl is still 5.3 times as fast, because `RSA::PublicKey` now leaves its Montgomery constants (R² mod n) until its first operation. Before milestone F3b, building those constants with every key (about 128 µs per RSA key) made this row 4.06 times slower. Chain verification follows the signature speeds in [crypto/public-key.md](crypto/public-key.md): on main after F3, against the same OpenSSL in the same session, a chain with an ECDSA leaf was 1.34 times as fast and one with an RSA leaf 1.55 times slower; F3b brings the RSA chain to 1.17 times as fast.
