@@ -58,10 +58,10 @@ module Beryl::Crypto::V1
         return false unless Edwards25519Group::Scalar.canonical?(encoded_s)
 
         challenge = SHA512.new.update(encoded_r).update(@encoded).update(message.to_slice).final
-        negated_challenge = Edwards25519Group::Scalar.encode(
-          Beryl::Crypto::FieldArithmetic::Curve25519ScalarField.opp(Edwards25519Group::Scalar.reduce(challenge))
-        )
-        candidate_r = Edwards25519Group.multiply_and_add_public(encoded_s, @point, negated_challenge)
+        reduced_challenge = Edwards25519Group::Scalar.encode(Edwards25519Group::Scalar.reduce(challenge))
+        # [S]B + [k](-A), negating the point rather than the scalar, as ref10
+        # and OpenSSL do: the two differ when A has a small-order component.
+        candidate_r = Edwards25519Group.multiply_and_add_public(encoded_s, @point.negate, reduced_challenge)
         candidate_r.encode == encoded_r
       end
 
