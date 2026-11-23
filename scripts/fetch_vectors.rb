@@ -6,6 +6,7 @@
 #
 #   /usr/bin/ruby scripts/fetch_vectors.rb                  install pinned files
 #   /usr/bin/ruby scripts/fetch_vectors.rb --print-observed show observed sha256 values
+#   /usr/bin/ruby scripts/fetch_vectors.rb --missing        install only downloads with a file absent
 #
 # A download or an extracted file whose sha256 differs from its pin stops the
 # run with exit status 1 and leaves spec/vectors untouched for that download.
@@ -91,8 +92,12 @@ def print_observed(manifest)
   end
 end
 
-def install(manifest)
+def install(manifest, only_missing: false)
   manifest.fetch("list_of_downloads").each do |download_entry|
+    if only_missing && download_entry.fetch("list_of_files").all? { |file_entry| File.exist?(File.join(VECTOR_ROOT, file_entry.fetch("stored_path"))) }
+      next
+    end
+
     body, files = collect_files(download_entry)
     check_pin(download_entry.fetch("url"), body, download_entry.fetch("sha256"))
     download_entry.fetch("list_of_files").each do |file_entry|
@@ -141,7 +146,7 @@ begin
   if ARGV.include?("--print-observed")
     print_observed(manifest)
   else
-    install(manifest)
+    install(manifest, only_missing: ARGV.include?("--missing"))
     write_sources(manifest)
   end
 rescue PinMismatch => error

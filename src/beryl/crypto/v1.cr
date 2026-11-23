@@ -8,6 +8,7 @@ require "./v1/hash_based_key_derivation_function"
 require "./v1/authenticated_encryption_with_chacha20_and_poly1305"
 require "./v1/authenticated_encryption_with_extended_nonce_chacha20_and_poly1305"
 require "./v1/advanced_encryption_standard_in_galois_counter_mode"
+require "./v1/rivest_shamir_adleman"
 
 # The first generation of Beryl's algorithms, each under a name that states
 # what it is and a short alias that matches its common name:
@@ -24,6 +25,7 @@ require "./v1/advanced_encryption_standard_in_galois_counter_mode"
 # | `XChaCha20Poly1305` | `AuthenticatedEncryptionWithExtendedNonceChaCha20AndPoly1305` | draft-irtf-cfrg-xchacha-03 |
 # | `ChaCha20Poly1305` | `AuthenticatedEncryptionWithChaCha20AndPoly1305` | RFC 8439 |
 # | `AESGCM` | `AdvancedEncryptionStandardInGaloisCounterMode` | FIPS 197, SP 800-38D |
+# | `RSA` | `RivestShamirAdleman` | RFC 8017 (PKCS #1 v1.5 and PSS signatures, OAEP) |
 #
 # Code that must keep producing the same bytes names its algorithm here. Code
 # that wants today's recommended choice calls `Beryl::Crypto.digest`,
