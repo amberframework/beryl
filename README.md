@@ -37,7 +37,7 @@ The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `B
 
 ## Certificates
 
-`Beryl::Certificates` (milestone B4) reads X.509 certificates, CRLs and private key files and verifies certificate chains for TLS against the pinned Mozilla root set or the system bundle, with host names checked as RFC 9525 says. Every applicable case of x509-limbo passes, and its verdicts match OpenSSL 4.1.0 on 40,960 Certificate Transparency log entries. See [docs/certificates.md](docs/certificates.md).
+`Beryl::Certificates` (milestone B4) reads X.509 certificates, CRLs and private key files and verifies certificate chains for TLS against the pinned Mozilla root set or the system bundle, with host names checked as RFC 9525 says. Every applicable case of x509-limbo passes, and its verdicts match OpenSSL 4.1.0 on 40,960 Certificate Transparency log entries. Reading a certificate is 6.3 times as fast as OpenSSL (4.1 times slower when its public key is built too, mostly RSA key setup); verifying a chain is 1.5 to 2 times slower, held back by the P-256 and RSA speed above. See [docs/certificates.md](docs/certificates.md).
 
 ```crystal
 chain = Beryl::Certificates.read_pem_chain(File.read("chain.pem"))
