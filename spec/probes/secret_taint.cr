@@ -2,12 +2,13 @@
 # https://github.com/agl/ctgrind).
 #
 # Every secret this program handles (keys, messages, plaintexts, candidate
-# tags, passwords) is read from memory that was allocated and never written.
+# tags, passwords, private scalars) is read from memory that was allocated and never written.
 # Valgrind Memcheck tracks such bytes as undefined and reports any branch or
 # memory address computed from them, so a clean run shows that no secret
 # decided a branch or an index:
 #
-#     crystal build --release -Dgc_none -Dwithout_openssl spec/probes/secret_taint.cr -o secret_taint
+#     crystal build --release -Dgc_none -Dwithout_openssl -Dberyl_without_data_independent_timing \
+#       spec/probes/secret_taint.cr -o secret_taint
 #     valgrind --error-exitcode=99 ./secret_taint          # must exit 0
 #     valgrind --error-exitcode=99 ./secret_taint leaky    # must exit 99
 #
@@ -27,6 +28,53 @@ end
 # Returns *bytesize* bytes that Memcheck treats as secret.
 def secret_bytes(bytesize : Int32) : Bytes
   Bytes.new(LibC.malloc(bytesize).as(UInt8*), bytesize)
+end
+
+# Memcheck's client requests MAKE_MEM_UNDEFINED and MAKE_MEM_DEFINED
+# (valgrind/memcheck.h): the x86-64 and AArch64 instruction sequences
+# Valgrind recognizes, which do nothing when the program runs outside it.
+# The rotations add up to whole turns, so the register they turn is left
+# as it was.
+def memcheck_request(request : UInt64, pointer : Void*, bytesize : Int32) : Nil
+  arguments = StaticArray[request, pointer.address, bytesize.to_u64, 0_u64, 0_u64, 0_u64]
+  result = 0_u64
+  {% if flag?(:x86_64) %}
+    asm("rolq $$3, %rdi\nrolq $$13, %rdi\nrolq $$61, %rdi\nrolq $$51, %rdi\nxchgq %rbx, %rbx"
+            : "={rdx}"(result) : "{rax}"(arguments.to_unsafe), "{rdx}"(0_u64) : "cc", "memory" : "volatile")
+  {% elsif flag?(:aarch64) %}
+    asm("ror x12, x12, #3\nror x12, x12, #13\nror x12, x12, #51\nror x12, x12, #61\norr x10, x10, x10"
+            : "={x3}"(result) : "{x4}"(arguments.to_unsafe), "{x3}"(0_u64) : "cc", "memory" : "volatile")
+  {% end %}
+end
+
+MEMCHECK_MAKE_MEM_UNDEFINED = 0x4D430001_u64
+MEMCHECK_MAKE_MEM_DEFINED   = 0x4D430002_u64
+
+# Returns a copy of *value* that Memcheck treats as secret: for a secret
+# that must hold a particular value (a P-256 scalar must be below n).
+def secret_copy_of(value : Bytes) : Bytes
+  copy = value.dup
+  memcheck_request(MEMCHECK_MAKE_MEM_UNDEFINED, copy.to_unsafe.as(Void*), copy.size)
+  copy
+end
+
+# `Declassification.reveal` marks what it returns as public, which is what
+# it means: the verdict or the signature is the caller's to see. Memcheck
+# is told so; the compiled library code between the secret and the reveal
+# is the same as in a normal build.
+module Beryl::Crypto::Declassification
+  @[NoInline]
+  def self.reveal(padding_bytesize : UInt32) : UInt32
+    revealed = padding_bytesize
+    memcheck_request(MEMCHECK_MAKE_MEM_DEFINED, pointerof(revealed).as(Void*), sizeof(UInt32))
+    revealed
+  end
+
+  @[NoInline]
+  def self.reveal(published : Bytes) : Bytes
+    memcheck_request(MEMCHECK_MAKE_MEM_DEFINED, published.to_unsafe.as(Void*), published.size)
+    published
+  end
 end
 
 # Stores a result that depends on secrets where the optimizer must keep it,
@@ -130,6 +178,38 @@ def exercise(result_storage : Bytes, cipher : Beryl::Crypto::V1::AuthenticatedEn
   end
 end
 
+# RSA. The private operation runs on primes, exponents, coefficient, modulus
+# and input that are all secret (the modulus too, which only makes the check
+# stricter); the steps that reveal something by design (the sizes and
+# verdict of a key, the check with the public exponent, the OAEP verdict)
+# are left out, as `exercise` leaves out the branch on a tag check. Sizes of
+# 2,048, 3,072 and 4,096 bits, with primes of half the words each.
+alias RSA = Beryl::Crypto::V1::RSA
+{2_048, 3_072, 4_096}.each do |modulus_bit_count|
+  modulus_word_count = modulus_bit_count // 64
+  prime_word_count = modulus_word_count // 2
+  modulus = RSA::OddModulus.new(secret_words(modulus_word_count), modulus_bit_count)
+  first_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
+  second_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
+  result = Slice(UInt64).new(modulus_word_count)
+  is_in_range = RSA::PrivateKey.exponentiate_by_chinese_remainder(result, secret_words(modulus_word_count), first_prime, second_prime,
+    secret_bytes(prime_word_count * 8), secret_bytes(prime_word_count * 8), secret_words(prime_word_count), modulus)
+  keep(result_storage, Bytes.new(result.to_unsafe.as(UInt8*), result.size * 8))
+  keep(result_storage, is_in_range.to_u32!)
+
+  # Reading a key component and comparing it with a prime.
+  component, is_below = RSA::PrivateKey.read_component_below(secret_bytes(prime_word_count * 8 + 1), first_prime)
+  keep(result_storage, component)
+  keep(result_storage, is_below.to_u32!)
+
+  # OAEP decoding of a secret encoded message, under SHA-1 and SHA-256.
+  modulus_bytesize = modulus_bit_count // 8
+  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::Compatibility::SHA1, secret_bytes(modulus_bytesize),
+    Beryl::Crypto::Compatibility::SHA1.digest(public_message), 1_u64))
+  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::V1::SHA256, secret_bytes(modulus_bytesize),
+    Beryl::Crypto::V1::SHA256.digest(public_message), 1_u64))
+end
+
 exercise(result_storage, Beryl::Crypto::V1::ChaCha20Poly1305.new(secret_bytes(32)), public_nonce[0, 12], public_message)
 exercise(result_storage, Beryl::Crypto::V1::XChaCha20Poly1305.new(secret_bytes(32)), public_nonce, public_message)
 {16, 24, 32}.each do |key_bytesize|
@@ -178,36 +258,24 @@ LIST_OF_MESSAGE_BYTESIZES.each do |bytesize|
   keep(result_storage, tag)
 end
 
-# RSA. The private operation runs on primes, exponents, coefficient, modulus
-# and input that are all secret (the modulus too, which only makes the check
-# stricter); the steps that reveal something by design (the sizes and
-# verdict of a key, the check with the public exponent, the OAEP verdict)
-# are left out, as `exercise` leaves out the branch on a tag check. Sizes of
-# 2,048, 3,072 and 4,096 bits, with primes of half the words each.
-alias RSA = Beryl::Crypto::V1::RSA
-{2_048, 3_072, 4_096}.each do |modulus_bit_count|
-  modulus_word_count = modulus_bit_count // 64
-  prime_word_count = modulus_word_count // 2
-  modulus = RSA::OddModulus.new(secret_words(modulus_word_count), modulus_bit_count)
-  first_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
-  second_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
-  result = Slice(UInt64).new(modulus_word_count)
-  is_in_range = RSA::PrivateKey.exponentiate_by_chinese_remainder(result, secret_words(modulus_word_count), first_prime, second_prime,
-    secret_bytes(prime_word_count * 8), secret_bytes(prime_word_count * 8), secret_words(prime_word_count), modulus)
-  keep(result_storage, Bytes.new(result.to_unsafe.as(UInt8*), result.size * 8))
-  keep(result_storage, is_in_range.to_u32!)
+# The public-key operations: secret scalars, seeds and messages; public
+# peer keys. The build leaves the Data Independent Timing mode alone (see
+# `ProcessorFeatures`), so `DataIndependentTiming.run` is only its block.
+x25519_peer = Beryl::Crypto::V1::X25519::PrivateKey.new(Bytes.new(32) { |index| (index * 7 + 1).to_u8 }).public_key
+x25519_key = Beryl::Crypto::V1::X25519::PrivateKey.new(secret_bytes(32))
+keep(result_storage, x25519_key.public_key.to_slice)
+keep(result_storage, x25519_key.shared_secret(x25519_peer) || Bytes.new(0))
 
-  # Reading a key component and comparing it with a prime.
-  component, is_below = RSA::PrivateKey.read_component_below(secret_bytes(prime_word_count * 8 + 1), first_prime)
-  keep(result_storage, component)
-  keep(result_storage, is_below.to_u32!)
+ed25519_key = Beryl::Crypto::V1::Ed25519::SigningKey.new(secret_bytes(32))
+keep(result_storage, ed25519_key.verification_key.to_slice)
+keep(result_storage, ed25519_key.sign(public_message))
+keep(result_storage, ed25519_key.sign(secret_bytes(200)))
 
-  # OAEP decoding of a secret encoded message, under SHA-1 and SHA-256.
-  modulus_bytesize = modulus_bit_count // 8
-  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::Compatibility::SHA1, secret_bytes(modulus_bytesize),
-    Beryl::Crypto::Compatibility::SHA1.digest(public_message), 1_u64))
-  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::V1::SHA256, secret_bytes(modulus_bytesize),
-    Beryl::Crypto::V1::SHA256.digest(public_message), 1_u64))
-end
+p256_peer = Beryl::Crypto::V1::P256::PrivateKey.new(Bytes.new(32) { |index| (index + 9).to_u8 }).public_key
+p256_key = Beryl::Crypto::V1::P256::PrivateKey.new(secret_copy_of(Bytes.new(32) { |index| (index * 5 + 3).to_u8 }))
+keep(result_storage, p256_key.public_key.to_uncompressed)
+keep(result_storage, p256_key.shared_secret(p256_peer))
+keep(result_storage, p256_key.sign(public_message))
+keep(result_storage, p256_key.sign(secret_bytes(100), format: Beryl::Crypto::V1::SignatureFormat::FixedWidth))
 
 exit 0

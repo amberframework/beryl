@@ -7,9 +7,9 @@
 # under a name the checker can find. Its `Bytes` arguments are the secrets;
 # `scripts/check_secret_flow.rb` follows them through the optimized LLVM IR
 # and reports any branch, table index or division that depends on one.
-# `leaky_comparison`, `leaky_comparison_of_round_keys` and
-# `leaky_table_selection` are the faults the check exists to catch and must
-# be reported.
+# `leaky_comparison`, `leaky_comparison_of_round_keys`,
+# `leaky_table_selection` and `leaky_limb_lookup` are the faults the check
+# exists to catch and must be reported.
 require "../../src/beryl/crypto"
 require "../support/wycheproof"
 
@@ -136,6 +136,40 @@ module SecretFlowProbe
     Beryl::Crypto.decrypt(encrypted_message, key: key)
   end
 
+  alias X25519 = Beryl::Crypto::V1::X25519
+  alias Ed25519 = Beryl::Crypto::V1::Ed25519
+  alias P256 = Beryl::Crypto::V1::P256
+
+  @[NoInline]
+  def self.x25519_public_key(secret : Bytes) : X25519::PublicKey
+    X25519::PrivateKey.new(secret).public_key
+  end
+
+  @[NoInline]
+  def self.x25519_key_agreement(secret : Bytes, peer : X25519::PublicKey) : Bytes?
+    X25519::PrivateKey.new(secret).shared_secret(peer)
+  end
+
+  @[NoInline]
+  def self.ed25519_signing(seed : Bytes, message : Bytes) : Bytes
+    Ed25519::SigningKey.new(seed).sign(message)
+  end
+
+  @[NoInline]
+  def self.p256_key_agreement(scalar : Bytes, peer : P256::PublicKey) : Bytes
+    P256::PrivateKey.new(scalar).shared_secret(peer)
+  end
+
+  @[NoInline]
+  def self.p256_signing(scalar : Bytes, message : Bytes) : Bytes
+    P256::PrivateKey.new(scalar).sign(message, format: Beryl::Crypto::V1::SignatureFormat::FixedWidth)
+  end
+
+  @[NoInline]
+  def self.p256_signing_in_der(scalar : Bytes, message : Bytes) : Bytes
+    P256::PrivateKey.new(scalar).sign(message)
+  end
+
   alias RSAPrivateKey = Beryl::Crypto::V1::RSA::PrivateKey
 
   # Every component is secret here, the modulus and public exponent too:
@@ -179,6 +213,15 @@ module SecretFlowProbe
       return false if round_keys[index] == 0_u64
     end
     true
+  end
+
+  # Picks a table entry by the low bits of a limb: the leak an unprotected
+  # window lookup in curve code would have, on a field element passed by
+  # value rather than through a Slice.
+  @[NoInline]
+  def self.leaky_limb_lookup(limbs : StaticArray(UInt64, 4)) : UInt64
+    table = StaticArray(UInt64, 16).new { |index| index.to_u64 &* 0x9e3779b97f4a7c15_u64 }
+    table[limbs[0] & 0xf_u64]
   end
 
   # Reads a table entry at an index taken from a secret exponent byte, the
@@ -247,9 +290,20 @@ is_verified &= opened == plaintext
 end
 is_verified &= SecretFlowProbe.leaky_table_selection(Slice(UInt64).new(16) { |index| index.to_u64 }, key) == key[0].to_u64 & 0x0f_u64
 
+# The public-key operations on secret scalars, seeds and messages. The peer
+# keys are built from public bytes outside the entry points.
+x25519_peer = SecretFlowProbe.x25519_public_key(Bytes.new(32) { |index| (index * 7 + 1).to_u8 })
+is_verified &= !SecretFlowProbe.x25519_key_agreement(key, x25519_peer).nil?
+ed25519_signature = SecretFlowProbe.ed25519_signing(key, plaintext)
+p256_peer = SecretFlowProbe::P256::PrivateKey.new(Bytes.new(32) { |index| (index + 9).to_u8 }).public_key
+p256_shared = SecretFlowProbe.p256_key_agreement(key, p256_peer)
+p256_signature = SecretFlowProbe.p256_signing(key, plaintext)
+p256_signature_in_der = SecretFlowProbe.p256_signing_in_der(key, plaintext)
+is_verified &= SecretFlowProbe.leaky_limb_lookup(StaticArray(UInt64, 4).new { |index| key[index].to_u64 }) != 1_u64
+is_verified &= ed25519_signature.size == 64 && p256_shared.size == 32 && p256_signature.size == 64 && p256_signature_in_der.size >= 8
+
 encrypted_message = SecretFlowProbe.sealed_message(plaintext, key)
 is_verified &= SecretFlowProbe.opened_message(encrypted_message, key) == plaintext
-
 # RSA: a 2,048-bit key from a Wycheproof file, signing with PKCS #1 v1.5 and
 # PSS, and OAEP decryption of a good and a bad ciphertext.
 # The public-key side (verification, encryption) is left out: its inputs are

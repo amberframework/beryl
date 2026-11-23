@@ -1,4 +1,5 @@
 require "random/secure"
+require "../data_independent_timing"
 require "./montgomery_arithmetic"
 require "./rivest_shamir_adleman/odd_modulus"
 require "./rivest_shamir_adleman/message_encoding"

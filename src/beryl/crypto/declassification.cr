@@ -7,9 +7,11 @@ module Beryl::Crypto
   # formed or not), and on a key or a computation that must not be used
   # (an RSA key whose parts do not belong together, a private-key result
   # that fails its check). The caller learns that verdict anyway, since it
-  # is the return value or the error raised. The other kind is a value that
-  # is public by nature but was read from a buffer the checks treat as
-  # secret (see `reveal(public_value : UInt64)`).
+  # is the return value or the error raised. Two more kinds: a result about
+  # to be returned (the two halves of a signature, on their way into the
+  # signature encoder), and a value that is public by nature but was read
+  # from a buffer the checks treat as secret (see
+  # `reveal(public_value : UInt64)`).
   #
   # Every such decision passes through this module, so the constant-time
   # checks can tell an intended verdict from a leak, and a reader can list
@@ -21,6 +23,14 @@ module Beryl::Crypto
     @[NoInline]
     def self.reveal(verdict : Bool) : Bool
       reveal(verdict ? 1_u32 : 0_u32) == 1_u32
+    end
+
+    # Returns *published* unchanged: bytes computed from secrets that are
+    # about to be handed out, such as the two halves of a signature, on
+    # their way into code written for public data (the signature encoder).
+    @[NoInline]
+    def self.reveal(published : Bytes) : Bytes
+      published
     end
 
     # Returns *padding_bytesize* unchanged: the number of padding bytes at the

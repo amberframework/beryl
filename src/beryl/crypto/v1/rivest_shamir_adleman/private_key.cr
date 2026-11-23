@@ -205,8 +205,10 @@ module Beryl::Crypto::V1::RivestShamirAdleman
       return nil if @modulus_bytesize < 2 * D::DIGEST_SIZE + 2
 
       encoded = Bytes.new(@modulus_bytesize)
-      is_in_range = compute_private_operation(ciphertext, encoded)
-      verdict = MessageEncoding.decode_oaep(hash_function, encoded, D.digest(label.to_slice), is_in_range)
+      label_digest = D.digest(label.to_slice)
+      verdict = DataIndependentTiming.run do
+        MessageEncoding.decode_oaep(hash_function, encoded, label_digest, compute_private_operation(ciphertext, encoded))
+      end
       revealed = Declassification.reveal(verdict)
       if revealed == 0_u32
         SecretWiping.wipe(encoded)
@@ -225,28 +227,31 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     # and returns 1, or, when *input* is not below the modulus, writes a
     # value of no use and returns 0. The work is the same either way.
     # Raises `FaultInPrivateKeyOperation`, writing nothing, when the result
-    # raised to the public exponent does not give back the input.
+    # raised to the public exponent does not give back the input. Runs under
+    # `DataIndependentTiming`.
     def compute_private_operation(input : Bytes, output : Bytes) : UInt64
-      word_count = @modulus.word_count
-      input_words = Slice(UInt64).new(word_count)
-      MontgomeryArithmetic.decode_big_endian(input, input_words)
-      result_words = Slice(UInt64).new(word_count)
-      is_in_range = PrivateKey.exponentiate_by_chinese_remainder(result_words, input_words, @first_prime, @second_prime,
-        @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus)
+      DataIndependentTiming.run do
+        word_count = @modulus.word_count
+        input_words = Slice(UInt64).new(word_count)
+        MontgomeryArithmetic.decode_big_endian(input, input_words)
+        result_words = Slice(UInt64).new(word_count)
+        is_in_range = PrivateKey.exponentiate_by_chinese_remainder(result_words, input_words, @first_prime, @second_prime,
+          @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus)
 
-      check_words = Slice(UInt64).new(word_count)
-      @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent)
-      is_correct = MontgomeryArithmetic.equal_bit(check_words, input_words) | (is_in_range ^ 1_u64)
-      wipe_words(check_words)
-      wipe_words(input_words)
-      unless Declassification.reveal(is_correct == 1_u64)
+        check_words = Slice(UInt64).new(word_count)
+        @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent)
+        is_correct = MontgomeryArithmetic.equal_bit(check_words, input_words) | (is_in_range ^ 1_u64)
+        wipe_words(check_words)
+        wipe_words(input_words)
+        unless Declassification.reveal(is_correct == 1_u64)
+          wipe_words(result_words)
+          raise FaultInPrivateKeyOperation.new("the RSA private-key result did not check under the public exponent")
+        end
+
+        MontgomeryArithmetic.encode_big_endian(result_words, output)
         wipe_words(result_words)
-        raise FaultInPrivateKeyOperation.new("the RSA private-key result did not check under the public exponent")
+        is_in_range
       end
-
-      MontgomeryArithmetic.encode_big_endian(result_words, output)
-      wipe_words(result_words)
-      is_in_range
     end
 
     # :nodoc:
