@@ -90,22 +90,22 @@ The slow suite (`--tag slow`) also runs the RFC 7748 iteration to 1,000,000 step
 
 ### Speed
 
-`bench/public_key_against_libcrypto.cr` against OpenSSL (the bench prints its version as 4.0.1), on m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time, so both see the same load. Milestone F3, commit b3c72ee, Data Independent Timing on.
+`bench/public_key_against_libcrypto.cr` against OpenSSL (the bench prints its version as 4.0.1), on m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time, so both see the same load. Milestone F3b, commit e7a0765, Data Independent Timing on (`bench-public-key-main-vs-f3b-curves-e7a0765-m4-mini-01-10-cores.txt` in the F3b evidence also has main measured in the same session).
 
 | Algorithm | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
 |---|---|---|---|---|---|---|
-| X25519 | key generation | 72159 | 62854 | 1.15× as fast | 1.15× as fast to 1.15× as fast | yes |
-| X25519 | shared secret | 54439 | 55109 | 1.013× slower | 1.014× slower to 1.012× slower | no |
-| Ed25519 | key generation | 71756 | 61908 | 1.16× as fast | 1.16× as fast to 1.16× as fast | yes |
-| Ed25519 | sign | 67827 | 62245 | 1.088× as fast | 1.085× as fast to 1.091× as fast | yes |
-| Ed25519 | verify | 34522 | 24954 | 1.38× as fast | 1.38× as fast to 1.38× as fast | yes |
-| P-256 | key generation | 189622 | 132884 | 1.43× as fast | 1.42× as fast to 1.43× as fast | yes |
-| P-256 ECDSA | sign | 83198 | 89264 | 1.074× slower | 1.074× slower to 1.072× slower | no |
-| P-256 ECDSA | verify | 33757 | 30808 | 1.096× as fast | 1.095× as fast to 1.097× as fast | yes |
-| P-256 ECDH | shared secret | 37323 | 41159 | 1.1× slower | 1.1× slower to 1.1× slower | no |
-| P-384 ECDSA | verify | 6856 | 4870 | 1.41× as fast | 1.41× as fast to 1.41× as fast | yes |
+| X25519 | key generation | 75893 | 62540 | 1.21× as fast | 1.21× as fast to 1.22× as fast | yes |
+| X25519 | shared secret | 56166 | 54342 | 1.034× as fast | 1.033× as fast to 1.035× as fast | yes |
+| Ed25519 | key generation | 75239 | 61348 | 1.23× as fast | 1.23× as fast to 1.23× as fast | yes |
+| Ed25519 | sign | 71482 | 62097 | 1.15× as fast | 1.15× as fast to 1.15× as fast | yes |
+| Ed25519 | verify | 33555 | 25050 | 1.34× as fast | 1.34× as fast to 1.34× as fast | yes |
+| P-256 | key generation | 198511 | 132875 | 1.49× as fast | 1.49× as fast to 1.5× as fast | yes |
+| P-256 ECDSA | sign | 115867 | 90104 | 1.28× as fast | 1.28× as fast to 1.29× as fast | yes |
+| P-256 ECDSA | verify | 39759 | 30647 | 1.3× as fast | 1.3× as fast to 1.3× as fast | yes |
+| P-256 ECDH | shared secret | 43240 | 40957 | 1.056× as fast | 1.056× as fast to 1.057× as fast | yes |
+| P-384 ECDSA | verify | 7224 | 4813 | 1.5× as fast | 1.5× as fast to 1.5× as fast | yes |
 
-Before milestone F3, P-256 ran 2.5 to 3 times slower and P-384 verification 1.35 times slower. With the field in assembly, Jacobian coordinates and Booth windows, P-256 key generation is now 1.43 times as fast as OpenSSL, ECDSA verification 1.096 times as fast and P-384 verification 1.41 times as fast. P-256 signing (1.074 times slower) and ECDH (1.1 times slower) are still behind OpenSSL's nistz256 assembly, as is X25519 key agreement (1.013 times slower). Ed25519 and X25519 key generation and Ed25519 signing and verification are faster than OpenSSL.
+Before milestone F3, P-256 ran 2.5 to 3 times slower and P-384 verification 1.35 times slower. F3 put the field in assembly and moved to Jacobian coordinates and Booth windows, which left P-256 signing (1.074 times slower), ECDH (1.1 times slower) and X25519 key agreement (1.013 times slower) behind OpenSSL. Milestone F3b closed those gaps: inversion by divsteps (signing went from 1.087 times slower to 1.28 times as fast, measured in the same run against main), the P-256 field code written for the flag-limited M4 (point doubling 59 to 52 ns), table selection on the vector registers, and ECDH computing only x. Every row is now at least as fast as OpenSSL.
 
 ## RSA
 
