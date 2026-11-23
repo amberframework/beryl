@@ -91,7 +91,27 @@ Of 9,807 cases, 9,795 run and every one matches its expected result (932 that mu
 
 `spec/differential/libcrypto_certificate_differential.cr` compares Beryl with libcrypto over a real-world corpus: 40,960 consecutive entries of Cloudflare's Nimbus2026 Certificate Transparency log from index 6,800,000,000, each with the chain its submitter logged (`scripts/fetch_certificate_corpus.rb`, sha256 `e3f14969b8a9ce9da45da21db9d01728c2e8435196f377b11fd6afe181555888`, 167 MB, kept out of git). OpenSSL accepts a certificate when `d2i_X509` consumes every byte and sets no `EXFLAG_INVALID`.
 
-FILL_DIFFERENTIAL
+Results against OpenSSL 4.1.0 (23 Oct 2026) on m4-mini-01, 2026-11-23:
+
+- **Reading**: all 20,698 distinct certificates of the corpus (leaves, precertificates and their issuers) are accepted by both. Beryl reads one in 2.5 µs (median), 8.5 µs at the 99.9th percentile.
+- **Verifying**: all 40,960 logged chains get the same verdict, verified against the Mozilla roots at the log time with the host name checked (a DNS name of the leaf; the purpose alone when it has none). 10,365 verify in both (7,662 with a host name, 2,703 by purpose); the 30,595 precertificates are refused by both, for their critical CT poison extension. The slowest Beryl verification took 7.3 ms.
+- **Mutants**: 1,000,000 certificates mutated Frankencert style (seed 20261123: a bit flipped, a byte set, inserted or deleted, a length or tag changed, a length pushed into its long form, an element spliced in from another certificate). No crash, and no reading over the 10 ms limit when repeated (a first reading over it, repeated in microseconds, is a collector pause, and the run reports each one). 962,270 verdicts agree (221,358 accepted by both, 740,912 refused by both). Every disagreement is explained below.
+
+Where Beryl refuses a mutant that OpenSSL accepts (37,729), Beryl is applying a rule of DER or RFC 5280 that OpenSSL's `d2i_X509` leaves for later or does not apply:
+
+| Class | Mutants | Why Beryl refuses |
+|---|---|---|
+| String contents | 20,521 | An IA5String outside ASCII, a PrintableString or NumericString outside its alphabet, or a name value of a type no name uses. OpenSSL stores string bytes without checking their alphabet; Go refuses the same strings. |
+| Structure inside extension values | 5,274 | A wrong tag or constructed bit, a length past the end of its value, bytes after the last element, a malformed OBJECT IDENTIFIER or INTEGER, a GeneralName with an unknown or wrongly encoded tag, an empty list. OpenSSL decodes most extensions only when they are used (certificate policies, authority information access, extensions it does not know); Beryl reads every extension it understands when it reads the certificate and requires the others to be DER, as RFC 5280 §4.1 says extnValue is. |
+| Signature algorithm differs | 5,248 | The algorithm inside the signed part differs from the one outside it (RFC 5280 §4.1.1.2). OpenSSL makes the same check, but when the signature is verified rather than when the certificate is read. |
+| Time not in its DER form | 5,109 | A UTCTime or GeneralizedTime with a character that is not a digit, the wrong length, or a field out of range. OpenSSL checks validity times when it compares them. |
+| BER forms DER forbids | 1,297 | A BOOLEAN other than 00 or FF, a tag or length in a longer form than needed, an indefinite length, a constructed string, nonzero unused bits in a BIT STRING (X.690 §10 and §11). |
+| Explicit default version | 195 | Version 1 written out, which DER omits as the default. |
+| Duplicate extension | 85 | RFC 5280 §4.2 allows each extension once; OpenSSL flags duplicates only among the extensions it caches. |
+
+Where Beryl accepts a mutant that OpenSSL refuses (1): the mutation turned an extension into `sbgp-ipAddrBlock` (RFC 3779 IP address delegation) with contents that are not that structure. Beryl does not interpret RFC 3779 extensions; non-critical, they change nothing in Beryl's verdicts, and a critical one fails verification as an unknown critical extension.
+
+Earlier runs of the same seed found 11,201 mutants of this second kind, and each class was closed in Beryl rather than explained away: name attribute values are now checked as their string types (valid UTF-8, the PrintableString alphabet, no surrogates in a BMPString, Unicode characters in a UniversalString, OpenSSL's set of value types), the parameters of key algorithms are checked as DER, CRL distribution points, freshest CRL and issuer alternative names are read, an EDIPartyName and an otherName are checked, and a key usage with no bit set is refused (RFC 5280 §4.2.1.3).
 
 ### Fuzzing the DER parser
 
