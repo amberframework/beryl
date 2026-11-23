@@ -21,6 +21,9 @@ module CipherTimingCheck
   AES_ROUND_COUNT   = 14
   POLY_KEY_BYTESIZE = 32
 
+  # Long enough to reach the wide loops of the processor-instruction paths.
+  LONG_MESSAGE_BYTESIZE = 1024
+
   def self.new_measurement(stream : UInt64) : {TimingLeakMeasurement, Random::PCG32}
     generator = Random::PCG32.new(Random::Secure.rand(UInt64), stream)
     {TimingLeakMeasurement.new(HmacTimingCheck.measurements_per_class, generator), generator}
@@ -34,6 +37,19 @@ module CipherTimingCheck
     list_of_classes.each_with_index do |is_second_class, slot|
       next if is_second_class
       HmacTimingCheck.slot_of(storage, slot, slot_bytesize).fill(fixed_byte)
+    end
+  end
+
+  # Writes each slot of *storage* once, by the same copy for both classes:
+  # *fixed_value* into the slots of the first class, fresh random bytes
+  # from *random_source* into the others, so the two classes look alike
+  # to the caches.
+  def self.fill_fixed_value_against_random(storage : Bytes, fixed_value : Bytes, random_source : Bytes,
+                                           list_of_classes : Array(Bool), generator : Random::PCG32) : Nil
+    generator.random_bytes(random_source)
+    list_of_classes.each_with_index do |is_second_class, slot|
+      source = is_second_class ? HmacTimingCheck.slot_of(random_source, slot, fixed_value.size) : fixed_value
+      source.copy_to(HmacTimingCheck.slot_of(storage, slot, fixed_value.size))
     end
   end
 
@@ -211,6 +227,75 @@ if RequestedSpecTag.includes?("constant_time")
         measurement.shows_no_leak?.should be_true
       end
     {% end %}
+
+    # The paths on the processor's instructions, sealing a message long
+    # enough to reach their wide loops under one fixed key and under random
+    # keys. The key is the secret that drives every instruction; the
+    # message only meets the keystream in an XOR. Each slot takes its own
+    # random nonce, alike for both classes, and the key setup runs untimed
+    # in `prepare`. (Fixing the message instead does not work as a check on
+    # Apple Silicon: a plain loop that XORs a fixed message with random
+    # bytes times apart from one that XORs random messages, and OpenSSL's
+    # ciphers do too, so that test reads the processor, not the code.)
+    {% for cipher in [{"ChaCha20-Poly1305", "Beryl::Crypto::V1::ChaCha20Poly1305", 31},
+                      {"XChaCha20-Poly1305", "Beryl::Crypto::V1::XChaCha20Poly1305", 32},
+                      {"AES-256-GCM", "Beryl::Crypto::V1::AESGCM", 33}] %}
+  it "{{ cipher[0].id }} seals 1 KiB in the same time under one fixed key and under random keys" do
+    measurement, generator = CipherTimingCheck.new_measurement({{ cipher[2] }}_u64)
+    list_of_keys = Bytes.new(CipherTimingCheck::BATCH_SIZE * CipherTimingCheck::AES_KEY_BYTESIZE)
+    random_source = Bytes.new(list_of_keys.size)
+    fixed_key = Random::Secure.random_bytes(CipherTimingCheck::AES_KEY_BYTESIZE)
+    cipher = {{ cipher[1].id }}.new(fixed_key)
+    list_of_nonces = Bytes.new(CipherTimingCheck::BATCH_SIZE * cipher.nonce_bytesize)
+    message = Random::Secure.random_bytes(CipherTimingCheck::LONG_MESSAGE_BYTESIZE)
+    sealed = Bytes.new(CipherTimingCheck::LONG_MESSAGE_BYTESIZE + cipher.tag_bytesize)
+
+    fill_batch = ->(list_of_classes : Array(Bool)) do
+      generator.random_bytes(list_of_nonces)
+      CipherTimingCheck.fill_fixed_value_against_random(list_of_keys, fixed_key, random_source, list_of_classes, generator)
+    end
+    prepare = ->(slot : Int32) do
+      cipher = {{ cipher[1].id }}.new(HmacTimingCheck.slot_of(list_of_keys, slot, CipherTimingCheck::AES_KEY_BYTESIZE))
+      nil
+    end
+    measurement.run(fill_batch, prepare) do |slot|
+      nonce = HmacTimingCheck.slot_of(list_of_nonces, slot, cipher.nonce_bytesize)
+      cipher.encrypt(message, into: sealed, nonce: nonce, associated_data: "header")
+    end
+
+    HmacTimingCheck.report("{{ cipher[0].id }} seal of 1 KiB, one fixed key against random keys", measurement)
+    measurement.shows_no_leak?.should be_true
+  end
+{% end %}
+
+    it "AES-256-CBC encrypts and decrypts 1 KiB in the same time under one fixed key and under random keys" do
+      measurement, generator = CipherTimingCheck.new_measurement(34_u64)
+      list_of_keys = Bytes.new(CipherTimingCheck::BATCH_SIZE * CipherTimingCheck::AES_KEY_BYTESIZE)
+      random_source = Bytes.new(list_of_keys.size)
+      fixed_key = Random::Secure.random_bytes(CipherTimingCheck::AES_KEY_BYTESIZE)
+      cipher = Beryl::Crypto::Compatibility::AESCBC.new(fixed_key)
+      list_of_initialization_vectors = Bytes.new(CipherTimingCheck::BATCH_SIZE * 16)
+      message = Random::Secure.random_bytes(CipherTimingCheck::LONG_MESSAGE_BYTESIZE)
+      ciphertext = Bytes.new(cipher.padded_bytesize(CipherTimingCheck::LONG_MESSAGE_BYTESIZE))
+      padded_plaintext = Bytes.new(ciphertext.size)
+
+      fill_batch = ->(list_of_classes : Array(Bool)) do
+        generator.random_bytes(list_of_initialization_vectors)
+        CipherTimingCheck.fill_fixed_value_against_random(list_of_keys, fixed_key, random_source, list_of_classes, generator)
+      end
+      prepare = ->(slot : Int32) do
+        cipher = Beryl::Crypto::Compatibility::AESCBC.new(HmacTimingCheck.slot_of(list_of_keys, slot, CipherTimingCheck::AES_KEY_BYTESIZE))
+        nil
+      end
+      measurement.run(fill_batch, prepare) do |slot|
+        initialization_vector = HmacTimingCheck.slot_of(list_of_initialization_vectors, slot, 16)
+        cipher.encrypt(message, into: ciphertext, initialization_vector: initialization_vector)
+        cipher.decrypt(ciphertext, into: padded_plaintext, initialization_vector: initialization_vector)
+      end
+
+      HmacTimingCheck.report("AES-256-CBC encrypt and decrypt of 1 KiB, one fixed key against random keys", measurement)
+      measurement.shows_no_leak?.should be_true
+    end
 
     it "the CBC padding check takes the same time for well-formed padding and for random bytes" do
       measurement, generator = CipherTimingCheck.new_measurement(31_u64)

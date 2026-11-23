@@ -50,6 +50,41 @@ describe Beryl::Crypto::Compatibility::AdvancedEncryptionStandardInCipherBlockCh
     end
   end
 
+  describe "#encrypt and #decrypt with into:" do
+    it "write into the caller's buffers what the allocating forms return" do
+      cipher = AESCBC.new(Random::Secure.random_bytes(32))
+      initialization_vector = Random::Secure.random_bytes(16)
+      [0, 15, 16, 200].each do |bytesize|
+        message = Random::Secure.random_bytes(bytesize)
+        ciphertext = Bytes.new(cipher.padded_bytesize(bytesize))
+        cipher.encrypt(message, into: ciphertext, initialization_vector: initialization_vector)
+        ciphertext.should eq(cipher.encrypt(message, initialization_vector: initialization_vector))
+        padded_plaintext = Bytes.new(ciphertext.size)
+        plaintext_bytesize = cipher.decrypt(ciphertext, into: padded_plaintext, initialization_vector: initialization_vector)
+        plaintext_bytesize.should eq(bytesize)
+        padded_plaintext[0, bytesize].should eq(message)
+      end
+    end
+
+    it "wipes the buffer and returns nil when the padding is malformed" do
+      cipher = AESCBC.new(Bytes.new(16, 1_u8))
+      ciphertext = cipher.encrypt("message", initialization_vector: Bytes.new(16))
+      padded_plaintext = Bytes.new(16, 0x5a_u8)
+      other = AESCBC.new(Bytes.new(16, 2_u8))
+      refused = other.decrypt(ciphertext, into: padded_plaintext, initialization_vector: Bytes.new(16))
+      if refused.nil?
+        padded_plaintext.all?(0_u8).should be_true
+      end
+    end
+
+    it "raises OutputSizeMismatch when the buffer is not the padded length" do
+      cipher = AESCBC.new(Bytes.new(16))
+      expect_raises(Beryl::Crypto::OutputSizeMismatch) do
+        cipher.encrypt("message", into: Bytes.new(7), initialization_vector: Bytes.new(16))
+      end
+    end
+  end
+
   describe ".new" do
     it "raises KeySizeMismatch for a key that is not 16, 24 or 32 bytes" do
       expect_raises(Beryl::Crypto::KeySizeMismatch) { AESCBC.new(Bytes.new(17)) }
