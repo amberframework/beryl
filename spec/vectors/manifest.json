@@ -592,6 +592,56 @@
       ]
     },
     {
+      "source": "nist-cavp",
+      "license": "Public domain (United States Government work, NIST)",
+      "url": "https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/dss/186-3rsatestvectors.zip",
+      "pinned_at": "retrieved 2026-11-22; server Last-Modified 2024-09-29",
+      "kind": "zip",
+      "sha256": "8405aeb3572a4f98ed4b1a3ccb3f2f49e725462dd28ec4759d6a15d88855d19c",
+      "list_of_files": [
+        {
+          "archive_path": "SigVer15_186-3.rsp",
+          "stored_path": "nist-cavp/rsa/SigVer15_186-3.rsp",
+          "sha256": "6f60381434ad60ff390e67913b4d072ee7c2564bd5763696ef1b299e1d967b33"
+        },
+        {
+          "archive_path": "SigVerPSS_186-3.rsp",
+          "stored_path": "nist-cavp/rsa/SigVerPSS_186-3.rsp",
+          "sha256": "78c4200604ee709d64ea5308f44f6be49356c9a6988c37688ccba0590cf83bfa"
+        },
+        {
+          "archive_path": "SigGen15_186-3.txt",
+          "stored_path": "nist-cavp/rsa/SigGen15_186-3.txt",
+          "sha256": "19c49b8fc7102cc12476e215854cd228f1f8c0d316f0ea2df6c183f167e9724a"
+        },
+        {
+          "archive_path": "SigGenPSS_186-3.txt",
+          "stored_path": "nist-cavp/rsa/SigGenPSS_186-3.txt",
+          "sha256": "46de7f2fccb5f89516e64b5bdb1c4fd456a09c9cc680dd64e0756e62ff5000ec"
+        },
+        {
+          "archive_path": "SigVer15_186-3_TruncatedSHAs.rsp",
+          "stored_path": "nist-cavp/rsa/SigVer15_186-3_TruncatedSHAs.rsp",
+          "sha256": "5cf81bc32ebc51c6b810cb771a9e5b6dfbebb2cb83a44a3c70f43e7efe545c91"
+        },
+        {
+          "archive_path": "SigVerPSS_186-3_TruncatedSHAs.rsp",
+          "stored_path": "nist-cavp/rsa/SigVerPSS_186-3_TruncatedSHAs.rsp",
+          "sha256": "7c7ccdd61f78a5104a526b070f423871730b387ac43218c66b4865d89967cc6e"
+        },
+        {
+          "archive_path": "SigGen15_186-3_TruncatedSHAs.txt",
+          "stored_path": "nist-cavp/rsa/SigGen15_186-3_TruncatedSHAs.txt",
+          "sha256": "d02f487118dc9d2f761bbbe87d52406c90a4701638eac0e11219892ff923c709"
+        },
+        {
+          "archive_path": "SigGenPSS_186-3_TruncatedSHAs.txt",
+          "stored_path": "nist-cavp/rsa/SigGenPSS_186-3_TruncatedSHAs.txt",
+          "sha256": "a2d2caf6bb059f4dec9a1a2fdfc7219b6b65afbc51969d67373d108ccf511dae"
+        }
+      ]
+    },
+    {
       "source": "wycheproof",
       "license": "Apache-2.0 (C2SP/wycheproof)",
       "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/chacha20_poly1305_test.json",
@@ -644,6 +694,566 @@
         {
           "stored_path": "wycheproof/aes_cbc_pkcs5_test.json",
           "sha256": "e45234427e10cf91f27324e52afe8c00906f294dbae061535e2ae13dd300a46a"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_2048_sha1_mgf1sha1_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "2c7b3694cd9265eb88ddb586ca29aefcea02938bde772e19a71a4fa601fc71c5",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_2048_sha1_mgf1sha1_test.json",
+          "sha256": "2c7b3694cd9265eb88ddb586ca29aefcea02938bde772e19a71a4fa601fc71c5"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_2048_sha224_mgf1sha224_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "0a3d5c4da6a7a1d70a555e07511410d3540207f6057bfcb9b722f028e535e81b",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_2048_sha224_mgf1sha224_test.json",
+          "sha256": "0a3d5c4da6a7a1d70a555e07511410d3540207f6057bfcb9b722f028e535e81b"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_2048_sha256_mgf1sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "83dce701e3d8640ac56e6d7bf37a5a8f9bd6a336e1e932a1e9bfe4ba9c5ea3a9",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json",
+          "sha256": "83dce701e3d8640ac56e6d7bf37a5a8f9bd6a336e1e932a1e9bfe4ba9c5ea3a9"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_2048_sha384_mgf1sha384_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "b789151c90035789b5760f3c3bc3cb2338604b482362a31b22a0fdedce73b21c",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_2048_sha384_mgf1sha384_test.json",
+          "sha256": "b789151c90035789b5760f3c3bc3cb2338604b482362a31b22a0fdedce73b21c"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_2048_sha512_mgf1sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "37aa37a21910b59fcca10c29ffc726ff2f437938455457314d30587c1ebeee86",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_2048_sha512_mgf1sha512_test.json",
+          "sha256": "37aa37a21910b59fcca10c29ffc726ff2f437938455457314d30587c1ebeee86"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_3072_sha256_mgf1sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "c8122302f522bfd539650c71c4aa966bd1f89acb50c6f4c190030fdb9b2684a4",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_3072_sha256_mgf1sha256_test.json",
+          "sha256": "c8122302f522bfd539650c71c4aa966bd1f89acb50c6f4c190030fdb9b2684a4"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_3072_sha512_256_mgf1sha512_256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "fff874a24fd1a925be3213c490cca505b69247b11aa04e141d7fe2cc0a685d2d",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_3072_sha512_256_mgf1sha512_256_test.json",
+          "sha256": "fff874a24fd1a925be3213c490cca505b69247b11aa04e141d7fe2cc0a685d2d"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_3072_sha512_mgf1sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "ddef1a4ad4be281f49a8be85ed11adbe69a03d667530cc7638739d5c7f519fc9",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_3072_sha512_mgf1sha512_test.json",
+          "sha256": "ddef1a4ad4be281f49a8be85ed11adbe69a03d667530cc7638739d5c7f519fc9"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_4096_sha256_mgf1sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "e0eb85bcd6d66a85941ee3d98e44f7d1ffb0cf870ba6550e1ed3bec4174c60a9",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_4096_sha256_mgf1sha256_test.json",
+          "sha256": "e0eb85bcd6d66a85941ee3d98e44f7d1ffb0cf870ba6550e1ed3bec4174c60a9"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_4096_sha512_mgf1sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "5b5a83d2071b8aeb4aa8463adb8150bb0422ee1c461e4ab33f7e3dd63c79c0d6",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_4096_sha512_mgf1sha512_test.json",
+          "sha256": "5b5a83d2071b8aeb4aa8463adb8150bb0422ee1c461e4ab33f7e3dd63c79c0d6"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_oaep_misc_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "a989f2f0fb3151fe45ba93c629beb620fc949a0ba0ff1f694e451a6885449c79",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_oaep_misc_test.json",
+          "sha256": "a989f2f0fb3151fe45ba93c629beb620fc949a0ba0ff1f694e451a6885449c79"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pkcs1_2048_sig_gen_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "587b3d27d3429f2118cb02818da4d08eb3f36f50c747939eb550fae4337ccbf0",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pkcs1_2048_sig_gen_test.json",
+          "sha256": "587b3d27d3429f2118cb02818da4d08eb3f36f50c747939eb550fae4337ccbf0"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pkcs1_3072_sig_gen_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "45153219d486fd135d35aa968a957a0c015c7829e8dc59bea5f87e6c30912677",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pkcs1_3072_sig_gen_test.json",
+          "sha256": "45153219d486fd135d35aa968a957a0c015c7829e8dc59bea5f87e6c30912677"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pkcs1_4096_sig_gen_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "f13eadbec6c45291cb33e6b2fa0a0c2b862d0bd2eaec29f930d3b78067cd48c7",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pkcs1_4096_sig_gen_test.json",
+          "sha256": "f13eadbec6c45291cb33e6b2fa0a0c2b862d0bd2eaec29f930d3b78067cd48c7"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_2048_sha256_mgf1_0_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "b22a8d9a2e7e47f681d0ff1d1a55455daaf325d989c64ad005f848bd50b9b4c0",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_2048_sha256_mgf1_0_test.json",
+          "sha256": "b22a8d9a2e7e47f681d0ff1d1a55455daaf325d989c64ad005f848bd50b9b4c0"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_2048_sha256_mgf1_32_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "7f6efafc160f4816b96cbf1c12188a31051d7e3f001e27505d9edb5f2a0e325c",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_2048_sha256_mgf1_32_test.json",
+          "sha256": "7f6efafc160f4816b96cbf1c12188a31051d7e3f001e27505d9edb5f2a0e325c"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_2048_sha384_mgf1_48_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "66d464778b0b2f683a1d1a20e94f77e9472b8cc393b45f423fa08a48e677063c",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_2048_sha384_mgf1_48_test.json",
+          "sha256": "66d464778b0b2f683a1d1a20e94f77e9472b8cc393b45f423fa08a48e677063c"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_2048_sha512_256_mgf1_32_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "5682afaef4c4013dbd5c89d73b234f5a10e2eaaa6c3b54927d711cd893214e58",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_2048_sha512_256_mgf1_32_test.json",
+          "sha256": "5682afaef4c4013dbd5c89d73b234f5a10e2eaaa6c3b54927d711cd893214e58"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_3072_sha256_mgf1_32_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "cca48433e6d1accb57f65b3396c4f4dd93c776467101c3f0948e74c283fd4749",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_3072_sha256_mgf1_32_test.json",
+          "sha256": "cca48433e6d1accb57f65b3396c4f4dd93c776467101c3f0948e74c283fd4749"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_4096_sha256_mgf1_32_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "e627cbf5139a01e0a446c4fe15911f6268224fdd3ef4a1eb714b3942b5686410",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_4096_sha256_mgf1_32_test.json",
+          "sha256": "e627cbf5139a01e0a446c4fe15911f6268224fdd3ef4a1eb714b3942b5686410"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_4096_sha384_mgf1_48_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "d632649a7630f7c267eda576714ca11cf0ff068d6622f576b8701f923c112577",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_4096_sha384_mgf1_48_test.json",
+          "sha256": "d632649a7630f7c267eda576714ca11cf0ff068d6622f576b8701f923c112577"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_4096_sha512_mgf1_32_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "af1e1c1c593edf91be3e9880927231d57f9df082f2d8caec2a61d9874ade101f",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_4096_sha512_mgf1_32_test.json",
+          "sha256": "af1e1c1c593edf91be3e9880927231d57f9df082f2d8caec2a61d9874ade101f"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_4096_sha512_mgf1_64_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "c93ceaa56a190c9fd4707441c5c6a75839f108202d88aec891697f9623042547",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_4096_sha512_mgf1_64_test.json",
+          "sha256": "c93ceaa56a190c9fd4707441c5c6a75839f108202d88aec891697f9623042547"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_pss_misc_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "1fac515f67fea8ccbf44ea08fde2de00cd76169f774a54ce2994c9963c31e84f",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_pss_misc_test.json",
+          "sha256": "1fac515f67fea8ccbf44ea08fde2de00cd76169f774a54ce2994c9963c31e84f"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_2048_sha224_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "81b9da6e58f8a55ccc02b96f64a1d84d93100b9767dddbc906cee52d4c7daeac",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_2048_sha224_test.json",
+          "sha256": "81b9da6e58f8a55ccc02b96f64a1d84d93100b9767dddbc906cee52d4c7daeac"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_2048_sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "94a917b01ff50fb874cfc05bf29b4af44868d944a6558201cf18380da93fb393",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_2048_sha256_test.json",
+          "sha256": "94a917b01ff50fb874cfc05bf29b4af44868d944a6558201cf18380da93fb393"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_2048_sha384_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "c571c105d261c0ff588a2888a529f152563fb3b77894b7620d4e4f8f934f2c1d",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_2048_sha384_test.json",
+          "sha256": "c571c105d261c0ff588a2888a529f152563fb3b77894b7620d4e4f8f934f2c1d"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_2048_sha512_256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "960e49a9e15e70c362d5f496aaf907ece2d423372e67bf3c179d28d15dc33b90",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_2048_sha512_256_test.json",
+          "sha256": "960e49a9e15e70c362d5f496aaf907ece2d423372e67bf3c179d28d15dc33b90"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_2048_sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "16ea24b039905d054bdb6004f5fd179374e150b7b6d73a7ba654b6d00eab12ef",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_2048_sha512_test.json",
+          "sha256": "16ea24b039905d054bdb6004f5fd179374e150b7b6d73a7ba654b6d00eab12ef"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_3072_sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "0f5f18cabfaad3e2792e82f7e9882f8999049b456714de924b8a5e202f61ca43",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_3072_sha256_test.json",
+          "sha256": "0f5f18cabfaad3e2792e82f7e9882f8999049b456714de924b8a5e202f61ca43"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_3072_sha384_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "73499ee649d8fb703b3f0f455fa36f7682fde677c590a736958ebce05ab27dae",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_3072_sha384_test.json",
+          "sha256": "73499ee649d8fb703b3f0f455fa36f7682fde677c590a736958ebce05ab27dae"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_3072_sha512_256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "8949ba90bf911bbe4ce8c81ad817c4f030a8f2652de5516f65f9ec45cabb2fda",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_3072_sha512_256_test.json",
+          "sha256": "8949ba90bf911bbe4ce8c81ad817c4f030a8f2652de5516f65f9ec45cabb2fda"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_3072_sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "09aa3336fdb7be216180ce944ca7b2a052e1de38c210435c19506327d4a36ebd",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_3072_sha512_test.json",
+          "sha256": "09aa3336fdb7be216180ce944ca7b2a052e1de38c210435c19506327d4a36ebd"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_4096_sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "957aca128e30bd02c8982f8ca482d6521d16683f4bbc3f193cdfd4c8f04bc667",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_4096_sha256_test.json",
+          "sha256": "957aca128e30bd02c8982f8ca482d6521d16683f4bbc3f193cdfd4c8f04bc667"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_4096_sha384_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "bc26f16b9fc9a90628864d3d1111ef48a4bd00b9d4870bfab88ff326e309e073",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_4096_sha384_test.json",
+          "sha256": "bc26f16b9fc9a90628864d3d1111ef48a4bd00b9d4870bfab88ff326e309e073"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_4096_sha512_256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "f9cede09927f809d4cfa063d0c0fb06ea6424ff88c783ee29d0443aab4224857",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_4096_sha512_256_test.json",
+          "sha256": "f9cede09927f809d4cfa063d0c0fb06ea6424ff88c783ee29d0443aab4224857"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_4096_sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "9d6e67b1eb0d7040db411835238efd20e9302399a258bdff82de3f38e0f2855a",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_4096_sha512_test.json",
+          "sha256": "9d6e67b1eb0d7040db411835238efd20e9302399a258bdff82de3f38e0f2855a"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_8192_sha256_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "86df4075b4ce5954726abfa00cc19ebe8b608d6d99094d5e123d6a3a86568bd9",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_8192_sha256_test.json",
+          "sha256": "86df4075b4ce5954726abfa00cc19ebe8b608d6d99094d5e123d6a3a86568bd9"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_8192_sha384_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "382c2795790021798099bc8e94d0f078ef1f78787f5c7a87aaa25b5556efacff",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_8192_sha384_test.json",
+          "sha256": "382c2795790021798099bc8e94d0f078ef1f78787f5c7a87aaa25b5556efacff"
+        }
+      ]
+    },
+    {
+      "source": "wycheproof",
+      "license": "Apache-2.0 (C2SP/wycheproof)",
+      "url": "https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/rsa_signature_8192_sha512_test.json",
+      "pinned_at": "commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)",
+      "kind": "file",
+      "sha256": "c9e5463742d192b5ff1108538841d4d302fd799604a051d09db5f496f2f851f7",
+      "list_of_files": [
+        {
+          "stored_path": "wycheproof/rsa_signature_8192_sha512_test.json",
+          "sha256": "c9e5463742d192b5ff1108538841d4d302fd799604a051d09db5f496f2f851f7"
         }
       ]
     },

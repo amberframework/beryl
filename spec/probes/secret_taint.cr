@@ -20,6 +20,11 @@
 # on macOS arm64.
 require "../../src/beryl/crypto"
 
+# Returns *word_count* words that Memcheck treats as secret.
+def secret_words(word_count : Int32) : Slice(UInt64)
+  Slice(UInt64).new(LibC.malloc(word_count * 8).as(UInt64*), word_count)
+end
+
 # Returns *bytesize* bytes that Memcheck treats as secret.
 def secret_bytes(bytesize : Int32) : Bytes
   Bytes.new(LibC.malloc(bytesize).as(UInt8*), bytesize)
@@ -171,6 +176,38 @@ def exercise(result_storage : Bytes, cipher : Beryl::Crypto::V1::AuthenticatedEn
     keep(result_storage, cipher.encrypt(secret_bytes(bytesize), nonce: nonce, associated_data: associated_data))
     keep(result_storage, cipher.authentic?(secret_bytes(bytesize + cipher.tag_bytesize), nonce: nonce, associated_data: associated_data))
   end
+end
+
+# RSA. The private operation runs on primes, exponents, coefficient, modulus
+# and input that are all secret (the modulus too, which only makes the check
+# stricter); the steps that reveal something by design (the sizes and
+# verdict of a key, the check with the public exponent, the OAEP verdict)
+# are left out, as `exercise` leaves out the branch on a tag check. Sizes of
+# 2,048, 3,072 and 4,096 bits, with primes of half the words each.
+alias RSA = Beryl::Crypto::V1::RSA
+{2_048, 3_072, 4_096}.each do |modulus_bit_count|
+  modulus_word_count = modulus_bit_count // 64
+  prime_word_count = modulus_word_count // 2
+  modulus = RSA::OddModulus.new(secret_words(modulus_word_count), modulus_bit_count)
+  first_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
+  second_prime = RSA::OddModulus.new(secret_words(prime_word_count), prime_word_count * 64)
+  result = Slice(UInt64).new(modulus_word_count)
+  is_in_range = RSA::PrivateKey.exponentiate_by_chinese_remainder(result, secret_words(modulus_word_count), first_prime, second_prime,
+    secret_bytes(prime_word_count * 8), secret_bytes(prime_word_count * 8), secret_words(prime_word_count), modulus)
+  keep(result_storage, Bytes.new(result.to_unsafe.as(UInt8*), result.size * 8))
+  keep(result_storage, is_in_range.to_u32!)
+
+  # Reading a key component and comparing it with a prime.
+  component, is_below = RSA::PrivateKey.read_component_below(secret_bytes(prime_word_count * 8 + 1), first_prime)
+  keep(result_storage, component)
+  keep(result_storage, is_below.to_u32!)
+
+  # OAEP decoding of a secret encoded message, under SHA-1 and SHA-256.
+  modulus_bytesize = modulus_bit_count // 8
+  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::Compatibility::SHA1, secret_bytes(modulus_bytesize),
+    Beryl::Crypto::Compatibility::SHA1.digest(public_message), 1_u64))
+  keep(result_storage, RSA::MessageEncoding.decode_oaep(Beryl::Crypto::V1::SHA256, secret_bytes(modulus_bytesize),
+    Beryl::Crypto::V1::SHA256.digest(public_message), 1_u64))
 end
 
 exercise(result_storage, Beryl::Crypto::V1::ChaCha20Poly1305.new(secret_bytes(32)), public_nonce[0, 12], public_message)

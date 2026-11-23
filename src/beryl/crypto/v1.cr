@@ -12,6 +12,7 @@ require "./v1/diffie_hellman_over_curve25519"
 require "./v1/edwards_curve_signatures_over_curve25519"
 require "./v1/elliptic_curve_p256"
 require "./v1/elliptic_curve_p384"
+require "./v1/rivest_shamir_adleman"
 
 # The first generation of Beryl's algorithms, each under a name that states
 # what it is and a short alias that matches its common name:
@@ -32,6 +33,7 @@ require "./v1/elliptic_curve_p384"
 # | `Ed25519` | `EdwardsCurveSignaturesOverCurve25519` | RFC 8032 |
 # | `P256` | `EllipticCurveP256` (ECDSA with RFC 6979 nonces, ECDH) | FIPS 186-5, SP 800-186, RFC 6979 |
 # | `P384` | `EllipticCurveP384` (ECDSA verification) | FIPS 186-5, SP 800-186 |
+# | `RSA` | `RivestShamirAdleman` | RFC 8017 (PKCS #1 v1.5 and PSS signatures, OAEP) |
 #
 # Code that must keep producing the same bytes names its algorithm here. Code
 # that wants today's recommended choice calls `Beryl::Crypto.digest`,

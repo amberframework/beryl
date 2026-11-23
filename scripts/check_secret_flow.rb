@@ -41,7 +41,8 @@
 #
 # Lengths, offsets and counters stay public, as the constant-time rules
 # allow. The check passes when every finding is in the probe's
-# `leaky_comparison`, which is there to prove the checker reports a leak.
+# deliberate leaks (`leaky_comparison` and the others), which are there to
+# prove the checker reports a leak.
 #
 # Limits, stated plainly: this is a taint analysis written for this code, one
 # function at a time. Secrets that enter a function only as plain integer
@@ -58,13 +59,14 @@ ANALYZED_FUNCTION = /Beryl::Crypto|SecretFlowProbe|Crypto::Subtle/.freeze
 SECRET_BUFFER_FUNCTION = /BitslicedAdvancedEncryptionStandard::|ChaCha20StreamCipher::|Poly1305OneTimeAuthenticator::|
                           GaloisHash::|CipherBlockChaining::|ChaCha20Poly1305Construction::|
                           GaloisCounterModeWithProcessorInstructions::|ChaCha20WithVectorInstructions::|
-                          Poly1305WithWideMultiplication::|CipherBlockChainingWithProcessorInstructions::/x.freeze
+                          Poly1305WithWideMultiplication::|CipherBlockChainingWithProcessorInstructions::|
+                          MontgomeryArithmetic::/x.freeze
 
 # Methods of the cipher objects. A cipher object keeps integers that are
 # public (a round count, a tag size) beside buffers that are secret (a key,
 # round keys, a hash key), so every buffer loaded from the object is secret
 # and its integers are not.
-CIPHER_OBJECT_METHOD = /AuthenticatedEncryption|GaloisCounterMode|CipherBlockChainingMode/.freeze
+CIPHER_OBJECT_METHOD = /AuthenticatedEncryption|GaloisCounterMode|CipherBlockChainingMode|RivestShamirAdleman::/.freeze
 
 # Functions of the elliptic-curve code that take secrets by value: field
 # elements and scalars as arrays of limbs, points as structs of them, a
@@ -92,7 +94,7 @@ DECLASSIFICATION = /Beryl::Crypto::Declassification::reveal/.freeze
 SKIPPED_FUNCTION = /Exception::new|raise</.freeze
 EXPECTED_LEAK = /SecretFlowProbe::leaky_/.freeze
 LIST_OF_EXPECTED_LEAKS = [/SecretFlowProbe::leaky_comparison</, /SecretFlowProbe::leaky_comparison_of_round_keys</,
-                          /SecretFlowProbe::leaky_limb_lookup</].freeze
+                          /SecretFlowProbe::leaky_limb_lookup</, /SecretFlowProbe::leaky_table_selection</].freeze
 COMPRESSION_FUNCTION = /#compress(?:_with_portable_code)?</.freeze
 
 # Instructions allowed in assembly: none of them takes a time that depends on

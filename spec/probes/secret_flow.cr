@@ -7,10 +7,11 @@
 # under a name the checker can find. Its `Bytes` arguments are the secrets;
 # `scripts/check_secret_flow.rb` follows them through the optimized LLVM IR
 # and reports any branch, table index or division that depends on one.
-# `leaky_comparison`, `leaky_comparison_of_round_keys` and
-# `leaky_limb_lookup` are the faults the check exists to catch and must
-# be reported.
+# `leaky_comparison`, `leaky_comparison_of_round_keys`,
+# `leaky_table_selection` and `leaky_limb_lookup` are the faults the check
+# exists to catch and must be reported.
 require "../../src/beryl/crypto"
+require "../support/wycheproof"
 
 module SecretFlowProbe
   alias HMACSHA256 = Beryl::Crypto::V1::HMAC(Beryl::Crypto::V1::SHA256)
@@ -169,6 +170,41 @@ module SecretFlowProbe
     P256::PrivateKey.new(scalar).sign(message)
   end
 
+  alias RSAPrivateKey = Beryl::Crypto::V1::RSA::PrivateKey
+
+  # Every component is secret here, the modulus and public exponent too:
+  # their size, low bit and value pass through Declassification.reveal.
+  @[NoInline]
+  def self.rsa_private_key_construction(modulus : Bytes, public_exponent : Bytes, private_exponent : Bytes,
+                                        first_prime : Bytes, second_prime : Bytes, first_prime_exponent : Bytes,
+                                        second_prime_exponent : Bytes, coefficient : Bytes) : RSAPrivateKey
+    RSAPrivateKey.new(
+      modulus: modulus, public_exponent: public_exponent, private_exponent: private_exponent,
+      first_prime: first_prime, second_prime: second_prime, first_prime_exponent: first_prime_exponent,
+      second_prime_exponent: second_prime_exponent, coefficient: coefficient,
+    )
+  end
+
+  @[NoInline]
+  def self.rsa_pkcs1_signing(private_key : RSAPrivateKey, message : Bytes) : Bytes
+    private_key.sign_with_pkcs1(message, hash_function: Beryl::Crypto::V1::SHA256)
+  end
+
+  @[NoInline]
+  def self.rsa_pss_signing(private_key : RSAPrivateKey, message : Bytes, salt : Bytes) : Bytes
+    private_key.sign_with_pss_using_salt(message, salt, hash_function: Beryl::Crypto::V1::SHA384)
+  end
+
+  @[NoInline]
+  def self.rsa_oaep_decryption(private_key : RSAPrivateKey, ciphertext : Bytes) : Bytes?
+    private_key.decrypt_with_oaep(ciphertext, hash_function: Beryl::Crypto::Compatibility::SHA1)
+  end
+
+  @[NoInline]
+  def self.rsa_oaep_decryption_with_label(private_key : RSAPrivateKey, ciphertext : Bytes, label : Bytes) : Bytes?
+    private_key.decrypt_with_oaep(ciphertext, hash_function: Beryl::Crypto::V1::SHA256, label: label)
+  end
+
   # Stops at the first round key word that is zero: a leak in the form
   # cipher code would have it, which the check must report as well.
   @[NoInline]
@@ -186,6 +222,13 @@ module SecretFlowProbe
   def self.leaky_limb_lookup(limbs : StaticArray(UInt64, 4)) : UInt64
     table = StaticArray(UInt64, 16).new { |index| index.to_u64 &* 0x9e3779b97f4a7c15_u64 }
     table[limbs[0] & 0xf_u64]
+  end
+
+  # Reads a table entry at an index taken from a secret exponent byte, the
+  # fault a modular exponentiation without a full-table scan would have.
+  @[NoInline]
+  def self.leaky_table_selection(table : Slice(UInt64), exponent : Bytes) : UInt64
+    table[exponent[0] & 0x0f_u8]
   end
 
   # Compares with an early exit: the textbook timing leak.
@@ -245,6 +288,7 @@ is_verified &= opened == plaintext
   SecretFlowProbe.aes_block_decryption(round_keys, key_bytesize // 4 + 6, ciphertext[0, 64], opened[0, 64])
   SecretFlowProbe.leaky_comparison_of_round_keys(round_keys)
 end
+is_verified &= SecretFlowProbe.leaky_table_selection(Slice(UInt64).new(16) { |index| index.to_u64 }, key) == key[0].to_u64 & 0x0f_u64
 
 # The public-key operations on secret scalars, seeds and messages. The peer
 # keys are built from public bytes outside the entry points.
@@ -260,6 +304,25 @@ is_verified &= ed25519_signature.size == 64 && p256_shared.size == 32 && p256_si
 
 encrypted_message = SecretFlowProbe.sealed_message(plaintext, key)
 is_verified &= SecretFlowProbe.opened_message(encrypted_message, key) == plaintext
+# RSA: a 2,048-bit key from a Wycheproof file, signing with PKCS #1 v1.5 and
+# PSS, and OAEP decryption of a good and a bad ciphertext.
+# The public-key side (verification, encryption) is left out: its inputs are
+# public and it may branch on them, which this check cannot know.
+rsa_test_group = Wycheproof::TestFile(Wycheproof::RsaOaepTestGroup).from_json(
+  File.read(Path[__DIR__].parent / "vectors/wycheproof/rsa_oaep_2048_sha1_mgf1sha1_test.json")
+).list_of_test_groups.first
+rsa_key = rsa_test_group.private_key
+rsa_test = rsa_test_group.list_of_tests.first
+rsa_private_key = SecretFlowProbe.rsa_private_key_construction(
+  rsa_key.modulus.hexbytes, rsa_key.public_exponent.hexbytes, rsa_key.private_exponent.hexbytes,
+  rsa_key.first_prime.hexbytes, rsa_key.second_prime.hexbytes, rsa_key.first_prime_exponent.hexbytes,
+  rsa_key.second_prime_exponent.hexbytes, rsa_key.coefficient.hexbytes,
+)
+is_verified &= SecretFlowProbe.rsa_pkcs1_signing(rsa_private_key, plaintext).size == 256
+is_verified &= SecretFlowProbe.rsa_pss_signing(rsa_private_key, plaintext, key).size == 256
+rsa_ciphertext = rsa_test.ciphertext.hexbytes
+is_verified &= SecretFlowProbe.rsa_oaep_decryption(rsa_private_key, rsa_ciphertext) == rsa_test.message.hexbytes
+is_verified &= SecretFlowProbe.rsa_oaep_decryption_with_label(rsa_private_key, rsa_ciphertext, key).nil?
 
 list_of_digests = [
   Beryl::Crypto::Compatibility::MD5.digest(key), Beryl::Crypto::Compatibility::SHA1.digest(key),

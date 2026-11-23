@@ -8,9 +8,10 @@
 #   /usr/bin/ruby scripts/fetch_vectors.rb --print-observed show observed sha256 values
 #   /usr/bin/ruby scripts/fetch_vectors.rb --missing        install only downloads with a file absent
 #
-# Two Wycheproof files (x25519_test.json, ecdh_secp256r1_ecpoint_test.json)
-# are kept out of the repository: their private-key fields are public test
-# data, but they match the commit secret scan. CI installs them with
+# Some Wycheproof files (x25519_test.json, ecdh_secp256r1_ecpoint_test.json
+# and the RSA files listed in .gitignore) are kept out of the repository:
+# their private-key fields are public test data, but they match the commit
+# secret scan. CI installs them with
 # `--missing`; their sha256 pins in the manifest are checked as for any other.
 #
 # A download or an extracted file whose sha256 differs from its pin stops the
@@ -99,9 +100,10 @@ end
 
 def install(manifest, only_missing: false)
   manifest.fetch("list_of_downloads").each do |download_entry|
-    if only_missing && download_entry.fetch("list_of_files").all? { |file_entry| File.exist?(File.expand_path(file_entry.fetch("stored_path"), VECTOR_ROOT)) }
+    if only_missing && download_entry.fetch("list_of_files").all? { |file_entry| File.exist?(File.join(VECTOR_ROOT, file_entry.fetch("stored_path"))) }
       next
     end
+
     body, files = collect_files(download_entry)
     check_pin(download_entry.fetch("url"), body, download_entry.fetch("sha256"))
     download_entry.fetch("list_of_files").each do |file_entry|

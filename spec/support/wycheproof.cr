@@ -225,3 +225,93 @@ module Wycheproof
     getter list_of_tests : Array(SignatureTest) = [] of SignatureTest
   end
 end
+
+# The RSA files (`rsassa_pkcs1_verify_schema_v1.json`,
+# `rsassa_pkcs1_generate_schema_v1.json`, `rsassa_pss_verify_schema_v1.json`,
+# `rsaes_oaep_decrypt_schema_v1.json`). A component a file does not carry
+# reads as the empty string.
+module Wycheproof
+  struct RsaKey
+    include JSON::Serializable
+
+    getter modulus : String = ""
+    @[JSON::Field(key: "publicExponent")]
+    getter public_exponent : String = ""
+    @[JSON::Field(key: "privateExponent")]
+    getter private_exponent : String = ""
+    @[JSON::Field(key: "prime1")]
+    getter first_prime : String = ""
+    @[JSON::Field(key: "prime2")]
+    getter second_prime : String = ""
+    @[JSON::Field(key: "exponent1")]
+    getter first_prime_exponent : String = ""
+    @[JSON::Field(key: "exponent2")]
+    getter second_prime_exponent : String = ""
+    getter coefficient : String = ""
+  end
+
+  struct RsaSignatureTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    @[JSON::Field(key: "msg")]
+    getter message : String = ""
+    @[JSON::Field(key: "sig")]
+    getter signature : String = ""
+    getter result : String = ""
+    @[JSON::Field(key: "flags")]
+    getter list_of_flags : Array(String) = [] of String
+  end
+
+  struct RsaSignatureTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "keySize")]
+    getter key_bit_size : Int32 = 0
+    @[JSON::Field(key: "sha")]
+    getter hash_name : String = ""
+    @[JSON::Field(key: "mgfSha")]
+    getter mask_generation_hash_name : String = ""
+    @[JSON::Field(key: "sLen")]
+    getter salt_bytesize : Int32 = 0
+    @[JSON::Field(key: "publicKey")]
+    getter public_key : RsaKey = RsaKey.from_json("{}")
+    @[JSON::Field(key: "privateKey")]
+    getter private_key : RsaKey = RsaKey.from_json("{}")
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(RsaSignatureTest) = [] of RsaSignatureTest
+  end
+
+  struct RsaOaepTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    @[JSON::Field(key: "msg")]
+    getter message : String = ""
+    @[JSON::Field(key: "ct")]
+    getter ciphertext : String = ""
+    getter label : String = ""
+    getter result : String = ""
+    @[JSON::Field(key: "flags")]
+    getter list_of_flags : Array(String) = [] of String
+  end
+
+  struct RsaOaepTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "keySize")]
+    getter key_bit_size : Int32 = 0
+    @[JSON::Field(key: "sha")]
+    getter hash_name : String = ""
+    @[JSON::Field(key: "mgfSha")]
+    getter mask_generation_hash_name : String = ""
+    @[JSON::Field(key: "privateKey")]
+    getter private_key : RsaKey = RsaKey.from_json("{}")
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(RsaOaepTest) = [] of RsaOaepTest
+  end
+end
