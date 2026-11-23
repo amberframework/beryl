@@ -60,9 +60,12 @@ def files_at(commit)
 end
 
 # Moves every constant of the source under *namespace*.
+# Moves every constant of the source under *namespace*, including a reference
+# rooted at the top level (`::Beryl::Crypto`), as the macros write them.
 def under_namespace(source, namespace)
   source
     .gsub(/^module Beryl$/, "module #{namespace}::Beryl")
+    .gsub(/(?<![\w:])::Beryl::/, "::#{namespace}::Beryl::")
     .gsub(/(?<![\w:])Beryl::/, "#{namespace}::Beryl::")
 end
 
@@ -87,6 +90,9 @@ def vendor(commit, namespace, destination)
     else
       relative_path = path.delete_prefix("src/")
       written = under_namespace(contents, namespace)
+      if written.match?(/(?<!\w)::Beryl::/)
+        fail_with("#{path} still names ::Beryl:: after the move under #{namespace}::Beryl")
+      end
     end
     target = File.join(destination, relative_path)
     FileUtils.mkdir_p(File.dirname(target))
