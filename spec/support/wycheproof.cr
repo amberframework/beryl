@@ -201,6 +201,9 @@ module Wycheproof
   struct EddsaVerifyTestGroup
     include JSON::Serializable
 
+    @[JSON::Field(key: "publicKeyDer")]
+    getter public_key_der : String = ""
+
     @[JSON::Field(key: "publicKey")]
     getter public_key : EddsaPublicKey = EddsaPublicKey.from_json("{}")
     @[JSON::Field(key: "tests")]
@@ -216,6 +219,9 @@ module Wycheproof
 
   struct EcdsaVerifyTestGroup
     include JSON::Serializable
+
+    @[JSON::Field(key: "publicKeyDer")]
+    getter public_key_der : String = ""
 
     @[JSON::Field(key: "publicKey")]
     getter public_key : EcPublicKey = EcPublicKey.from_json("{}")
@@ -267,6 +273,9 @@ module Wycheproof
 
   struct RsaSignatureTestGroup
     include JSON::Serializable
+
+    @[JSON::Field(key: "publicKeyDer")]
+    getter public_key_der : String = ""
 
     @[JSON::Field(key: "keySize")]
     getter key_bit_size : Int32 = 0
