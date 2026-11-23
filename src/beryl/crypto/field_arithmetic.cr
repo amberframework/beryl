@@ -4,6 +4,7 @@ require "./field_arithmetic/p256_field"
 require "./field_arithmetic/p256_scalar_field"
 require "./field_arithmetic/p384_field"
 require "./field_arithmetic/p384_scalar_field"
+require "./field_arithmetic/fields_in_assembly"
 
 # :nodoc:
 #
