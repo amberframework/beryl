@@ -12,39 +12,31 @@ module Beryl::Crypto
   # (spec/constant_time/public_key_timing_spec.cr). With DIT on, the two
   # cannot be told apart. Apple asks for DIT around cryptographic work.
   #
-  # The mode belongs to the thread. `run` turns it on, runs the block and
-  # turns it off again unless it was already on, so calls nest. Processors
-  # without the mode (x86-64, older Arm) run the block as it is.
+  # The mode belongs to the thread. `run` turns it on when it is off and
+  # leaves it on: turning it off again after each call cost about 17 ns
+  # on Apple M4 (one `msr` each way), half as long as SHA-256 takes on
+  # a 64-byte message, while code that runs with the mode on was measured no
+  # slower (HMAC-SHA-256 and SHA-256 on 64 bytes, 65 ns and 35 ns either
+  # way). Reading the mode costs about 0.5 ns, so calls that nest, such as
+  # HMAC inside HKDF, pay almost nothing. Processors without the mode
+  # (x86-64, older Arm) run the block as it is.
   module DataIndependentTiming
-    # `msr dit, #1`, `msr dit, #0` and `mrs x0, dit`, written as their
-    # encodings so that no assembler target feature is needed.
     def self.run(&)
       {% if flag?(:aarch64) %}
-        if ProcessorFeatures::HAS_DATA_INDEPENDENT_TIMING
-          was_on = turn_on
-          begin
-            return yield
-          ensure
-            turn_off unless was_on
-          end
-        end
+        turn_on_unless_on if ProcessorFeatures::HAS_DATA_INDEPENDENT_TIMING
       {% end %}
       yield
     end
 
     {% if flag?(:aarch64) %}
-      # Turns the mode on and returns whether it was on before.
+      # `mrs x0, dit` and `msr dit, #1`, written as their encodings so that
+      # no assembler target feature is needed. The branch is on the mode,
+      # which is public.
       @[AlwaysInline]
-      private def self.turn_on : Bool
+      private def self.turn_on_unless_on : Nil
         state = 0_u64
         asm(".inst 0xd53b42a0" : "={x0}"(state) :: "memory" : "volatile")
-        asm(".inst 0xd503415f" :::: "volatile")
-        state.bit(24) == 1
-      end
-
-      @[AlwaysInline]
-      private def self.turn_off : Nil
-        asm(".inst 0xd503405f" :::: "volatile")
+        asm(".inst 0xd503415f" :::: "volatile") unless state.bit(24) == 1
       end
     {% end %}
   end
