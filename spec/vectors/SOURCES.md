@@ -77,6 +77,13 @@ License: Public domain (United States Government work, NIST)
   - `spec/vectors/nist-cavp/aes/ECBMMT128.rsp` sha256 `001977653a6df258fe41d35b02729367a6c25b58b2e5cd3767ca9362cc6753b7`
   - `spec/vectors/nist-cavp/aes/ECBMMT192.rsp` sha256 `fb45f113ad649b6441651f4467196a297649cc74185b8d56ce65a4c0150260e4`
   - `spec/vectors/nist-cavp/aes/ECBMMT256.rsp` sha256 `4fbbb291692101bcf4c2cf85762388824881f5712318151e2b4af275eb081748`
+- Download: https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/dss/186-4ecdsatestvectors.zip
+  - Pinned at: retrieved 2026-11-22
+  - Download sha256: `fe47cc92b4cee418236125c9ffbcd9bb01c8c34e74a4ba195d954bcb72824752`
+  - `spec/vectors/nist-cavp/ecdsa/SigVer.rsp` sha256 `e9841c3d12e323042751460d0b8ef4bc59c2640105ec7da4852775f80ab10191`
+  - `spec/vectors/nist-cavp/ecdsa/SigGen.txt` sha256 `95d0a19c03f6d2dc16e9e18fd5c3318e1952e0bc88a45127c996c35b4a15f4e2`
+  - `spec/vectors/nist-cavp/ecdsa/KeyPair.rsp` sha256 `a85cc17bf78868326dffde6ebfc298987fe187606d406ba5dd417d491d67411d`
+  - `spec/vectors/nist-cavp/ecdsa/PKV.rsp` sha256 `1d33551c1a199b1fc2b0e4075cdfd52d4830503ef37e6b16f04ce617d524f3f1`
 
 ## wycheproof
 
@@ -150,6 +157,34 @@ License: Apache-2.0 (C2SP/wycheproof)
   - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
   - Download sha256: `e45234427e10cf91f27324e52afe8c00906f294dbae061535e2ae13dd300a46a`
   - `spec/vectors/wycheproof/aes_cbc_pkcs5_test.json` sha256 `e45234427e10cf91f27324e52afe8c00906f294dbae061535e2ae13dd300a46a`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/x25519_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `35c3f5231cf25cc640b524d403461deee9e49441d5d915a3a25b2c8ff5adbe7d`
+  - `spec/vectors/wycheproof/x25519_test.json` sha256 `35c3f5231cf25cc640b524d403461deee9e49441d5d915a3a25b2c8ff5adbe7d`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ed25519_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `ea80ffebac085e21cb9d3e903e7fa2b448d96702da5b31f061d0b83b430b74b3`
+  - `spec/vectors/wycheproof/ed25519_test.json` sha256 `ea80ffebac085e21cb9d3e903e7fa2b448d96702da5b31f061d0b83b430b74b3`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdh_secp256r1_ecpoint_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `648f16d077caf2400d02331ca51f44744c72c799830c8d0595d0b18b6dd9f886`
+  - `spec/vectors/wycheproof/ecdh_secp256r1_ecpoint_test.json` sha256 `648f16d077caf2400d02331ca51f44744c72c799830c8d0595d0b18b6dd9f886`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdsa_secp256r1_sha256_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `182db4f3e230f6f9fa9f800d2a614dede30284b8e8438bbfe1171905402e9332`
+  - `spec/vectors/wycheproof/ecdsa_secp256r1_sha256_test.json` sha256 `182db4f3e230f6f9fa9f800d2a614dede30284b8e8438bbfe1171905402e9332`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdsa_secp256r1_sha256_p1363_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `c60de693930e386c3a5472d08081623ef8504decc54b38ac01ec6b2a2575c986`
+  - `spec/vectors/wycheproof/ecdsa_secp256r1_sha256_p1363_test.json` sha256 `c60de693930e386c3a5472d08081623ef8504decc54b38ac01ec6b2a2575c986`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdsa_secp384r1_sha384_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `8a5b3ae1760975143414811f13588c24d951d9d8c904195087ba327591dfe9cc`
+  - `spec/vectors/wycheproof/ecdsa_secp384r1_sha384_test.json` sha256 `8a5b3ae1760975143414811f13588c24d951d9d8c904195087ba327591dfe9cc`
+- Download: https://raw.githubusercontent.com/C2SP/wycheproof/65ca494727a52944c204441c860b039e6786b99b/testvectors_v1/ecdsa_secp384r1_sha384_p1363_test.json
+  - Pinned at: commit 65ca494727a52944c204441c860b039e6786b99b (2026-11-11)
+  - Download sha256: `e27344bf6daae75fa19663620883809f91c79fc4b4420eff9eae8036b34476be`
+  - `spec/vectors/wycheproof/ecdsa_secp384r1_sha384_p1363_test.json` sha256 `e27344bf6daae75fa19663620883809f91c79fc4b4420eff9eae8036b34476be`
 
 ## rfc
 
@@ -187,3 +222,15 @@ License: IETF Trust Legal Provisions (RFC text reproduced unmodified)
   - Pinned at: retrieved 2026-11-22 (a numbered Internet-Draft revision is immutable)
   - Download sha256: `fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd`
   - `spec/vectors/rfc/draft-irtf-cfrg-xchacha-03.txt` sha256 `fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd`
+- Download: https://www.rfc-editor.org/rfc/rfc7748.txt
+  - Pinned at: retrieved 2026-11-22 (RFCs are immutable once published)
+  - Download sha256: `279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3`
+  - `spec/vectors/rfc/rfc7748.txt` sha256 `279ca0ecc5e92e2962e27b846986aeb74729d9dd34bd4a04a362f80dcb596ad3`
+- Download: https://www.rfc-editor.org/rfc/rfc8032.txt
+  - Pinned at: retrieved 2026-11-22 (RFCs are immutable once published)
+  - Download sha256: `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3`
+  - `spec/vectors/rfc/rfc8032.txt` sha256 `ed63657ff389301282b169b0abde9b5dd2c7e4d524fdfa5da6ff3094fc93c4c3`
+- Download: https://www.rfc-editor.org/rfc/rfc6979.txt
+  - Pinned at: retrieved 2026-11-22 (RFCs are immutable once published)
+  - Download sha256: `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701`
+  - `spec/vectors/rfc/rfc6979.txt` sha256 `456e8f17558fdbd206f968b96fc6f1b4a71ea331ab30ad17f711ab3adaa7d701`

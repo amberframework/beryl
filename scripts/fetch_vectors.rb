@@ -6,6 +6,12 @@
 #
 #   /usr/bin/ruby scripts/fetch_vectors.rb                  install pinned files
 #   /usr/bin/ruby scripts/fetch_vectors.rb --print-observed show observed sha256 values
+#   /usr/bin/ruby scripts/fetch_vectors.rb --missing        install only downloads with a file absent
+#
+# Two Wycheproof files (x25519_test.json, ecdh_secp256r1_ecpoint_test.json)
+# are kept out of the repository: their private-key fields are public test
+# data, but they match the commit secret scan. CI installs them with
+# `--missing`; their sha256 pins in the manifest are checked as for any other.
 #
 # A download or an extracted file whose sha256 differs from its pin stops the
 # run with exit status 1 and leaves spec/vectors untouched for that download.
@@ -91,8 +97,11 @@ def print_observed(manifest)
   end
 end
 
-def install(manifest)
+def install(manifest, only_missing: false)
   manifest.fetch("list_of_downloads").each do |download_entry|
+    if only_missing && download_entry.fetch("list_of_files").all? { |file_entry| File.exist?(File.expand_path(file_entry.fetch("stored_path"), VECTOR_ROOT)) }
+      next
+    end
     body, files = collect_files(download_entry)
     check_pin(download_entry.fetch("url"), body, download_entry.fetch("sha256"))
     download_entry.fetch("list_of_files").each do |file_entry|
@@ -141,7 +150,7 @@ begin
   if ARGV.include?("--print-observed")
     print_observed(manifest)
   else
-    install(manifest)
+    install(manifest, only_missing: ARGV.include?("--missing"))
     write_sources(manifest)
   end
 rescue PinMismatch => error
