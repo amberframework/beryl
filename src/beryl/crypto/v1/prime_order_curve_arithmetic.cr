@@ -744,6 +744,28 @@ module Beryl::Crypto::V1
       reduce_once_modulo_order(field_element_to_big_endian(x))
     end
 
+    # Returns whether the x coordinate of the public *point* (not at
+    # infinity), reduced modulo n, equals the big-endian *encoded_r*
+    # (below n), without an inversion: x = X/Z^2 is r or r + n (the only
+    # values below p that reduce to r, the second only when r + n < p),
+    # so it checks r·Z^2 = X and (r + n)·Z^2 = X instead. Variable time;
+    # verification's inputs are public.
+    def self.x_coordinate_matches_public?(point : Point, encoded_r : Bytes) : Bool
+      z_squared = Field.square(point.z)
+      return true if Field.mul(field_element_from_big_endian(encoded_r), z_squared) == point.x
+
+      r_plus_order = Bytes.new(BYTESIZE)
+      carry = 0
+      (BYTESIZE - 1).downto(0) do |index|
+        sum = encoded_r[index].to_i32 + GROUP_ORDER[index].to_i32 + carry
+        r_plus_order[index] = (sum & 0xff).to_u8
+        carry = sum >> 8
+      end
+      return false unless carry == 0 && below_bit(r_plus_order, FIELD_PRIME) == 1
+
+      Field.mul(field_element_from_big_endian(r_plus_order), z_squared) == point.x
+    end
+
     # Returns the leftmost bits of a digest as an integer below
     # 2^(8 * BYTESIZE) (FIPS 186-5 §6.4.1 step 4, RFC 6979 bits2int), as
     # BYTESIZE big-endian bytes. The orders of both curves fill whole bytes.
