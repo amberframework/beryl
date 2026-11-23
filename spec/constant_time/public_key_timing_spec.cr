@@ -88,6 +88,22 @@ if RequestedSpecTag.includes?("constant_time")
       measurement.shows_no_leak?.should be_true
     end
 
+    it "X25519 derives a public key in the same time from an all-zero scalar and from random scalars" do
+      measurement, generator = PublicKeyTimingCheck.new_measurement(38_u64)
+      list_of_scalars = Bytes.new(PublicKeyTimingCheck::BATCH_SIZE * PublicKeyTimingCheck::SCALAR_BYTESIZE)
+
+      fill_batch = ->(list_of_classes : Array(Bool)) do
+        PublicKeyTimingCheck.fill_fixed_against_random(list_of_scalars, PublicKeyTimingCheck::SCALAR_BYTESIZE, list_of_classes, generator, 0_u8)
+      end
+      prepare = ->(slot : Int32) { nil }
+      measurement.run(fill_batch, prepare) do |slot|
+        X25519.multiply_base_point(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+      end
+
+      HmacTimingCheck.report("X25519 public key, all-zero scalar against random scalars", measurement)
+      measurement.shows_no_leak?.should be_true
+    end
+
     it "Ed25519 derives a key in the same time from an all-zero seed and from random seeds" do
       measurement, generator = PublicKeyTimingCheck.new_measurement(32_u64)
       list_of_seeds = Bytes.new(PublicKeyTimingCheck::BATCH_SIZE * PublicKeyTimingCheck::SCALAR_BYTESIZE)

@@ -54,6 +54,21 @@ module Beryl::Crypto::V1
       multiples
     end
 
+    # For each 4-bit window of a scalar, the 16 multiples of B that window
+    # can add: entry j of table i is [j * 16^i]B (little-endian windows).
+    # Built once, on first use.
+    class_getter base_point_window_tables : Array(StaticArray(Point, 16)) do
+      list_of_tables = Array(StaticArray(Point, 16)).new(64)
+      base = base_point
+      64.times do
+        multiples = StaticArray(Point, 16).new(Point.neutral)
+        1.upto(15) { |index| multiples[index] = multiples[index - 1].add(base) }
+        list_of_tables << multiples
+        4.times { base = base.double }
+      end
+      list_of_tables
+    end
+
     struct Point
       getter x : FieldElement
       getter y : FieldElement
@@ -150,10 +165,22 @@ module Beryl::Crypto::V1
     end
 
     # Returns [scalar]B for a 32-byte little-endian *scalar*, in constant
-    # time: a fixed window of four bits, each window's multiple of B picked
-    # from the table of 16 by scanning all of them.
+    # time: one addition per 4-bit window from that window's table in
+    # `base_point_window_tables`, picked by scanning all 16 entries, and no
+    # doubling.
     def self.multiply_base(scalar : Bytes) : Point
-      multiply_constant_time(scalar, base_point_multiples)
+      list_of_tables = base_point_window_tables
+      result = Point.neutral
+      64.times do |window_index|
+        nibble = (scalar.unsafe_fetch(window_index >> 1).to_u64 >> ((window_index & 1) * 4)) & 0xf_u64
+        table = list_of_tables.unsafe_fetch(window_index)
+        selected = Point.neutral
+        16.times do |candidate|
+          selected = selected.select(ConstantTimeSelection.equal_bit(candidate.to_u64, nibble), table[candidate])
+        end
+        result = result.add(selected)
+      end
+      result
     end
 
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point

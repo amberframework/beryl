@@ -35,6 +35,14 @@ describe Beryl::Crypto::V1::X25519 do
     expect_raises(Beryl::Crypto::KeySizeMismatch) { X25519::PublicKey.new(Bytes.new(33)) }
   end
 
+  it "derives the public key through edwards25519 as the ladder does" do
+    100.times do
+      secret = Random::Secure.random_bytes(32)
+      X25519.multiply_base_point(secret).should eq(X25519.scalar_multiply(secret, X25519::BASE_POINT_U))
+    end
+    X25519.multiply_base_point(Bytes.new(32)).should eq(X25519.scalar_multiply(Bytes.new(32), X25519::BASE_POINT_U))
+  end
+
   it "keeps the private key it was given" do
     secret = Bytes.new(32) { |index| index.to_u8 }
     X25519::PrivateKey.new(secret).to_slice.should eq(secret)

@@ -6,6 +6,7 @@ require "../constant_time_selection"
 require "../declassification"
 require "../data_independent_timing"
 require "./curve25519_field_element"
+require "./edwards25519_group"
 
 module Beryl::Crypto::V1
   # X25519 key agreement (RFC 7748 §5 and §6.1).
@@ -74,7 +75,7 @@ module Beryl::Crypto::V1
 
       # Returns the matching public key, X25519(secret, 9).
       def public_key : PublicKey
-        PublicKey.new(DiffieHellmanOverCurve25519.scalar_multiply(@secret, BASE_POINT_U))
+        PublicKey.new(DiffieHellmanOverCurve25519.multiply_base_point(@secret))
       end
 
       # Returns the 32-byte shared secret with *peer*, or `nil` when it is
@@ -112,6 +113,27 @@ module Beryl::Crypto::V1
         result = ladder(clamped, Field.from_bytes(u_bytes))
         SecretWiping.wipe(clamped.to_slice)
         Bytes.new(KEY_BYTESIZE) { |index| result[index] }
+      end
+    end
+
+    # Returns X25519(*scalar*, 9), the public key of *scalar*, the same
+    # bytes `scalar_multiply(scalar, BASE_POINT_U)` gives, in about a third
+    # of the time: the base point u = 9 is the image of the edwards25519
+    # base point B under the birational map u = (1 + y) / (1 - y) (RFC 7748
+    # §4.1), so the key is [k]B, computed with the precomputed tables of
+    # `Edwards25519Group.multiply_base` and mapped across. Constant time.
+    def self.multiply_base_point(scalar : Bytes) : Bytes
+      DataIndependentTiming.run do
+        clamped = Bytes.new(KEY_BYTESIZE) { |index| scalar.unsafe_fetch(index) }
+        clamped[0] &= 248_u8
+        clamped[31] &= 127_u8
+        clamped[31] |= 64_u8
+        point = Edwards25519Group.multiply_base(clamped)
+        SecretWiping.wipe(clamped)
+        # y = Y / Z, so (1 + y) / (1 - y) = (Z + Y) / (Z - Y).
+        u = (point.z + point.y) * (point.z - point.y).invert
+        encoded = u.to_bytes
+        Bytes.new(KEY_BYTESIZE) { |index| encoded[index] }
       end
     end
 

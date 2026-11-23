@@ -47,6 +47,19 @@ module Beryl::Crypto::V1
     # The multiples 0G, 1G, ..., 15G for the fixed window.
     class_getter generator_multiples : StaticArray(Point, 16) { multiples_of(generator) }
 
+    # For each 4-bit window of a scalar, the 16 multiples of G that window
+    # can add: entry j of table i is [j * 16^(2 * BYTESIZE - 1 - i)]G, so
+    # table 0 serves the most significant window. Built once, on first use.
+    class_getter generator_window_tables : Array(StaticArray(Point, 16)) do
+      list_of_tables = Array(StaticArray(Point, 16)).new(BYTESIZE * 2)
+      base = generator
+      (BYTESIZE * 2).times do
+        list_of_tables << multiples_of(base)
+        4.times { base = base.double }
+      end
+      list_of_tables.reverse!
+    end
+
     # Returns *value* - *small* for a big-endian *value* larger than *small*.
     def self.big_endian_minus_small(value : Bytes, small : UInt8) : Bytes
       result = value.dup
@@ -125,25 +138,34 @@ module Beryl::Crypto::V1
       Field.selectznz(borrow, difference, value)
     end
 
-    # Raises *base* (Montgomery domain of *modulus*) to the public
-    # big-endian *exponent* by square and multiply.
+    # Raises *base* (Montgomery domain of the field prime) to the public
+    # big-endian *exponent*, four bits at a time: 15 multiplications build
+    # base^1 to base^15, then each 4-bit digit costs four squarings and one
+    # multiplication (none for a zero digit, which is public).
     def self.field_power(base : Limbs, exponent : Bytes) : Limbs
+      powers = StaticArray(Limbs, 16).new(Field.set_one)
+      1.upto(15) { |index| powers[index] = Field.mul(powers[index - 1], base) }
       result = Field.set_one
       exponent.each do |byte|
-        7.downto(0) do |bit_index|
-          result = Field.square(result)
-          result = Field.mul(result, base) if (byte >> bit_index) & 1 == 1
+        {4, 0}.each do |shift|
+          4.times { result = Field.square(result) }
+          digit = (byte >> shift) & 0xf
+          result = Field.mul(result, powers[digit]) unless digit == 0
         end
       end
       result
     end
 
+    # `field_power` modulo the group order.
     def self.scalar_power(base : Limbs, exponent : Bytes) : Limbs
+      powers = StaticArray(Limbs, 16).new(ScalarField.set_one)
+      1.upto(15) { |index| powers[index] = ScalarField.mul(powers[index - 1], base) }
       result = ScalarField.set_one
       exponent.each do |byte|
-        7.downto(0) do |bit_index|
-          result = ScalarField.square(result)
-          result = ScalarField.mul(result, base) if (byte >> bit_index) & 1 == 1
+        {4, 0}.each do |shift|
+          4.times { result = ScalarField.square(result) }
+          digit = (byte >> shift) & 0xf
+          result = ScalarField.mul(result, powers[digit]) unless digit == 0
         end
       end
       result
@@ -287,8 +309,23 @@ module Beryl::Crypto::V1
       result
     end
 
+    # Returns [scalar]G for a big-endian *scalar* of BYTESIZE bytes, in
+    # constant time: one addition per 4-bit window from that window of
+    # the precomputed tables, each picked by scanning all 16 entries, and
+    # no doubling.
     def self.multiply_generator(scalar : Bytes) : Point
-      multiply_constant_time(scalar, generator_multiples)
+      list_of_tables = generator_window_tables
+      result = Point.neutral
+      (BYTESIZE * 2).times do |window_index|
+        nibble = (scalar.unsafe_fetch(window_index >> 1).to_u64 >> (window_index.even? ? 4 : 0)) & 0xf_u64
+        table = list_of_tables.unsafe_fetch(window_index)
+        selected = Point.neutral
+        16.times do |candidate|
+          selected = selected.replace_if(ConstantTimeSelection.equal_bit(candidate.to_u64, nibble), table[candidate])
+        end
+        result = result.add(selected)
+      end
+      result
     end
 
     # Returns [first_scalar]G + [second_scalar]point, in variable time: for
