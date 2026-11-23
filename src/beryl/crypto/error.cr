@@ -53,4 +53,15 @@ module Beryl::Crypto
   # this means a fault in Beryl, not in the caller.
   class UnsupportedProcessor < Error
   end
+
+  # Raised when bytes handed in as a public key do not encode a point of the
+  # curve, or encode one the algorithm refuses (the point at infinity, a
+  # coordinate not below the field prime).
+  class InvalidPublicKey < Error
+  end
+
+  # Raised when bytes handed in as a private key are out of range for the
+  # curve (zero, or not below the group order).
+  class InvalidPrivateKey < Error
+  end
 end

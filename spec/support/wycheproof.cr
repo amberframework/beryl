@@ -149,3 +149,79 @@ module Wycheproof
     getter list_of_tests : Array(BlockCipherModeTest) = [] of BlockCipherModeTest
   end
 end
+
+# The public-key files (`xdh_comp_schema_v1.json`, `eddsa_verify_schema_v1.json`,
+# `ecdh_ecpoint_test_schema_v1.json`, `ecdsa_verify_schema_v1.json`,
+# `ecdsa_p1363_verify_schema_v1.json`).
+module Wycheproof
+  struct KeyAgreementTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    getter flags : Array(String) = [] of String
+    @[JSON::Field(key: "public")]
+    getter public_key : String = ""
+    @[JSON::Field(key: "private")]
+    getter private_key : String = ""
+    getter shared : String = ""
+    getter result : String = ""
+  end
+
+  struct KeyAgreementTestGroup
+    include JSON::Serializable
+
+    getter curve : String = ""
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(KeyAgreementTest) = [] of KeyAgreementTest
+  end
+
+  struct SignatureTest
+    include JSON::Serializable
+
+    @[JSON::Field(key: "tcId")]
+    getter test_case_id : Int32 = 0
+    getter comment : String = ""
+    getter flags : Array(String) = [] of String
+    @[JSON::Field(key: "msg")]
+    getter message : String = ""
+    @[JSON::Field(key: "sig")]
+    getter signature : String = ""
+    getter result : String = ""
+  end
+
+  struct EddsaPublicKey
+    include JSON::Serializable
+
+    @[JSON::Field(key: "pk")]
+    getter encoded : String = ""
+  end
+
+  struct EddsaVerifyTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "publicKey")]
+    getter public_key : EddsaPublicKey = EddsaPublicKey.from_json("{}")
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(SignatureTest) = [] of SignatureTest
+  end
+
+  struct EcPublicKey
+    include JSON::Serializable
+
+    getter curve : String = ""
+    getter uncompressed : String = ""
+  end
+
+  struct EcdsaVerifyTestGroup
+    include JSON::Serializable
+
+    @[JSON::Field(key: "publicKey")]
+    getter public_key : EcPublicKey = EcPublicKey.from_json("{}")
+    @[JSON::Field(key: "sha")]
+    getter hash_name : String = ""
+    @[JSON::Field(key: "tests")]
+    getter list_of_tests : Array(SignatureTest) = [] of SignatureTest
+  end
+end
