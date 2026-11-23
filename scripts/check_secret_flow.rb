@@ -182,7 +182,8 @@ def read_functions(path)
   list_of_functions
 end
 
-# Returns {name => :slice | :pointer | :other} for a `define` line's arguments.
+# Returns {name => :slice | :pointer | :other} for a `define` line's arguments
+# (`SecretFlow` turns a public Slice argument into :public).
 def parse_parameters(parameter_text)
   parameters = {}
   depth = 0
@@ -227,6 +228,12 @@ class SecretFlow
     @is_secret_buffer_function = function.name.match?(SECRET_BUFFER_FUNCTION)
     @is_cipher_object_method = function.name.match?(CIPHER_OBJECT_METHOD)
     @is_secret_value_function = function.name.match?(SECRET_VALUE_FUNCTION)
+    # A public argument passed as a Slice (an exponent) is not secret memory.
+    if @is_secret_value_function
+      function.parameters.each_key do |name|
+        function.parameters[name] = :public if function.parameters[name] == :slice && name.match?(PUBLIC_ARGUMENT)
+      end
+    end
     @defined = function.parameters.keys.to_h { |name| [name, true] }
     function.list_of_instructions.each { |instruction| @defined[instruction.result] = true if instruction.result }
     function.list_of_instructions.each do |instruction|

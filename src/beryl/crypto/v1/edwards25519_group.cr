@@ -27,37 +27,57 @@ module Beryl::Crypto::V1
     BASE_POINT_ENCODING = Bytes.new(ENCODED_BYTESIZE) { |index| index == 0 ? 0x58_u8 : 0x66_u8 }
 
     # d = -121665/121666.
-    class_getter curve_constant : FieldElement do
+    CURVE_CONSTANT = begin
       -FieldElement.from_small(121_665_u64) * FieldElement.from_small(121_666_u64).invert
     end
 
-    class_getter doubled_curve_constant : FieldElement { curve_constant + curve_constant }
+    def self.curve_constant : FieldElement
+      CURVE_CONSTANT
+    end
+
+    DOUBLED_CURVE_CONSTANT = curve_constant + curve_constant
+
+    def self.doubled_curve_constant : FieldElement
+      DOUBLED_CURVE_CONSTANT
+    end
 
     # sqrt(-1) = 2^((p - 1) / 4).
-    class_getter square_root_of_minus_one : FieldElement do
+    SQUARE_ROOT_OF_MINUS_ONE = begin
       # (p - 1) / 4 = 2^253 - 5: 2^((p-5)/8) squared, times 2^... computed as
       # 2^(2^252 - 3) squared (2^253 - 6) times 2.
       two = FieldElement.from_small(2_u64)
       two.power_two_to_252_minus_three.square * two
     end
 
-    class_getter base_point : Point do
+    def self.square_root_of_minus_one : FieldElement
+      SQUARE_ROOT_OF_MINUS_ONE
+    end
+
+    BASE_POINT = begin
       decoded = Point.decode(BASE_POINT_ENCODING)
       raise Error.new("the edwards25519 base point failed to decode") unless decoded
       decoded
     end
 
+    def self.base_point : Point
+      BASE_POINT
+    end
+
     # The multiples 0B, 1B, ..., 15B, for the fixed window of `multiply_base`.
-    class_getter base_point_multiples : StaticArray(Point, 16) do
+    BASE_POINT_MULTIPLES = begin
       multiples = StaticArray(Point, 16).new(Point.neutral)
       1.upto(15) { |index| multiples[index] = multiples[index - 1].add(base_point) }
       multiples
     end
 
+    def self.base_point_multiples : StaticArray(Point, 16)
+      BASE_POINT_MULTIPLES
+    end
+
     # For each 4-bit window of a scalar, the 16 multiples of B that window
     # can add: entry j of table i is [j * 16^i]B (little-endian windows).
     # Built once, on first use.
-    class_getter base_point_window_tables : Array(StaticArray(Point, 16)) do
+    BASE_POINT_WINDOW_TABLES = begin
       list_of_tables = Array(StaticArray(Point, 16)).new(64)
       base = base_point
       64.times do
@@ -67,6 +87,10 @@ module Beryl::Crypto::V1
         4.times { base = base.double }
       end
       list_of_tables
+    end
+
+    def self.base_point_window_tables : Array(StaticArray(Point, 16))
+      BASE_POINT_WINDOW_TABLES
     end
 
     struct Point
@@ -221,15 +245,23 @@ module Beryl::Crypto::V1
 
       # 2^168 in the Montgomery domain: the weight of the middle chunk in
       # `reduce`.
-      class_getter weight_of_second_chunk : Limbs do
+      WEIGHT_OF_SECOND_CHUNK = begin
         limbs = Limbs.new(0_u64)
         limbs[2] = 1_u64 << 40 # 2^(128 + 40)
         ScalarField.to_montgomery(limbs)
       end
 
+      def self.weight_of_second_chunk : Limbs
+        WEIGHT_OF_SECOND_CHUNK
+      end
+
       # 2^336 mod L in the Montgomery domain.
-      class_getter weight_of_third_chunk : Limbs do
+      WEIGHT_OF_THIRD_CHUNK = begin
         ScalarField.mul(weight_of_second_chunk, weight_of_second_chunk)
+      end
+
+      def self.weight_of_third_chunk : Limbs
+        WEIGHT_OF_THIRD_CHUNK
       end
 
       # Reduces a little-endian number of up to 64 bytes modulo L, in

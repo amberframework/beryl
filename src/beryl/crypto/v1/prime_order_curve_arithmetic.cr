@@ -34,23 +34,43 @@ module Beryl::Crypto::V1
 
     # p - 2, (p + 1) / 4 and n - 2, the public exponents of inversion and
     # of the square root (p = 3 mod 4 for both curves).
-    class_getter field_inverse_exponent : Bytes { big_endian_minus_small(FIELD_PRIME, 2_u8) }
-    class_getter square_root_exponent : Bytes { big_endian_quarter_of_successor(FIELD_PRIME) }
-    class_getter scalar_inverse_exponent : Bytes { big_endian_minus_small(GROUP_ORDER, 2_u8) }
+    FIELD_INVERSE_EXPONENT = big_endian_minus_small(FIELD_PRIME, 2_u8)
+
+    def self.field_inverse_exponent : Bytes
+      FIELD_INVERSE_EXPONENT
+    end
+    SQUARE_ROOT_EXPONENT = big_endian_quarter_of_successor(FIELD_PRIME)
+
+    def self.square_root_exponent : Bytes
+      SQUARE_ROOT_EXPONENT
+    end
+    SCALAR_INVERSE_EXPONENT = big_endian_minus_small(GROUP_ORDER, 2_u8)
+
+    def self.scalar_inverse_exponent : Bytes
+      SCALAR_INVERSE_EXPONENT
+    end
 
     CURVE_B = field_element_from_big_endian({{ curve_b }}.hexbytes)
-    class_getter generator : Point do
+    GENERATOR = begin
       Point.new(field_element_from_big_endian({{ generator_x }}.hexbytes),
         field_element_from_big_endian({{ generator_y }}.hexbytes), Field.set_one)
     end
 
+    def self.generator : Point
+      GENERATOR
+    end
+
     # The multiples 0G, 1G, ..., 15G for the fixed window.
-    class_getter generator_multiples : StaticArray(Point, 16) { multiples_of(generator) }
+    GENERATOR_MULTIPLES = multiples_of(generator)
+
+    def self.generator_multiples : StaticArray(Point, 16)
+      GENERATOR_MULTIPLES
+    end
 
     # For each 4-bit window of a scalar, the 16 multiples of G that window
     # can add: entry j of table i is [j * 16^(2 * BYTESIZE - 1 - i)]G, so
     # table 0 serves the most significant window. Built once, on first use.
-    class_getter generator_window_tables : Array(StaticArray(Point, 16)) do
+    GENERATOR_WINDOW_TABLES = begin
       list_of_tables = Array(StaticArray(Point, 16)).new(BYTESIZE * 2)
       base = generator
       (BYTESIZE * 2).times do
@@ -58,6 +78,10 @@ module Beryl::Crypto::V1
         4.times { base = base.double }
       end
       list_of_tables.reverse!
+    end
+
+    def self.generator_window_tables : Array(StaticArray(Point, 16))
+      GENERATOR_WINDOW_TABLES
     end
 
     # Returns *value* - *small* for a big-endian *value* larger than *small*.
