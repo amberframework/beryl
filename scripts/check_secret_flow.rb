@@ -32,10 +32,11 @@
 #     not depend on the values they work on (moves, adds, exclusive ors,
 #     shuffles, loads and stores, multiplications, conditional selects, and
 #     the SHA and AES instructions themselves);
-#   - the only conditional branch allowed closes the loop, directly after the
+#   - the only conditional branch allowed closes a loop, directly after the
 #     instruction that counts the blocks left down by one, and nothing else
-#     may write the counting register after it is set from the block count
-#     (an operand, or a constant such as RSA's word count);
+#     may write a counting register but moves from the block count (an
+#     operand) or from constants (such as the strip and block counts of
+#     RSA's Montgomery multiplication, one per loop);
 #   - memory is addressed only as a register plus a constant, so no address
 #     is computed from data.
 # Everything its pointer arguments lead to is then treated as secret. An
@@ -110,7 +111,7 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq pslld psrld
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
-  lsl lsr subs sbcs sbc csel cmp
+  lsl lsr subs sbcs sbc csel cmp extr
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
@@ -123,13 +124,13 @@ REGISTER_INDEXED_MEMORY = /\[\s*\w+\s*,\s*[a-z]|\(\s*%\w+\s*,/.freeze
 def assembly_faults(template)
   list_of_lines = template.split("\n").map(&:strip).reject { |line| line.empty? || line.match?(/\A(?:\d+:|\.)/) }
   list_of_faults = []
-  counting_register = nil
+  list_of_counting_registers = []
   list_of_lines.each_with_index do |line, index|
     mnemonic = line[/\A[\w.]+/]
     if line.match?(LOOP_BRANCH)
       count_down = list_of_lines[index - 1].to_s.match(LOOP_COUNT_DOWN)
       if count_down
-        counting_register = count_down[1] || count_down[2]
+        list_of_counting_registers |= [count_down[1] || count_down[2]]
       else
         list_of_faults << "a conditional branch does not follow the block count: #{line}"
       end
@@ -140,11 +141,11 @@ def assembly_faults(template)
     end
     list_of_faults << "memory indexed by a register: #{line}" if line.match?(REGISTER_INDEXED_MEMORY)
   end
-  if counting_register
+  list_of_counting_registers.each do |counting_register|
     list_of_writes = list_of_lines.select do |line|
       !line.match?(LOOP_COUNT_DOWN) && line.match?(/\A\w+ #{counting_register}\b|, %#{counting_register}\z/)
     end
-    unless list_of_writes.size == 1 && list_of_writes[0].match?(/\Amov (?:#{counting_register}, (?:\$\d+|#\d+)|\$\d+, %#{counting_register})\z/)
+    unless !list_of_writes.empty? && list_of_writes.all? { |line| line.match?(/\Amov (?:#{counting_register}, (?:\$\d+|#\d+)|\$\d+, %#{counting_register})\z/) }
       list_of_faults << "the block-counting register #{counting_register} is written by: #{list_of_writes.join(' | ')}"
     end
   end
