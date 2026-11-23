@@ -226,6 +226,21 @@ module LibcryptoRsaDifferential
     end
   end
 
+  # As `with_beryl_hash`, for the SHA-2 hashes Beryl signs with.
+  macro with_beryl_signing_hash(hash_name, &block)
+    case {{ hash_name }}
+    {% for pair in [{"SHA224", "Beryl::Crypto::V1::SHA224"},
+                    {"SHA256", "Beryl::Crypto::V1::SHA256"}, {"SHA384", "Beryl::Crypto::V1::SHA384"},
+                    {"SHA512", "Beryl::Crypto::V1::SHA512"}, {"SHA512-256", "Beryl::Crypto::V1::SHA512_256"}] %}
+    when {{ pair[0] }}
+      {{ block.args[0] }} = {{ pair[1].id }}
+      {{ block.body }}
+    {% end %}
+    else
+      raise "no Beryl hash for #{{{ hash_name }}}"
+    end
+  end
+
   # Returns *bytes* mutated by the case generator: one bit flipped (most
   # cases), or every byte 0xff, a value at or above any modulus of that size.
   def self.mutated(bytes : Bytes, generator : Random::PCG32) : Bytes
@@ -276,7 +291,7 @@ if RequestedSpecTag.includes?("differential")
           public_key = key_pair.beryl_key.public_key
 
           libcrypto_signature = LibcryptoRsaDifferential.libcrypto_sign(key_pair.libcrypto_key, hash_name, message, nil, modulus_bytesize)
-          LibcryptoRsaDifferential.with_beryl_hash(hash_name) do |hash_function|
+          LibcryptoRsaDifferential.with_beryl_signing_hash(hash_name) do |hash_function|
             beryl_signature = key_pair.beryl_key.sign_with_pkcs1(message, hash_function: hash_function)
             unless beryl_signature == libcrypto_signature
               LibcryptoRsaDifferential.report_mismatch(algorithm, case_number, key_pair, "#{hash_name} signatures differ")
@@ -314,7 +329,7 @@ if RequestedSpecTag.includes?("differential")
           modulus_bytesize = key_pair.beryl_key.modulus_bytesize
           public_key = key_pair.beryl_key.public_key
 
-          LibcryptoRsaDifferential.with_beryl_hash(hash_name) do |hash_function|
+          LibcryptoRsaDifferential.with_beryl_signing_hash(hash_name) do |hash_function|
             digest_bytesize = hash_function.new.digest_size
             largest_salt_bytesize = (key_pair.beryl_key.modulus_bit_count - 1 + 7) // 8 - digest_bytesize - 2
             salt_bytesize = case generator.rand(4)
