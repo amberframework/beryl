@@ -200,6 +200,19 @@ module LibcryptoCurveDifferential
     end
   end
 
+  # Whether *point* is in X9.62's hybrid form (0x06 or 0x07 || X || Y).
+  def self.hybrid_point?(point : Bytes) : Bool
+    point.size > 1 && point.size.odd? && (point[0] == 0x06_u8 || point[0] == 0x07_u8)
+  end
+
+  # Beryl's verdict on *signature*, with false for a key it refuses to
+  # decode. The block decodes the key on the curve under test.
+  def self.beryl_ecdsa_verdict(point : Bytes, message : Bytes, signature : Bytes, & : Bytes -> _) : Bool
+    yield(point).verify(message, signature)
+  rescue Beryl::Crypto::InvalidPublicKey
+    false
+  end
+
   # Alters one of signature, message or key bytes; returns the altered
   # triple. Kinds: flip one bit of the signature, of the message, or of the
   # key; replace the signature's second half; add the group order to the
@@ -408,6 +421,7 @@ if RequestedSpecTag.includes?("differential")
         settings = LibcryptoDifferential.settings
         digest = LibcryptoDifferential.libcrypto_digest({{ curve[4] }})
         altered_accepted = 0
+        hybrid_points = 0
         (settings.first_case...(settings.first_case + case_count)).each do |case_number|
           generator = LibcryptoDifferential.generator_for({{ curve[3] }}, case_number)
           message = LibcryptoCurveDifferential.random_bytes(generator, generator.rand(0..LibcryptoCurveDifferential::LARGEST_MESSAGE))
@@ -427,10 +441,24 @@ if RequestedSpecTag.includes?("differential")
             {% end %}
 
             altered_signature, altered_message, altered_point = LibcryptoCurveDifferential.alter(generator, signature, message, point, nil)
-            beryl_verdict = begin
-              Beryl::Crypto::V1::{{ curve[1].id }}::PublicKey.new(altered_point).verify(altered_message, altered_signature)
-            rescue Beryl::Crypto::InvalidPublicKey
-              false
+            beryl_verdict = LibcryptoCurveDifferential.beryl_ecdsa_verdict(altered_point, altered_message, altered_signature) do |encoded|
+              Beryl::Crypto::V1::{{ curve[1].id }}::PublicKey.new(encoded)
+            end
+            if LibcryptoCurveDifferential.hybrid_point?(altered_point)
+              # X9.62's hybrid form, which libcrypto reads and RFC 5480 §2.2
+              # forbids. Beryl must refuse it; libcrypto's verdict must then
+              # be Beryl's on the same point written uncompressed, when the
+              # prefix states the parity of y correctly, and false when not.
+              if beryl_verdict
+                LibcryptoDifferential.report_mismatch("curve {{ curve[0].id }} ECDSA", case_number, "Beryl accepted the hybrid point #{altered_point.hexstring}")
+              end
+              hybrid_points += 1
+              uncompressed = altered_point.dup
+              uncompressed[0] = 0x04_u8
+              beryl_verdict = altered_point[0] & 1 == altered_point[-1] & 1 &&
+                              LibcryptoCurveDifferential.beryl_ecdsa_verdict(uncompressed, altered_message, altered_signature) do |encoded|
+                                Beryl::Crypto::V1::{{ curve[1].id }}::PublicKey.new(encoded)
+                              end
             end
             libcrypto_altered_key = LibcryptoCurveDifferential.ec_public_key({{ curve[2] }}, altered_point)
             libcrypto_verdict = libcrypto_altered_key ? LibcryptoCurveDifferential.libcrypto_verify(libcrypto_altered_key, digest.as(Void*), altered_message, altered_signature) : false
@@ -444,7 +472,8 @@ if RequestedSpecTag.includes?("differential")
             LibCrypto.beryl_curve_evp_pkey_free(libcrypto_key)
           end
         end
-        STDOUT.puts "curve {{ curve[0].id }} ECDSA: #{case_count} cases and #{case_count} altered cases, 0 mismatches (#{altered_accepted} altered cases accepted by both)"
+        STDOUT.puts "curve {{ curve[0].id }} ECDSA: #{case_count} cases and #{case_count} altered cases, 0 mismatches " \
+                    "(#{altered_accepted} altered cases accepted by both; #{hybrid_points} hybrid points, refused by Beryl, judged in uncompressed form)"
       end
     {% end %}
   end

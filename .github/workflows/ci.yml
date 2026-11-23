@@ -26,22 +26,32 @@ jobs:
           crystal: 1.21.0
       - name: Install dependencies
         run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Fetch the published vectors kept out of git (checked by sha256)
+        run: ruby scripts/fetch_vectors.rb --missing
       - name: Check formatting
         run: crystal tool format --check src spec bench
+      - name: Check that the field arithmetic is what fiat-crypto's pinned output translates to
+        run: CRYSTAL=crystal ruby scripts/generate_field_arithmetic.rb --check
       - name: Type-check the library
         run: crystal build --no-codegen src/beryl.cr
       - name: Type-check the benchmarks
         run: |
           crystal build --no-codegen bench/hashes_against_libcrypto.cr
           crystal build --no-codegen bench/ciphers_against_libcrypto.cr
+          crystal build --no-codegen bench/public_key_against_libcrypto.cr
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
       - name: Run the quick suite again on the portable code alone
         run: crystal spec -Dberyl_portable_hashes
       - name: Run the quick suite again on the portable ciphers alone
         run: crystal spec -Dberyl_portable_ciphers
-      - name: Run the PBKDF2 vectors of 16,777,216 iterations
+      - name: Run the slow vectors (PBKDF2 at 16,777,216 iterations, X25519 iterated 1,000,000 times)
         run: crystal spec --release --tag slow
+      - name: "Field arithmetic: every translated function equals fiat-crypto's C (1,000,000 inputs each)"
+        run: |
+          cc -O2 -c spec/field_arithmetic/fiat_crypto_c_shim.c -o spec/field_arithmetic/fiat_crypto_c_shim.o
+          crystal build --release spec/field_arithmetic/fiat_crypto_equality.cr -o fiat_crypto_equality
+          ./fiat_crypto_equality 1000000 "${{ github.run_id }}"
       - name: Prove the library links no OpenSSL
         run: |
           crystal build --release -Dwithout_openssl spec/probes/no_libcrypto.cr -o no_libcrypto
@@ -55,7 +65,7 @@ jobs:
   constant-time:
     name: Constant-time checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
@@ -68,9 +78,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends valgrind=1:3.22.0-0ubuntu3
       - name: Install dependencies
         run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Fetch the published vectors kept out of git (checked by sha256)
+        run: ruby scripts/fetch_vectors.rb --missing
       - name: "Memory checker: no branch or address depends on a secret"
         run: |
-          crystal build --release -Dgc_none -Dwithout_openssl spec/probes/secret_taint.cr -o secret_taint
+          crystal build --release -Dgc_none -Dwithout_openssl -Dberyl_without_data_independent_timing spec/probes/secret_taint.cr -o secret_taint
           valgrind --error-exitcode=99 ./secret_taint
       - name: "Memory checker: a leaky comparison is caught"
         run: |
@@ -92,15 +104,16 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_ciphers spec/probes/secret_flow.cr -o secret_flow_portable_ciphers
           ruby scripts/check_secret_flow.rb secret_flow_portable_ciphers.ll
-      - name: "Timing: HMAC and the ciphers take the same time whatever the secret"
+      - name: "Timing: HMAC, the ciphers and the curve operations take the same time whatever the secret"
         run: crystal spec --release --tag constant_time
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
+          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
 
   aarch64:
     name: Linux on AArch64 (hash and cipher instructions found at run time)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
@@ -113,17 +126,24 @@ jobs:
           sudo apt-get install -y --no-install-recommends valgrind=1:3.22.0-0ubuntu3
       - name: Install dependencies
         run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Fetch the published vectors kept out of git (checked by sha256)
+        run: ruby scripts/fetch_vectors.rb --missing
       - name: List the processor's hash and cipher instructions
         run: grep -m1 Features /proc/cpuinfo
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
       - name: Run the cipher vectors again on the code written without eor3
         run: crystal spec -Dberyl_without_eor3 spec/beryl/crypto
-      - name: Run the PBKDF2 vectors of 16,777,216 iterations
+      - name: Run the slow vectors (PBKDF2 at 16,777,216 iterations, X25519 iterated 1,000,000 times)
         run: crystal spec --release --tag slow
+      - name: "Field arithmetic: every translated function equals fiat-crypto's C (1,000,000 inputs each)"
+        run: |
+          cc -O2 -c spec/field_arithmetic/fiat_crypto_c_shim.c -o spec/field_arithmetic/fiat_crypto_c_shim.o
+          crystal build --release spec/field_arithmetic/fiat_crypto_equality.cr -o fiat_crypto_equality
+          ./fiat_crypto_equality 1000000 "${{ github.run_id }}"
       - name: "Memory checker: no branch or address depends on a secret"
         run: |
-          crystal build --release -Dgc_none -Dwithout_openssl spec/probes/secret_taint.cr -o secret_taint
+          crystal build --release -Dgc_none -Dwithout_openssl -Dberyl_without_data_independent_timing spec/probes/secret_taint.cr -o secret_taint
           valgrind --error-exitcode=99 ./secret_taint
       - name: "Memory checker: a leaky comparison is caught"
         run: |
@@ -173,6 +193,30 @@ jobs:
         run: crystal spec ${{ matrix.flags }} spec/beryl/crypto/processor_cipher_instructions_spec.cr -e "states which instructions"
       - name: Run the differential (1,000,000 cases per cipher)
         run: crystal spec --release ${{ matrix.flags }} --tag differential -e "cipher "
+
+  curve-differential:
+    name: Differential against libcrypto, curves (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Fetch the published vectors kept out of git (checked by sha256)
+        run: ruby scripts/fetch_vectors.rb --missing
+      - name: Show the libcrypto this job compares against
+        run: openssl version
+      - name: Build the differential
+        run: crystal build --release spec/differential/libcrypto_curve_differential_spec.cr -o curve_differential_spec
+      - name: Run the differential (X25519 1,000,000 cases, the others 200,000, every Wycheproof case)
+        run: ./curve_differential_spec --tag differential -e "curve "
 
 
   differential:

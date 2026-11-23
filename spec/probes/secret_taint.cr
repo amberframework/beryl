@@ -2,12 +2,13 @@
 # https://github.com/agl/ctgrind).
 #
 # Every secret this program handles (keys, messages, plaintexts, candidate
-# tags, passwords) is read from memory that was allocated and never written.
+# tags, passwords, private scalars) is read from memory that was allocated and never written.
 # Valgrind Memcheck tracks such bytes as undefined and reports any branch or
 # memory address computed from them, so a clean run shows that no secret
 # decided a branch or an index:
 #
-#     crystal build --release -Dgc_none -Dwithout_openssl spec/probes/secret_taint.cr -o secret_taint
+#     crystal build --release -Dgc_none -Dwithout_openssl -Dberyl_without_data_independent_timing \
+#       spec/probes/secret_taint.cr -o secret_taint
 #     valgrind --error-exitcode=99 ./secret_taint          # must exit 0
 #     valgrind --error-exitcode=99 ./secret_taint leaky    # must exit 99
 #
@@ -22,6 +23,53 @@ require "../../src/beryl/crypto"
 # Returns *bytesize* bytes that Memcheck treats as secret.
 def secret_bytes(bytesize : Int32) : Bytes
   Bytes.new(LibC.malloc(bytesize).as(UInt8*), bytesize)
+end
+
+# Memcheck's client requests MAKE_MEM_UNDEFINED and MAKE_MEM_DEFINED
+# (valgrind/memcheck.h): the x86-64 and AArch64 instruction sequences
+# Valgrind recognizes, which do nothing when the program runs outside it.
+# The rotations add up to whole turns, so the register they turn is left
+# as it was.
+def memcheck_request(request : UInt64, pointer : Void*, bytesize : Int32) : Nil
+  arguments = StaticArray[request, pointer.address, bytesize.to_u64, 0_u64, 0_u64, 0_u64]
+  result = 0_u64
+  {% if flag?(:x86_64) %}
+    asm("rolq $$3, %rdi\nrolq $$13, %rdi\nrolq $$61, %rdi\nrolq $$51, %rdi\nxchgq %rbx, %rbx"
+            : "={rdx}"(result) : "{rax}"(arguments.to_unsafe), "{rdx}"(0_u64) : "cc", "memory" : "volatile")
+  {% elsif flag?(:aarch64) %}
+    asm("ror x12, x12, #3\nror x12, x12, #13\nror x12, x12, #51\nror x12, x12, #61\norr x10, x10, x10"
+            : "={x3}"(result) : "{x4}"(arguments.to_unsafe), "{x3}"(0_u64) : "cc", "memory" : "volatile")
+  {% end %}
+end
+
+MEMCHECK_MAKE_MEM_UNDEFINED = 0x4D430001_u64
+MEMCHECK_MAKE_MEM_DEFINED   = 0x4D430002_u64
+
+# Returns a copy of *value* that Memcheck treats as secret: for a secret
+# that must hold a particular value (a P-256 scalar must be below n).
+def secret_copy_of(value : Bytes) : Bytes
+  copy = value.dup
+  memcheck_request(MEMCHECK_MAKE_MEM_UNDEFINED, copy.to_unsafe.as(Void*), copy.size)
+  copy
+end
+
+# `Declassification.reveal` marks what it returns as public, which is what
+# it means: the verdict or the signature is the caller's to see. Memcheck
+# is told so; the compiled library code between the secret and the reveal
+# is the same as in a normal build.
+module Beryl::Crypto::Declassification
+  @[NoInline]
+  def self.reveal(padding_bytesize : UInt32) : UInt32
+    revealed = padding_bytesize
+    memcheck_request(MEMCHECK_MAKE_MEM_DEFINED, pointerof(revealed).as(Void*), sizeof(UInt32))
+    revealed
+  end
+
+  @[NoInline]
+  def self.reveal(published : Bytes) : Bytes
+    memcheck_request(MEMCHECK_MAKE_MEM_DEFINED, published.to_unsafe.as(Void*), published.size)
+    published
+  end
 end
 
 # Stores a result that depends on secrets where the optimizer must keep it,
@@ -172,5 +220,25 @@ LIST_OF_MESSAGE_BYTESIZES.each do |bytesize|
   Beryl::Crypto::V1::GaloisHash.write_digest(hash_state, tag)
   keep(result_storage, tag)
 end
+
+# The public-key operations: secret scalars, seeds and messages; public
+# peer keys. The build leaves the Data Independent Timing mode alone (see
+# `ProcessorFeatures`), so `DataIndependentTiming.run` is only its block.
+x25519_peer = Beryl::Crypto::V1::X25519::PrivateKey.new(Bytes.new(32) { |index| (index * 7 + 1).to_u8 }).public_key
+x25519_key = Beryl::Crypto::V1::X25519::PrivateKey.new(secret_bytes(32))
+keep(result_storage, x25519_key.public_key.to_slice)
+keep(result_storage, x25519_key.shared_secret(x25519_peer) || Bytes.new(0))
+
+ed25519_key = Beryl::Crypto::V1::Ed25519::SigningKey.new(secret_bytes(32))
+keep(result_storage, ed25519_key.verification_key.to_slice)
+keep(result_storage, ed25519_key.sign(public_message))
+keep(result_storage, ed25519_key.sign(secret_bytes(200)))
+
+p256_peer = Beryl::Crypto::V1::P256::PrivateKey.new(Bytes.new(32) { |index| (index + 9).to_u8 }).public_key
+p256_key = Beryl::Crypto::V1::P256::PrivateKey.new(secret_copy_of(Bytes.new(32) { |index| (index * 5 + 3).to_u8 }))
+keep(result_storage, p256_key.public_key.to_uncompressed)
+keep(result_storage, p256_key.shared_secret(p256_peer))
+keep(result_storage, p256_key.sign(public_message))
+keep(result_storage, p256_key.sign(secret_bytes(100), format: Beryl::Crypto::V1::SignatureFormat::FixedWidth))
 
 exit 0

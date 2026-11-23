@@ -2,10 +2,10 @@ module Beryl::Crypto
   # :nodoc:
   #
   # The places where a value computed from secrets is allowed to decide what
-  # the code does next. There is one kind: the verdict on a message that
+  # the code does next. There are two kinds: the verdict on a message that
   # arrived from outside (its tag matched or not, its padding was well
-  # formed or not). The caller learns that verdict anyway, since it is the
-  # return value.
+  # formed or not), and a result about to be returned (a signature). The
+  # caller learns either anyway, since it is the return value.
   #
   # Every such decision passes through this module, so the constant-time
   # checks can tell an intended verdict from a leak, and a reader can list
@@ -17,6 +17,14 @@ module Beryl::Crypto
     @[NoInline]
     def self.reveal(verdict : Bool) : Bool
       reveal(verdict ? 1_u32 : 0_u32) == 1_u32
+    end
+
+    # Returns *published* unchanged: bytes computed from secrets that are
+    # about to be handed out, such as the two halves of a signature, on
+    # their way into code written for public data (the signature encoder).
+    @[NoInline]
+    def self.reveal(published : Bytes) : Bytes
+      published
     end
 
     # Returns *padding_bytesize* unchanged: the number of padding bytes at the

@@ -1,6 +1,7 @@
 require "random/secure"
 require "../error"
 require "../secret_wiping"
+require "../data_independent_timing"
 require "./secure_hash_with_512_bit_digest"
 require "./edwards25519_group"
 
@@ -42,6 +43,12 @@ module Beryl::Crypto::V1
         raise InvalidPublicKey.new("the bytes do not encode an Ed25519 public key") unless point
         @encoded = encoded.dup
         @point = point
+      end
+
+      # :nodoc:
+      #
+      # A key whose point is already known: the signing key derives it.
+      def initialize(@point : Edwards25519Group::Point, @encoded : Bytes)
       end
 
       def to_slice : Bytes
@@ -92,37 +99,45 @@ module Beryl::Crypto::V1
           raise KeySizeMismatch.new("an Ed25519 private key is #{SEED_BYTESIZE} bytes, not #{seed.size}")
         end
         @seed = seed.dup
-        expanded = SHA512.digest(@seed)
-        @secret_scalar = expanded[0, 32].dup
-        @prefix = expanded[32, 32].dup
-        SecretWiping.wipe(expanded)
-        @secret_scalar[0] &= 248_u8
-        @secret_scalar[31] &= 127_u8
-        @secret_scalar[31] |= 64_u8
-        @verification_key = VerificationKey.new(Edwards25519Group.multiply_base(@secret_scalar).encode)
+        secret_scalar, prefix, public_point, encoded_public_key = DataIndependentTiming.run do
+          expanded = SHA512.digest(@seed)
+          scalar = expanded[0, 32].dup
+          scalar[0] &= 248_u8
+          scalar[31] &= 127_u8
+          scalar[31] |= 64_u8
+          hash_prefix = expanded[32, 32].dup
+          SecretWiping.wipe(expanded)
+          point = Edwards25519Group.multiply_base(scalar)
+          {scalar, hash_prefix, point, point.encode}
+        end
+        @secret_scalar = secret_scalar
+        @prefix = prefix
+        @verification_key = VerificationKey.new(public_point, encoded_public_key)
       end
 
       # Returns the 64-byte signature R || S of *message* (RFC 8032 §5.1.6).
       def sign(message : Bytes | String) : Bytes
-        message_bytes = message.to_slice
-        nonce_hash = SHA512.new.update(@prefix).update(message_bytes).final
-        nonce = Edwards25519Group::Scalar.reduce(nonce_hash)
-        SecretWiping.wipe(nonce_hash)
-        encoded_nonce = Edwards25519Group::Scalar.encode(nonce)
-        encoded_r = Edwards25519Group.multiply_base(encoded_nonce).encode
-        SecretWiping.wipe(encoded_nonce)
+        DataIndependentTiming.run do
+          message_bytes = message.to_slice
+          nonce_hash = SHA512.new.update(@prefix).update(message_bytes).final
+          nonce = Edwards25519Group::Scalar.reduce(nonce_hash)
+          SecretWiping.wipe(nonce_hash)
+          encoded_nonce = Edwards25519Group::Scalar.encode(nonce)
+          encoded_r = Edwards25519Group.multiply_base(encoded_nonce).encode
+          SecretWiping.wipe(encoded_nonce)
 
-        challenge = SHA512.new.update(encoded_r).update(verification_key.encoded).update(message_bytes).final
-        reduced_challenge = Edwards25519Group::Scalar.reduce(challenge)
-        reduced_secret = Edwards25519Group::Scalar.reduce(@secret_scalar)
-        encoded_s = Edwards25519Group::Scalar.encode(
-          Edwards25519Group::Scalar.multiply_add(reduced_challenge, reduced_secret, nonce)
-        )
+          challenge = SHA512.new.update(encoded_r).update(verification_key.encoded).update(message_bytes).final
+          reduced_challenge = Edwards25519Group::Scalar.reduce(challenge)
+          reduced_secret = Edwards25519Group::Scalar.reduce(@secret_scalar)
+          encoded_s = Edwards25519Group::Scalar.encode(
+            Edwards25519Group::Scalar.multiply_add(reduced_challenge, reduced_secret, nonce)
+          )
 
-        signature = Bytes.new(SIGNATURE_BYTESIZE)
-        encoded_r.copy_to(signature[0, 32])
-        encoded_s.copy_to(signature[32, 32])
-        signature
+          signature = Bytes.new(SIGNATURE_BYTESIZE)
+          encoded_r.copy_to(signature[0, 32])
+          encoded_s.copy_to(signature[32, 32])
+          signature
+        end
       end
 
       # Returns a copy of the 32-byte seed.

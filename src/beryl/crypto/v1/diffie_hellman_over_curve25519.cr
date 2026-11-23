@@ -4,6 +4,7 @@ require "../secret_wiping"
 require "../field_arithmetic"
 require "../constant_time_selection"
 require "../declassification"
+require "../data_independent_timing"
 require "./curve25519_field_element"
 
 module Beryl::Crypto::V1
@@ -100,16 +101,18 @@ module Beryl::Crypto::V1
 
     # Returns X25519(*scalar*, *u_coordinate*) (RFC 7748 §5): both 32 bytes.
     def self.scalar_multiply(scalar : Bytes, u_coordinate : Bytes) : Bytes
-      clamped = StaticArray(UInt8, 32).new { |index| scalar.unsafe_fetch(index) }
-      clamped[0] &= 248_u8
-      clamped[31] &= 127_u8
-      clamped[31] |= 64_u8
-      u_bytes = StaticArray(UInt8, 32).new { |index| u_coordinate.unsafe_fetch(index) }
-      u_bytes[31] &= 0x7f_u8
+      DataIndependentTiming.run do
+        clamped = StaticArray(UInt8, 32).new { |index| scalar.unsafe_fetch(index) }
+        clamped[0] &= 248_u8
+        clamped[31] &= 127_u8
+        clamped[31] |= 64_u8
+        u_bytes = StaticArray(UInt8, 32).new { |index| u_coordinate.unsafe_fetch(index) }
+        u_bytes[31] &= 0x7f_u8
 
-      result = ladder(clamped, Field.from_bytes(u_bytes))
-      SecretWiping.wipe(clamped.to_slice)
-      Bytes.new(KEY_BYTESIZE) { |index| result[index] }
+        result = ladder(clamped, Field.from_bytes(u_bytes))
+        SecretWiping.wipe(clamped.to_slice)
+        Bytes.new(KEY_BYTESIZE) { |index| result[index] }
+      end
     end
 
     # The Montgomery ladder of RFC 7748 §5. Field bounds: sums and

@@ -7,8 +7,9 @@
 # under a name the checker can find. Its `Bytes` arguments are the secrets;
 # `scripts/check_secret_flow.rb` follows them through the optimized LLVM IR
 # and reports any branch, table index or division that depends on one.
-# `leaky_comparison` and `leaky_comparison_of_round_keys` are the faults the
-# check exists to catch and must be reported.
+# `leaky_comparison`, `leaky_comparison_of_round_keys` and
+# `leaky_limb_lookup` are the faults the check exists to catch and must
+# be reported.
 require "../../src/beryl/crypto"
 
 module SecretFlowProbe
@@ -134,6 +135,40 @@ module SecretFlowProbe
     Beryl::Crypto.decrypt(encrypted_message, key: key)
   end
 
+  alias X25519 = Beryl::Crypto::V1::X25519
+  alias Ed25519 = Beryl::Crypto::V1::Ed25519
+  alias P256 = Beryl::Crypto::V1::P256
+
+  @[NoInline]
+  def self.x25519_public_key(secret : Bytes) : X25519::PublicKey
+    X25519::PrivateKey.new(secret).public_key
+  end
+
+  @[NoInline]
+  def self.x25519_key_agreement(secret : Bytes, peer : X25519::PublicKey) : Bytes?
+    X25519::PrivateKey.new(secret).shared_secret(peer)
+  end
+
+  @[NoInline]
+  def self.ed25519_signing(seed : Bytes, message : Bytes) : Bytes
+    Ed25519::SigningKey.new(seed).sign(message)
+  end
+
+  @[NoInline]
+  def self.p256_key_agreement(scalar : Bytes, peer : P256::PublicKey) : Bytes
+    P256::PrivateKey.new(scalar).shared_secret(peer)
+  end
+
+  @[NoInline]
+  def self.p256_signing(scalar : Bytes, message : Bytes) : Bytes
+    P256::PrivateKey.new(scalar).sign(message, format: Beryl::Crypto::V1::SignatureFormat::FixedWidth)
+  end
+
+  @[NoInline]
+  def self.p256_signing_in_der(scalar : Bytes, message : Bytes) : Bytes
+    P256::PrivateKey.new(scalar).sign(message)
+  end
+
   # Stops at the first round key word that is zero: a leak in the form
   # cipher code would have it, which the check must report as well.
   @[NoInline]
@@ -142,6 +177,15 @@ module SecretFlowProbe
       return false if round_keys[index] == 0_u64
     end
     true
+  end
+
+  # Picks a table entry by the low bits of a limb: the leak an unprotected
+  # window lookup in curve code would have, on a field element passed by
+  # value rather than through a Slice.
+  @[NoInline]
+  def self.leaky_limb_lookup(limbs : StaticArray(UInt64, 4)) : UInt64
+    table = StaticArray(UInt64, 16).new { |index| index.to_u64 &* 0x9e3779b97f4a7c15_u64 }
+    table[limbs[0] & 0xf_u64]
   end
 
   # Compares with an early exit: the textbook timing leak.
@@ -201,6 +245,18 @@ is_verified &= opened == plaintext
   SecretFlowProbe.aes_block_decryption(round_keys, key_bytesize // 4 + 6, ciphertext[0, 64], opened[0, 64])
   SecretFlowProbe.leaky_comparison_of_round_keys(round_keys)
 end
+
+# The public-key operations on secret scalars, seeds and messages. The peer
+# keys are built from public bytes outside the entry points.
+x25519_peer = SecretFlowProbe.x25519_public_key(Bytes.new(32) { |index| (index * 7 + 1).to_u8 })
+is_verified &= !SecretFlowProbe.x25519_key_agreement(key, x25519_peer).nil?
+ed25519_signature = SecretFlowProbe.ed25519_signing(key, plaintext)
+p256_peer = SecretFlowProbe::P256::PrivateKey.new(Bytes.new(32) { |index| (index + 9).to_u8 }).public_key
+p256_shared = SecretFlowProbe.p256_key_agreement(key, p256_peer)
+p256_signature = SecretFlowProbe.p256_signing(key, plaintext)
+p256_signature_in_der = SecretFlowProbe.p256_signing_in_der(key, plaintext)
+is_verified &= SecretFlowProbe.leaky_limb_lookup(StaticArray(UInt64, 4).new { |index| key[index].to_u64 }) != 1_u64
+is_verified &= ed25519_signature.size == 64 && p256_shared.size == 32 && p256_signature.size == 64 && p256_signature_in_der.size >= 8
 
 encrypted_message = SecretFlowProbe.sealed_message(plaintext, key)
 is_verified &= SecretFlowProbe.opened_message(encrypted_message, key) == plaintext

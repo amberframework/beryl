@@ -2,6 +2,7 @@ require "random/secure"
 require "../error"
 require "../secret_wiping"
 require "../declassification"
+require "../data_independent_timing"
 require "../constant_time_selection"
 require "./deterministic_signature_nonce"
 require "./elliptic_curve_signature_encoding"
@@ -101,7 +102,7 @@ module Beryl::Crypto::V1
           candidate = Bytes.new({{ arithmetic }}::BYTESIZE)
           loop do
             Random::Secure.random_bytes(candidate)
-            if Declassification.reveal(PrivateKey.in_range_bit(candidate) == 1)
+            if Declassification.reveal(DataIndependentTiming.run { PrivateKey.in_range_bit(candidate) } == 1)
               key = new(candidate)
               SecretWiping.wipe(candidate)
               return key
@@ -122,11 +123,11 @@ module Beryl::Crypto::V1
           unless scalar.size == {{ arithmetic }}::BYTESIZE
             raise KeySizeMismatch.new("a {{ curve_name.id }} private key is #{{{ arithmetic }}::BYTESIZE} bytes, not #{scalar.size}")
           end
-          unless Declassification.reveal(PrivateKey.in_range_bit(scalar) == 1)
+          unless Declassification.reveal(DataIndependentTiming.run { PrivateKey.in_range_bit(scalar) } == 1)
             raise InvalidPrivateKey.new("a {{ curve_name.id }} private key must be between 1 and the group order minus 1")
           end
           @scalar = scalar.dup
-          @public_key = PublicKey.new({{ arithmetic }}.multiply_generator(@scalar))
+          @public_key = DataIndependentTiming.run { PublicKey.new({{ arithmetic }}.multiply_generator(@scalar)) }
         end
 
         # Returns the ECDSA signature of *message* hashed with
@@ -139,11 +140,13 @@ module Beryl::Crypto::V1
         # *hash_function*, is *digest*; the RFC 6979 nonce uses HMAC with
         # the same hash.
         def sign_digest(digest : Bytes, hash_function : D.class, *, format : SignatureFormat = SignatureFormat::DER) : Bytes forall D
-          digest_integer = {{ arithmetic }}.limbs_to_big_endian({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
-          nonce = DeterministicSignatureNonce(D).generate(@scalar, digest_integer, {{ arithmetic }}::GROUP_ORDER)
-          signature = sign_with_nonce(digest, nonce, format: format)
-          SecretWiping.wipe(nonce)
-          signature
+          DataIndependentTiming.run do
+            digest_integer = {{ arithmetic }}.limbs_to_big_endian({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
+            nonce = DeterministicSignatureNonce(D).generate(@scalar, digest_integer, {{ arithmetic }}::GROUP_ORDER)
+            signature = sign_with_nonce(digest, nonce, format: format)
+            SecretWiping.wipe(nonce)
+            signature
+          end
         end
 
         # :nodoc:
@@ -151,22 +154,24 @@ module Beryl::Crypto::V1
         # Signs with a given nonce, for the published vectors that fix k.
         # Raises when r or s comes out zero (probability about 2^-256).
         def sign_with_nonce(digest : Bytes, nonce : Bytes, *, format : SignatureFormat = SignatureFormat::DER) : Bytes
-          scalar_field = {{ arithmetic }}::ScalarField
-          r_limbs = {{ arithmetic }}.x_coordinate_modulo_order({{ arithmetic }}.multiply_generator(nonce))
-          encoded_r = {{ arithmetic }}.limbs_to_big_endian(r_limbs)
-          r = scalar_field.to_montgomery(r_limbs)
-          digest_integer = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
-          private_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(@scalar))
-          nonce_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(nonce))
-          inverse_nonce = {{ arithmetic }}.scalar_power(nonce_scalar, {{ arithmetic }}.scalar_inverse_exponent)
-          s = scalar_field.mul(inverse_nonce, scalar_field.add(digest_integer, scalar_field.mul(r, private_scalar)))
-          encoded_s = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(s))
-          has_zero_component = ConstantTimeSelection.all_zero_bit(encoded_r) | ConstantTimeSelection.all_zero_bit(encoded_s)
-          if Declassification.reveal(has_zero_component == 1)
-            raise Error.new("ECDSA produced a zero signature component; sign again with another nonce")
-          end
+          DataIndependentTiming.run do
+            scalar_field = {{ arithmetic }}::ScalarField
+            r_limbs = {{ arithmetic }}.x_coordinate_modulo_order({{ arithmetic }}.multiply_generator(nonce))
+            encoded_r = {{ arithmetic }}.limbs_to_big_endian(r_limbs)
+            r = scalar_field.to_montgomery(r_limbs)
+            digest_integer = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
+            private_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(@scalar))
+            nonce_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(nonce))
+            inverse_nonce = {{ arithmetic }}.scalar_power(nonce_scalar, {{ arithmetic }}.scalar_inverse_exponent)
+            s = scalar_field.mul(inverse_nonce, scalar_field.add(digest_integer, scalar_field.mul(r, private_scalar)))
+            encoded_s = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(s))
+            has_zero_component = ConstantTimeSelection.all_zero_bit(encoded_r) | ConstantTimeSelection.all_zero_bit(encoded_s)
+            if Declassification.reveal(has_zero_component == 1)
+              raise Error.new("ECDSA produced a zero signature component; sign again with another nonce")
+            end
 
-          EllipticCurveSignatureEncoding.encode(encoded_r, encoded_s, format)
+            EllipticCurveSignatureEncoding.encode(Declassification.reveal(encoded_r), Declassification.reveal(encoded_s), format)
+          end
         end
 
         # Returns the ECDH shared secret with *peer*: the x coordinate of
@@ -175,10 +180,12 @@ module Beryl::Crypto::V1
         # was decoded, and the group has prime order, so the result is never
         # the point at infinity.
         def shared_secret(peer : PublicKey) : Bytes
-          multiples = {{ arithmetic }}.multiples_of(peer.point)
-          product = {{ arithmetic }}.multiply_constant_time(@scalar, multiples)
-          x, _ = {{ arithmetic }}.to_affine(product)
-          {{ arithmetic }}.field_element_to_big_endian(x)
+          DataIndependentTiming.run do
+            multiples = {{ arithmetic }}.multiples_of(peer.point)
+            product = {{ arithmetic }}.multiply_constant_time(@scalar, multiples)
+            x, _ = {{ arithmetic }}.to_affine(product)
+            {{ arithmetic }}.field_element_to_big_endian(x)
+          end
         end
 
         # Returns a copy of the big-endian scalar.

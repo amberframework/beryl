@@ -66,12 +66,33 @@ SECRET_BUFFER_FUNCTION = /BitslicedAdvancedEncryptionStandard::|ChaCha20StreamCi
 # and its integers are not.
 CIPHER_OBJECT_METHOD = /AuthenticatedEncryption|GaloisCounterMode|CipherBlockChainingMode/.freeze
 
+# Functions of the elliptic-curve code that take secrets by value: field
+# elements and scalars as arrays of limbs, points as structs of them, a
+# clamped scalar as an array of bytes. Every argument of one is secret,
+# except one named in PUBLIC_ARGUMENT: an exponent (a public constant of
+# the curve that square-and-multiply may branch on), a count of squarings,
+# or the position and length of a chunk.
+SECRET_VALUE_FUNCTION = /FieldArithmetic::|Curve25519FieldElement[\#:]|DiffieHellmanOverCurve25519::ladder|
+                         Edwards25519Group::(?:Point\#(?:add|double|negate|select|encode)|multiply_base|multiply_constant_time|
+                         Scalar::(?:reduce|chunk|encode|multiply_add))|
+                         ::Arithmetic::(?:Point\#(?:add|double|negate|replace_if)|multiply_constant_time|multiply_generator|
+                         multiples_of|to_affine|field_|scalar_power|reduce_once_modulo_order|limbs_|x_coordinate_modulo_order|below_bit)|
+                         ConstantTimeSelection::|DeterministicSignatureNonce|SecretFlowProbe::leaky_limb_lookup/x.freeze
+PUBLIC_ARGUMENT = /\A%(?:exponent|count|start|bytesize)\z/.freeze
+
+# Functions written for public data: the signature encoder, whose input is
+# a signature about to be returned. They may branch on what they are given,
+# so a secret must not reach one unless it went through
+# Declassification.reveal first; the check reports it when one does.
+PUBLIC_DATA_FUNCTION = /EllipticCurveSignatureEncoding::/.freeze
+
 # The one place a verdict computed from secrets may decide what happens
 # next (src/beryl/crypto/declassification.cr). Its result is public.
 DECLASSIFICATION = /Beryl::Crypto::Declassification::reveal/.freeze
 SKIPPED_FUNCTION = /Exception::new|raise</.freeze
-EXPECTED_LEAK = /SecretFlowProbe::leaky_comparison/.freeze
-LIST_OF_EXPECTED_LEAKS = [/SecretFlowProbe::leaky_comparison</, /SecretFlowProbe::leaky_comparison_of_round_keys</].freeze
+EXPECTED_LEAK = /SecretFlowProbe::leaky_/.freeze
+LIST_OF_EXPECTED_LEAKS = [/SecretFlowProbe::leaky_comparison</, /SecretFlowProbe::leaky_comparison_of_round_keys</,
+                          /SecretFlowProbe::leaky_limb_lookup</].freeze
 COMPRESSION_FUNCTION = /#compress(?:_with_portable_code)?</.freeze
 
 # Instructions allowed in assembly: none of them takes a time that depends on
@@ -203,6 +224,7 @@ class SecretFlow
     @is_compression = function.name.match?(COMPRESSION_FUNCTION)
     @is_secret_buffer_function = function.name.match?(SECRET_BUFFER_FUNCTION)
     @is_cipher_object_method = function.name.match?(CIPHER_OBJECT_METHOD)
+    @is_secret_value_function = function.name.match?(SECRET_VALUE_FUNCTION)
     @defined = function.parameters.keys.to_h { |name| [name, true] }
     function.list_of_instructions.each { |instruction| @defined[instruction.result] = true if instruction.result }
     function.list_of_instructions.each do |instruction|
@@ -222,6 +244,10 @@ class SecretFlow
       @origin[name] = [name, ""] if kind == :pointer
       @secret_bases[name] = true if @is_compression && name == "%self"
       @secret_bases[name] = true if @is_secret_buffer_function && kind == :pointer
+      next unless @is_secret_value_function && !name.match?(PUBLIC_ARGUMENT)
+
+      @secret_bases[name] = true if kind == :pointer
+      @secret_values[name] = true if kind == :other
     end
   end
 
@@ -370,6 +396,12 @@ class SecretFlow
       @secret_values[instruction.result] = true if instruction.result && operands.any? { |operand| secret?(operand) }
       return
     end
+    if callee.match?(PUBLIC_DATA_FUNCTION)
+      if operands.any? { |operand| secret?(operand) || leads_to_secret?(operand) || @function.parameters[operand] == :slice && @is_secret_value_function }
+        report("a secret reaches a function written for public data", instruction)
+      end
+      return
+    end
     if callee.match?(DECLASSIFICATION)
       @list_of_declassifications << "#{@function.name}: #{callee}" if operands.any? { |operand| secret?(operand) }
       return
@@ -432,7 +464,7 @@ end
 
 path = ARGV.fetch(0) { abort "usage: check_secret_flow.rb <file.ll>" }
 list_of_functions = read_functions(path).select do |function|
-  function.name.match?(ANALYZED_FUNCTION) && !function.name.match?(SKIPPED_FUNCTION)
+  function.name.match?(ANALYZED_FUNCTION) && !function.name.match?(SKIPPED_FUNCTION) && !function.name.match?(PUBLIC_DATA_FUNCTION)
 end
 abort "no Beryl::Crypto function found in #{path}" if list_of_functions.empty?
 
