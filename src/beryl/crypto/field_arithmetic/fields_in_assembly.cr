@@ -312,6 +312,110 @@ module Beryl::Crypto::FieldArithmetic
     end
 
     # The text of an AArch64 Montgomery multiplication modulo any odd
+    # modulus of four words, with every value in registers: $0 to $5 the
+    # running sum, $6 and $7 scratch, $8 to $11 the result of the final
+    # subtraction, then the inputs: $12 to $15 the words of a, $16 to $19
+    # those of b, $20 to $23 those of the modulus and $24 -p^-1 mod 2^64.
+    # The steps are those of `montgomery_aarch64_statement`.
+    macro montgomery_in_registers_aarch64_statement(first_factor, second_factor, modulus, negated_inverse)
+      {%
+        sum = (0..5).map { |index| "$#{index}" }
+        product = "$6"
+        multiplier = "$7"
+        difference = (8..11).map { |index| "$#{index}" }
+        a_words = (12..15).map { |index| "$#{index}" }
+        b_words = (16..19).map { |index| "$#{index}" }
+        modulus_words = (20..23).map { |index| "$#{index}" }
+        lines = [] of StringLiteral
+      %}
+      {% for index in 0..5 %}
+        {% lines << "mov #{sum[index].id}, xzr" %}
+      {% end %}
+      {% for row in 0..3 %}
+        {% for column in 0..3 %}
+          {% lines << "mul #{product.id}, #{a_words[row].id}, #{b_words[column].id}" %}
+          {% lines << "#{(column == 0 ? "adds" : "adcs").id} #{sum[column].id}, #{sum[column].id}, #{product.id}" %}
+        {% end %}
+        {% lines << "adcs #{sum[4].id}, #{sum[4].id}, xzr" %}
+        {% lines << "adc #{sum[5].id}, xzr, xzr" %}
+        {% for column in 0..3 %}
+          {% lines << "umulh #{product.id}, #{a_words[row].id}, #{b_words[column].id}" %}
+          {% lines << "#{(column == 0 ? "adds" : "adcs").id} #{sum[column + 1].id}, #{sum[column + 1].id}, #{product.id}" %}
+        {% end %}
+        {% lines << "adc #{sum[5].id}, #{sum[5].id}, xzr" %}
+        {% lines << "mul #{multiplier.id}, #{sum[0].id}, $24" %}
+        {% for column in 0..3 %}
+          {% lines << "mul #{product.id}, #{multiplier.id}, #{modulus_words[column].id}" %}
+          {% lines << "#{(column == 0 ? "adds" : "adcs").id} #{sum[column].id}, #{sum[column].id}, #{product.id}" %}
+        {% end %}
+        {% lines << "adcs #{sum[4].id}, #{sum[4].id}, xzr" %}
+        {% lines << "adc #{sum[5].id}, #{sum[5].id}, xzr" %}
+        {% for column in 0..3 %}
+          {% lines << "umulh #{product.id}, #{multiplier.id}, #{modulus_words[column].id}" %}
+          {% lines << "#{(column == 0 ? "adds" : "adcs").id} #{sum[column + 1].id}, #{sum[column + 1].id}, #{product.id}" %}
+        {% end %}
+        {% lines << "adc #{sum[5].id}, #{sum[5].id}, xzr" %}
+        {% sum = sum[1..-1] + [sum[0]] %}
+      {% end %}
+      {% for column in 0..3 %}
+        {% lines << "#{(column == 0 ? "subs" : "sbcs").id} #{difference[column].id}, #{sum[column].id}, #{modulus_words[column].id}" %}
+      {% end %}
+      {% lines << "sbcs xzr, #{sum[4].id}, xzr" %}
+      {% for column in 0..3 %}
+        {% lines << "csel #{sum[column].id}, #{sum[column].id}, #{difference[column].id}, lo" %}
+      {% end %}
+      sum_0 = sum_1 = sum_2 = sum_3 = sum_4 = sum_5 = product_word = multiplier_word = 0_u64
+      difference_0 = difference_1 = difference_2 = difference_3 = 0_u64
+      asm({{ lines.join("\n") }} : "=&r"(sum_0), "=&r"(sum_1), "=&r"(sum_2), "=&r"(sum_3), "=&r"(sum_4), "=&r"(sum_5),
+                                   "=&r"(product_word), "=&r"(multiplier_word),
+                                   "=&r"(difference_0), "=&r"(difference_1), "=&r"(difference_2), "=&r"(difference_3)
+                                 : "r"({{ first_factor }}.unsafe_fetch(0)), "r"({{ first_factor }}.unsafe_fetch(1)),
+                                   "r"({{ first_factor }}.unsafe_fetch(2)), "r"({{ first_factor }}.unsafe_fetch(3)),
+                                   "r"({{ second_factor }}.unsafe_fetch(0)), "r"({{ second_factor }}.unsafe_fetch(1)),
+                                   "r"({{ second_factor }}.unsafe_fetch(2)), "r"({{ second_factor }}.unsafe_fetch(3)),
+                                   "r"({{ modulus }}.unsafe_fetch(0)), "r"({{ modulus }}.unsafe_fetch(1)),
+                                   "r"({{ modulus }}.unsafe_fetch(2)), "r"({{ modulus }}.unsafe_fetch(3)), "r"({{ negated_inverse }})
+                                 : "cc")
+      {%
+        # Each step moves the sum down one register; the low words of the
+        # result are where the last step left them.
+        result_names = sum.map { |name| "sum_" + name[1..-1] }
+      %}
+      StaticArray[{{ result_names[0].id }}, {{ result_names[1].id }}, {{ result_names[2].id }}, {{ result_names[3].id }}]
+    end
+
+    # The text of an AArch64 selection of entry *index* from *table*, a run
+    # of *entry_count* entries of *word_count* words, into *destination*:
+    # every entry from *first_entry* on is read, compared with *index* by
+    # `cmp`, and kept by `csel`, so the time does not depend on *index*.
+    # Nothing is written for an index below *first_entry* except zeros.
+    macro select_entry_aarch64_statement(word_count, entry_count, first_entry, destination, table, index)
+      {%
+        registers = %w(x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x19)
+        kept = registers[0...word_count]
+        loaded = registers[word_count]
+        lines = [] of StringLiteral
+      %}
+      {% for word in 0...word_count %}
+        {% lines << "mov #{kept[word].id}, xzr" %}
+      {% end %}
+      {% for entry in first_entry...entry_count %}
+        {% lines << "cmp $2, ##{entry}" %}
+        {% for word in 0...word_count %}
+          {% lines << "ldr #{loaded.id}, [$1, ##{(entry * word_count + word) * 8}]" %}
+          {% lines << "csel #{kept[word].id}, #{loaded.id}, #{kept[word].id}, eq" %}
+        {% end %}
+      {% end %}
+      {% for word in 0...word_count %}
+        {% lines << "str #{kept[word].id}, [$0, ##{word * 8}]" %}
+      {% end %}
+      asm({{ lines.join("\n") }}
+        :: "r"({{ destination }}), "r"({{ table }}), "r"({{ index }})
+        : "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+          "x16", "x17", "x19", "memory", "cc")
+    end
+
+    # The text of an AArch64 Montgomery multiplication modulo any odd
     # modulus of *word_count* words, word by word (coarsely integrated
     # operand scanning): $0 points at the result, $1 at a, $2 at b, $3 at
     # the modulus, and $4 holds -p^-1 mod 2^64. Registers x0 to x17 and
@@ -530,7 +634,17 @@ module Beryl::Crypto::FieldArithmetic
       MODULUS_WORDS = StaticArray[{% for index in 0...word_count %}{{ ("0x" + settings[2][((word_count - 1 - index) * 16)...((word_count - index) * 16)] + "_u64").id }}, {% end %}]
       NEGATED_MODULUS_INVERSE = {{ (settings[1] + "_u64").id }}
 
-      {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
+      {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) && word_count == 4 %}
+        @[AlwaysInline]
+        def self.mul(a : Limbs, b : Limbs) : Limbs
+          FieldsInAssembly.montgomery_in_registers_aarch64_statement(a, b, MODULUS_WORDS, NEGATED_MODULUS_INVERSE)
+        end
+
+        @[AlwaysInline]
+        def self.square(a : Limbs) : Limbs
+          mul(a, a)
+        end
+      {% elsif flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
         def self.mul(a : Limbs, b : Limbs) : Limbs
           result = uninitialized Limbs
           modulus = MODULUS_WORDS

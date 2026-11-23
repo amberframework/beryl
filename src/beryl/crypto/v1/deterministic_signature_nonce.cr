@@ -16,6 +16,10 @@ module Beryl::Crypto::V1
   # candidate is discarded, so the verdict says nothing about the nonce that
   # is used (rejection has probability below 2^-32 for P-256 and P-384).
   struct DeterministicSignatureNonce(D)
+    # The one-byte separators of steps d, f and h.3.
+    SEPARATOR_ZERO = Bytes[0x00]
+    SEPARATOR_ONE  = Bytes[0x01]
+
     # Returns the nonce k for *private_scalar* and *digest_integer* (both
     # big-endian, `group_order.size` bytes, the digest already reduced
     # modulo n as bits2octets requires).
@@ -24,16 +28,18 @@ module Beryl::Crypto::V1
       value = Bytes.new(hash_bytesize, 0x01_u8)
       key = Bytes.new(hash_bytesize, 0x00_u8)
 
-      key = HMAC(D).new(key).update(value).update(Bytes[0x00]).update(private_scalar).update(digest_integer).final
+      key = HMAC(D).new(key).update(value).update(SEPARATOR_ZERO).update(private_scalar).update(digest_integer).final
       value = HMAC(D).new(key).update(value).final
-      key = HMAC(D).new(key).update(value).update(Bytes[0x01]).update(private_scalar).update(digest_integer).final
-      value = HMAC(D).new(key).update(value).final
+      key = HMAC(D).new(key).update(value).update(SEPARATOR_ONE).update(private_scalar).update(digest_integer).final
+      # Every HMAC under one K reuses the authentication keyed with it.
+      keyed = HMAC(D).new(key)
+      value = keyed.update(value).final
 
       candidate = Bytes.new(group_order.size)
       loop do
         filled = 0
         while filled < candidate.size
-          value = HMAC(D).new(key).update(value).final
+          value = keyed.reset.update(value).final
           taken = Math.min(value.size, candidate.size - filled)
           value[0, taken].copy_to(candidate[filled, taken])
           filled += taken
@@ -48,8 +54,9 @@ module Beryl::Crypto::V1
           return candidate
         end
 
-        key = HMAC(D).new(key).update(value).update(Bytes[0x00]).final
-        value = HMAC(D).new(key).update(value).final
+        key = HMAC(D).new(key).update(value).update(SEPARATOR_ZERO).final
+        keyed = HMAC(D).new(key)
+        value = keyed.update(value).final
       end
     end
   end

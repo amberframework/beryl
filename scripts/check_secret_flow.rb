@@ -30,10 +30,12 @@
 # by its text instead:
 #   - every instruction must be on a list of instructions whose timing does
 #     not depend on the values they work on (moves, adds, exclusive ors,
-#     shuffles, loads and stores, and the SHA instructions themselves);
+#     shuffles, loads and stores, multiplications, conditional selects, and
+#     the SHA and AES instructions themselves);
 #   - the only conditional branch allowed closes the loop, directly after the
 #     instruction that counts the blocks left down by one, and nothing else
-#     may write the counting register after it is set from the block count;
+#     may write the counting register after it is set from the block count
+#     (an operand, or a constant such as RSA's word count);
 #   - memory is addressed only as a register plus a constant, so no address
 #     is computed from data.
 # Everything its pointer arguments lead to is then treated as secret. An
@@ -108,10 +110,13 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aesenc aesenclast aesdec aesdeclast aesimc pclmulqdq bswap pcmpgtd pand por psllq psrlq pslldq psrldq pslld psrld
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
+  lsl lsr subs sbcs sbc csel cmp
+  movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
 ].freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
 FORWARD_JUMP = /\A(?:b|jmp) 9f\z/.freeze
+STRAIGHT_LINE_BREAKER = /\b(?:b\.\w+|jnz|jmp|b)\s+\d[bf]\b|^\s*\d+:/.freeze
 REGISTER_INDEXED_MEMORY = /\[\s*\w+\s*,\s*[a-z]|\(\s*%\w+\s*,/.freeze
 
 # Returns what is wrong with the text of one assembly statement, as a list of
@@ -140,7 +145,7 @@ def assembly_faults(template)
     list_of_writes = list_of_lines.select do |line|
       !line.match?(LOOP_COUNT_DOWN) && line.match?(/\A\w+ #{counting_register}\b|, %#{counting_register}\z/)
     end
-    unless list_of_writes.size == 1 && list_of_writes[0].match?(/\Amov (?:#{counting_register}, \$\d+|\$\d+, %#{counting_register})\z/)
+    unless list_of_writes.size == 1 && list_of_writes[0].match?(/\Amov (?:#{counting_register}, (?:\$\d+|#\d+)|\$\d+, %#{counting_register})\z/)
       list_of_faults << "the block-counting register #{counting_register} is written by: #{list_of_writes.join(' | ')}"
     end
   end
@@ -384,9 +389,20 @@ class SecretFlow
 
     @freshly_stored_public.clear
     assembly_faults(template).each { |fault| @list_of_findings << Finding.new(@function.name, "assembly", fault[0, 160]) }
+    # A statement with no branch at all (the field arithmetic) may take
+    # secrets in registers: its text passed the instruction list above, so
+    # nothing in it takes a time that depends on them, and its results are
+    # secret. A statement with a loop may not, since its count must be public.
+    takes_values = !template.match?(STRAIGHT_LINE_BREAKER)
     list_of_arguments.each do |argument|
       mark_memory_secret(argument)
-      @list_of_findings << Finding.new(@function.name, "assembly is given a secret value", argument) if secret?(argument)
+      next unless secret?(argument)
+
+      if takes_values
+        @secret_values[instruction.result] = true if instruction.result
+      else
+        @list_of_findings << Finding.new(@function.name, "assembly is given a secret value", argument)
+      end
     end
     @assembly_statement_count += 1
   end

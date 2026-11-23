@@ -1,3 +1,5 @@
+require "./montgomery_multiplication_in_assembly"
+
 module Beryl::Crypto::V1
   # :nodoc:
   #
@@ -151,7 +153,16 @@ module Beryl::Crypto::V1
       case modulus.size
       {% for word_count in SPECIALIZED_WORD_COUNTS %}
       when {{ word_count }}
-        multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator)
+        {% if flag?(:aarch64) && !flag?(:beryl_portable_rsa) %}
+          {% if word_count == 16 %}
+            MontgomeryMultiplicationInAssembly.multiply_16(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse)
+          {% else %}
+            MontgomeryMultiplicationInAssembly.multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer,
+              negated_inverse, accumulator)
+          {% end %}
+        {% else %}
+          multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator)
+        {% end %}
       {% end %}
       else
         multiply_any(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator, modulus.size)
@@ -159,9 +170,26 @@ module Beryl::Crypto::V1
       {% end %}
     end
 
+    # Sets *result* to a·a/R mod *modulus*, the same as `multiply(result, a,
+    # a, ...)`. *scratch* holds `2 * modulus.size + 2` words; *result* may
+    # be *a*. On AArch64, 16-word numbers (the primes of a 2,048-bit key)
+    # take `MontgomeryMultiplicationInAssembly.square_16`.
+    def self.square(result : Slice(UInt64), a : Slice(UInt64), modulus : Slice(UInt64), negated_inverse : UInt64,
+                    scratch : Slice(UInt64)) : Nil
+      {% if flag?(:aarch64) && !flag?(:beryl_portable_rsa) %}
+        if modulus.size == 16
+          MontgomeryMultiplicationInAssembly.square_16(result.to_unsafe, a.to_unsafe, modulus.to_unsafe, negated_inverse,
+            scratch[0, 32].to_unsafe)
+          return
+        end
+      {% end %}
+      multiply(result, a, a, modulus, negated_inverse, scratch)
+    end
+
     # The word counts of the moduli and primes of 2,048, 3,072 and 4,096-bit
     # keys. A copy of the multiplication is compiled for each, so that the
-    # word count is a constant the optimizer can unroll the loops by.
+    # word count is a constant the optimizer can unroll the loops by; on
+    # AArch64 the copies are the assembly of `MontgomeryMultiplicationInAssembly`.
     SPECIALIZED_WORD_COUNTS = [16, 24, 32, 48, 64]
 
     # The body of a Montgomery multiplication on raw word pointers, for
@@ -350,7 +378,7 @@ module Beryl::Crypto::V1
       bit_count = exponent.size * 8
       window_count = (bit_count + WINDOW_BIT_COUNT - 1) // WINDOW_BIT_COUNT
       (window_count - 1).downto(0) do |window_index|
-        WINDOW_BIT_COUNT.times { multiply(result, result, result, modulus, negated_inverse, multiplication_scratch) }
+        WINDOW_BIT_COUNT.times { square(result, result, modulus, negated_inverse, multiplication_scratch) }
         window = window_bits(exponent, window_index * WINDOW_BIT_COUNT)
         select_table_entry(selected, table, window, word_count)
         multiply(result, result, selected, modulus, negated_inverse, multiplication_scratch)

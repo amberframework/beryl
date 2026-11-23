@@ -10,15 +10,21 @@ module Beryl::Crypto::V1
   # fiat-crypto field *field* and scalar field *scalar_field*, both in the
   # Montgomery domain on 64-bit words.
   #
-  # Points are projective (X : Y : Z), x = X/Z, y = Y/Z, with the neutral
-  # element (0 : 1 : 0). Addition and doubling are the complete formulas of
-  # Renes, Costello and Batina 2016 (https://eprint.iacr.org/2015/1060,
-  # Algorithms 4 and 6, a = -3), written after RustCrypto's `primeorder`:
-  # they are right for every pair of points, so no secret input reaches a
-  # special case. Constant-time scalar multiplication uses a fixed window of
-  # four bits with the table of 16 multiples scanned in full. Inversion and
-  # square roots are fixed exponentiations (Fermat), whose exponents are
-  # public.
+  # Points are Jacobian (X : Y : Z), x = X/Z^2, y = Y/Z^3, with infinity
+  # marked by Z = 0. Doubling is dbl-2001-b and addition add-1998-cmo-2 of
+  # the Explicit-Formulas Database (a = -3), with mixed addition against
+  # affine table entries; infinity on either side is handled by masks, and
+  # each constant-time caller shows that its two operands are never equal,
+  # the one case those formulas get wrong (see `multiply_constant_time` and
+  # `multiply_generator`).
+  #
+  # Constant-time scalar multiplication writes the scalar in signed 5-bit
+  # windows (Booth's recoding, as OpenSSL's nistz256 does): a variable
+  # point reads all 16 of its multiples each window, the generator all 16
+  # entries of one precomputed affine table per window, so [k]G needs no
+  # doubling. Verification, whose inputs are public, uses width-7 and
+  # width-5 non-adjacent forms and may branch. Inversion and square roots
+  # are exponentiations by public exponents (Fermat).
   #
   # Integers outside the Montgomery domain are big-endian `Bytes` of
   # *bytesize* bytes, as SEC 1 and FIPS 186-5 write them.
@@ -60,20 +66,27 @@ module Beryl::Crypto::V1
       GENERATOR
     end
 
-    # For each 4-bit window of a scalar, counted from the least significant,
-    # the 15 nonzero multiples of G that window can add, in affine
-    # coordinates: entry j of table i is [j * 16^i]G (entry 0 is unused).
+    # The number of 5-bit signed windows of a scalar: enough for its
+    # BYTESIZE * 8 bits and the sign of the top window.
+    GENERATOR_WINDOW_COUNT = (BYTESIZE * 8 + 5) // 5
+
+    # For each signed 5-bit window of a scalar, counted from the least
+    # significant, the multiples of G that window can add, in affine
+    # coordinates: entry j - 1 of table i is [j * 32^i]G, for j = 1 to 16.
     # Built once, when first used, with a single inversion.
     GENERATOR_WINDOW_TABLES = begin
       list_of_points = [] of Point
       base = generator
-      (BYTESIZE * 2).times do
-        multiples = multiples_of(base)
-        16.times { |index| list_of_points << multiples[index] }
-        4.times { base = base.double }
+      GENERATOR_WINDOW_COUNT.times do
+        multiple = base
+        16.times do
+          list_of_points << multiple
+          multiple = multiple.add_public(base)
+        end
+        5.times { base = base.double }
       end
       list_of_affine = to_affine_together(list_of_points)
-      Array(StaticArray(AffinePoint, 16)).new(BYTESIZE * 2) do |window|
+      Array(StaticArray(AffinePoint, 16)).new(GENERATOR_WINDOW_COUNT) do |window|
         StaticArray(AffinePoint, 16).new { |index| list_of_affine[window * 16 + index] }
       end
     end
@@ -177,37 +190,61 @@ module Beryl::Crypto::V1
       Field.selectznz(borrow, difference, value)
     end
 
-    # Raises *base* (Montgomery domain of the field prime) to the public
-    # big-endian *exponent*, four bits at a time: 15 multiplications build
-    # base^1 to base^15, then each 4-bit digit costs four squarings and one
-    # multiplication (none for a zero digit, which is public).
-    def self.field_power(base : Limbs, exponent : Bytes) : Limbs
-      powers = StaticArray(Limbs, 16).new(Field.set_one)
-      1.upto(15) { |index| powers[index] = Field.mul(powers[index - 1], base) }
-      result = Field.set_one
-      exponent.each do |byte|
-        {4, 0}.each do |shift|
-          4.times { result = Field.square(result) }
-          digit = (byte >> shift) & 0xf
-          result = Field.mul(result, powers[digit]) unless digit == 0
+    # Bit *position* (0 = least significant) of the big-endian *exponent*.
+    @[AlwaysInline]
+    def self.exponent_bit(exponent : Bytes, position : Int32) : Int32
+      ((exponent[exponent.size - 1 - (position >> 3)] >> (position & 7)) & 1).to_i32
+    end
+
+    # Raises *base* to the public big-endian *exponent* in the field
+    # *field* (the field prime's or the group order's), by sliding windows
+    # of up to five bits: the odd powers base^1, base^3, ..., base^31 come
+    # first, then each window costs its squarings and one multiplication.
+    # The steps depend only on the exponent, which is public.
+    def self.power_by_public_exponent(field, base : Limbs, exponent : Bytes) : Limbs
+      odd_powers = StaticArray(Limbs, 16).new(base)
+      base_squared = field.square(base)
+      1.upto(15) { |index| odd_powers[index] = field.mul(odd_powers[index - 1], base_squared) }
+      bit_count = exponent.size * 8
+      result = field.set_one
+      position = bit_count - 1
+      while position >= 0 && exponent_bit(exponent, position) == 0
+        position -= 1
+      end
+      started = false
+      while position >= 0
+        if exponent_bit(exponent, position) == 0
+          result = field.square(result)
+          position -= 1
+          next
         end
+        low = Math.max(position - 4, 0)
+        while exponent_bit(exponent, low) == 0
+          low += 1
+        end
+        window = 0
+        position.downto(low) { |bit| window = (window << 1) | exponent_bit(exponent, bit) }
+        if started
+          (position - low + 1).times { result = field.square(result) }
+          result = field.mul(result, odd_powers[window >> 1])
+        else
+          result = odd_powers[window >> 1]
+          started = true
+        end
+        position = low - 1
       end
       result
     end
 
+    # Raises *base* (Montgomery domain of the field prime) to the public
+    # big-endian *exponent*.
+    def self.field_power(base : Limbs, exponent : Bytes) : Limbs
+      power_by_public_exponent(Field, base, exponent)
+    end
+
     # `field_power` modulo the group order.
     def self.scalar_power(base : Limbs, exponent : Bytes) : Limbs
-      powers = StaticArray(Limbs, 16).new(ScalarField.set_one)
-      1.upto(15) { |index| powers[index] = ScalarField.mul(powers[index - 1], base) }
-      result = ScalarField.set_one
-      exponent.each do |byte|
-        {4, 0}.each do |shift|
-          4.times { result = ScalarField.square(result) }
-          digit = (byte >> shift) & 0xf
-          result = ScalarField.mul(result, powers[digit]) unless digit == 0
-        end
-      end
-      result
+      power_by_public_exponent(ScalarField, base, exponent)
     end
 
     def self.field_invert(element : Limbs) : Limbs
@@ -309,6 +346,20 @@ module Beryl::Crypto::V1
       # 1, in constant time, for any pair except a point and itself.
       def add_affine(other : AffinePoint, other_is_neutral : UInt64) : Point
         sum = add_affine_unchecked(other)
+        sum = sum.replace_if(neutral_bit, Point.from_affine(other))
+        sum.replace_if(other_is_neutral, self)
+      end
+
+      # `add_affine`, for any pair at all: when the two are equal, the
+      # doubling (computed every time) is kept by mask.
+      def add_affine_or_double(other : AffinePoint, other_is_neutral : UInt64) : Point
+        z1_squared = Field.square(@z)
+        u2 = Field.mul(other.x, z1_squared)
+        s2 = Field.mul(other.y, Field.mul(@z, z1_squared))
+        h = Field.sub(u2, @x)
+        r = Field.sub(s2, @y)
+        are_equal = ConstantTimeSelection.equal_bit(Field.nonzero(h) | Field.nonzero(r), 0_u64)
+        sum = finish_addition(@x, @y, h, r, @z).replace_if(are_equal, double)
         sum = sum.replace_if(neutral_bit, Point.from_affine(other))
         sum.replace_if(other_is_neutral, self)
       end
@@ -425,64 +476,135 @@ module Beryl::Crypto::V1
       list_of_affine
     end
 
-# 0P, 1P, ..., 15P. Each odd entry is the one before it plus P; the two
-# are never equal, since [i]P = P would need i = 1 mod n, and the group
-# order n is far above 15. Each even entry is a doubling.
+    # P, 2P, ..., 16P (entry j - 1 is [j]P). Each odd entry is the one
+    # before it plus P; the two are never equal, since [i]P = P would need
+    # i = 1 mod n, and the group order n is far above 16. Each even entry
+    # is a doubling.
     def self.multiples_of(point : Point) : StaticArray(Point, 16)
-      multiples = StaticArray(Point, 16).new(Point.neutral)
-      multiples[1] = point
-      2.upto(15) do |index|
-        multiples[index] = index.even? ? multiples[index // 2].double : multiples[index - 1].add(point)
+      multiples = StaticArray(Point, 16).new(point)
+      2.upto(16) do |multiple|
+        multiples[multiple - 1] = multiple.even? ? multiples[multiple // 2 - 1].double : multiples[multiple - 2].add(point)
       end
       multiples
     end
 
-    # Returns [scalar]point for a big-endian *scalar* of BYTESIZE bytes
-    # below the group order n, in constant time, with *multiples* =
-    # `multiples_of(point)`: from the most significant 4-bit window, four
-    # doublings and then the addition of the window's multiple, picked by
-    # scanning all 16. Before the addition the sum is [16·h]P, where h is
-    # the scalar's part above the window; it is infinity when h = 0 and
-    # never equals the window's multiple [d]P otherwise, since
-    # 16 <= 16·h <= scalar < n and d < 16.
-    def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
-      result = Point.neutral
-      (BYTESIZE * 2).times do |window_index|
-        4.times { result = result.double }
-        nibble = (scalar.unsafe_fetch(window_index >> 1).to_u64 >> (window_index.even? ? 4 : 0)) & 0xf_u64
+    # Returns entry *index* of the 16 points at *multiples*, reading all 16.
+    @[AlwaysInline]
+    def self.select_multiple(multiples : Pointer(Point), index : UInt64) : Point
+      {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
+        selected = uninitialized Point
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_aarch64_statement({{ bytesize // 8 * 3 }}, 16, 0,
+          pointerof(selected), multiples, index)
+        selected
+      {% else %}
         selected = Point.neutral
         16.times do |candidate|
-          selected = selected.replace_if(ConstantTimeSelection.equal_bit(candidate.to_u64, nibble), multiples[candidate])
+          selected = selected.replace_if(ConstantTimeSelection.equal_bit(candidate.to_u64, index), multiples[candidate])
         end
+        selected
+      {% end %}
+    end
+
+    # Returns entry *index* of the 16 affine points at *table*, reading all
+    # 16; an index past the table gives (0, 0).
+    @[AlwaysInline]
+    def self.select_affine(table : Pointer(AffinePoint), index : UInt64) : AffinePoint
+      {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
+        selected = uninitialized AffinePoint
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_aarch64_statement({{ bytesize // 8 * 2 }}, 16, 0,
+          pointerof(selected), table, index)
+        selected
+      {% else %}
+        selected_x = Limbs.new(0_u64)
+        selected_y = Limbs.new(0_u64)
+        16.times do |candidate|
+          is_candidate = ConstantTimeSelection.equal_bit(candidate.to_u64, index)
+          entry = table[candidate]
+          selected_x = Field.selectznz(is_candidate, selected_x, entry.x)
+          selected_y = Field.selectznz(is_candidate, selected_y, entry.y)
+        end
+        AffinePoint.new(selected_x, selected_y)
+      {% end %}
+    end
+
+    # Returns [scalar]point for a big-endian *scalar* of BYTESIZE bytes
+    # below the group order n, in constant time, with *multiples* =
+    # `multiples_of(point)`. The scalar is written in signed 5-bit windows
+    # (Booth's recoding, as for `multiply_generator`); from the most
+    # significant window down, five doublings and then the addition of
+    # [d]P, picked by reading all 16 multiples and negated by mask when
+    # d < 0. Before window i is added the sum is [32·H]P, where
+    # 32·H + d_i = H_i, the value of the digits from i up, which is
+    # floor(scalar / 32^i) or one more, so 0 <= H_i < n. When H = 0 the
+    # sum is infinity (handled by mask); otherwise 32·H >= 32 > |d_i| and
+    # 32·H - d_i = H_i - 2·d_i lies strictly between 0 and n, so the two
+    # operands are never equal.
+    def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
+      result = Point.neutral
+      (GENERATOR_WINDOW_COUNT - 1).downto(0) do |window_index|
+        5.times { result = result.double }
+        digit, is_negative = booth_digit(scalar, window_index)
+        selected = select_multiple(pointerof(multiples).as(Point*), digit &- 1_u64)
+        selected = Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z)
+        selected = selected.replace_if(ConstantTimeSelection.equal_bit(digit, 0_u64), Point.neutral)
         result = result.add(selected)
       end
       result
     end
 
-# Returns [scalar]G for a big-endian *scalar* of BYTESIZE bytes below
-# the group order n, in constant time, with no doubling: from the least
-# significant 4-bit window up, the window's multiple [d·16^i]G, picked
-# from the precomputed table by scanning all 15 entries, is added in
-# affine form, and a zero window adds nothing (by mask). The sum before
-# window i is [scalar mod 16^i]G, and scalar mod 16^i < 16^i <= d·16^i
-# <= scalar < n, so the two operands are never equal.
+    # Returns the magnitude (0 to 16) and the sign (1 when negative) of the
+    # signed 5-bit digit of *scalar* at window *window_index*, from bits
+    # 5i - 1 to 5i + 4, in constant time (OpenSSL's `_booth_recode_w5`).
+    @[AlwaysInline]
+    def self.booth_digit(scalar : Bytes, window_index : Int32) : {UInt64, UInt64}
+      window = scalar_bits(scalar, window_index * 5 - 1)
+      is_negative = window >> 5
+      complement = 63_u64 &- window
+      magnitude = (complement & (0_u64 &- is_negative)) | (window & (is_negative &- 1_u64))
+      {(magnitude >> 1) &+ (magnitude & 1_u64), is_negative}
+    end
+
+    # Returns the 6 bits of the big-endian *scalar* from bit *low_bit* up
+    # (bits below 0 and above the top read as 0). The positions are public.
+    @[AlwaysInline]
+    def self.scalar_bits(scalar : Bytes, low_bit : Int32) : UInt64
+      bits = 0_u64
+      6.times do |offset|
+        position = low_bit + offset
+        if 0 <= position < BYTESIZE * 8
+          bits |= ((scalar.unsafe_fetch(BYTESIZE - 1 - (position >> 3)).to_u64 >> (position & 7)) & 1_u64) << offset
+        end
+      end
+      bits
+    end
+
+    # Returns [scalar]G for a big-endian *scalar* of BYTESIZE bytes below
+    # the group order n, in constant time and with no doubling. The scalar
+    # is written in signed 5-bit windows (Booth's recoding, as OpenSSL's
+    # `ecp_nistz256` does): digit d_i in -16..16 weighs 32^i, and the digits
+    # sum to the scalar. From the least significant window up, [|d_i|·32^i]G
+    # is picked from the precomputed table by reading all 16 entries,
+    # negated by mask when d_i < 0, and added in affine form; a zero digit
+    # adds nothing, by mask.
+    #
+    # The two operands of an addition are never equal below the top window:
+    # the sum so far is [S]G with |S| < 32^i <= |d_i|·32^i, and
+    # |S - d_i·32^i| < 17·32^i < n. At the top window that bound passes n,
+    # so that one addition also computes the doubling and keeps it by mask
+    # when the operands are equal.
     def self.multiply_generator(scalar : Bytes) : Point
       list_of_tables = generator_window_tables
       result = Point.neutral
-      window_count = BYTESIZE * 2
-      window_count.times do |window_index|
-        byte = scalar.unsafe_fetch(BYTESIZE - 1 - (window_index >> 1)).to_u64
-        nibble = (byte >> (window_index.odd? ? 4 : 0)) & 0xf_u64
-        table = list_of_tables.unsafe_fetch(window_index)
-        selected_x = Limbs.new(0_u64)
-        selected_y = Limbs.new(0_u64)
-        1.upto(15) do |candidate|
-          is_candidate = ConstantTimeSelection.equal_bit(candidate.to_u64, nibble)
-          entry = table.unsafe_fetch(candidate)
-          selected_x = Field.selectznz(is_candidate, selected_x, entry.x)
-          selected_y = Field.selectznz(is_candidate, selected_y, entry.y)
+      GENERATOR_WINDOW_COUNT.times do |window_index|
+        digit, is_negative = booth_digit(scalar, window_index)
+        entry = select_affine((list_of_tables.to_unsafe + window_index).as(AffinePoint*), digit &- 1_u64)
+        entry = AffinePoint.new(entry.x, Field.selectznz(is_negative, entry.y, Field.opp(entry.y)))
+        is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
+        if window_index == GENERATOR_WINDOW_COUNT - 1
+          result = result.add_affine_or_double(entry, is_zero)
+        else
+          result = result.add_affine(entry, is_zero)
         end
-        result = result.add_affine(AffinePoint.new(selected_x, selected_y), ConstantTimeSelection.equal_bit(nibble, 0_u64))
       end
       result
     end

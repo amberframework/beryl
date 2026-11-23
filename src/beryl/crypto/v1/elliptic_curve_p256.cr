@@ -20,8 +20,9 @@ module Beryl::Crypto::V1
   # ```
   #
   # Key generation, signing and ECDH multiply by a secret scalar in
-  # constant time on fiat-crypto's field arithmetic with complete addition
-  # formulas. Verification is variable time; its inputs are public.
+  # constant time, on field arithmetic in assembly that equals fiat-crypto's
+  # output for every input (`FieldArithmetic::P256FieldWithAssembly`).
+  # Verification is variable time; its inputs are public.
   module EllipticCurveP256
     # :nodoc:
     module Arithmetic
