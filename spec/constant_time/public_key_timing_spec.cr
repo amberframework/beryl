@@ -11,6 +11,14 @@ require "./hmac_timing_spec"
 # whose windows are all zero but the last, so the table lookups pick the
 # neutral point again and again.
 #
+# Each operation is timed with the processor's Data Independent Timing mode
+# on, as the library runs it (`DataIndependentTiming.run` around every
+# operation on a private key). On Apple M4 with the mode off, P-256's
+# generator multiplication by 1 ran measurably faster than by random
+# scalars (|t| = 21 at 1,000,000 measurements per class): its running sum
+# stays at infinity, Z = 0, for most windows, and without the mode the
+# processor may take less time on such operands.
+#
 # 1,000,000 measurements per class by default
 # (BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS overrides it; an operation
 # here takes a thousand times as long as an HMAC, so CI runs fewer).
@@ -80,8 +88,10 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_fixed_against_random(list_of_scalars, PublicKeyTimingCheck::SCALAR_BYTESIZE, list_of_classes, generator, 0_u8)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        X25519.scalar_multiply(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE), peer_u)
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          X25519.scalar_multiply(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE), peer_u)
+        end
       end
 
       HmacTimingCheck.report("X25519 scalar multiplication, all-zero scalar against random scalars", measurement)
@@ -96,8 +106,10 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_fixed_against_random(list_of_scalars, PublicKeyTimingCheck::SCALAR_BYTESIZE, list_of_classes, generator, 0_u8)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        X25519.multiply_base_point(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          X25519.multiply_base_point(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+        end
       end
 
       HmacTimingCheck.report("X25519 public key, all-zero scalar against random scalars", measurement)
@@ -112,8 +124,10 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_fixed_against_random(list_of_seeds, PublicKeyTimingCheck::SCALAR_BYTESIZE, list_of_classes, generator, 0_u8)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        Ed25519::SigningKey.new(HmacTimingCheck.slot_of(list_of_seeds, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          Ed25519::SigningKey.new(HmacTimingCheck.slot_of(list_of_seeds, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+        end
       end
 
       HmacTimingCheck.report("Ed25519 key derivation, all-zero seed against random seeds", measurement)
@@ -133,8 +147,10 @@ if RequestedSpecTag.includes?("constant_time")
         end
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        list_of_keys[slot].sign(message)
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          list_of_keys[slot].sign(message)
+        end
       end
 
       HmacTimingCheck.report("Ed25519 signing, all-zero seed against random seeds", measurement)
@@ -149,8 +165,10 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_p256_scalars(list_of_scalars, list_of_classes, generator)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        P256::Arithmetic.multiply_generator(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          P256::Arithmetic.multiply_generator(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE))
+        end
       end
 
       HmacTimingCheck.report("P-256 generator multiplication, scalar 1 against random scalars", measurement)
@@ -166,8 +184,10 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_p256_scalars(list_of_scalars, list_of_classes, generator)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        P256::Arithmetic.multiply_constant_time(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE), peer_multiples)
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          P256::Arithmetic.multiply_constant_time(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE), peer_multiples)
+        end
       end
 
       HmacTimingCheck.report("P-256 shared-secret multiplication, key 1 against random keys", measurement)
@@ -184,9 +204,11 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_p256_scalars(list_of_nonces, list_of_classes, generator)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        nonce = HmacTimingCheck.slot_of(list_of_nonces, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE)
-        private_key.sign_with_nonce(digest, nonce, format: Beryl::Crypto::V1::SignatureFormat::FixedWidth)
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          nonce = HmacTimingCheck.slot_of(list_of_nonces, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE)
+          private_key.sign_with_nonce(digest, nonce, format: Beryl::Crypto::V1::SignatureFormat::FixedWidth)
+        end
       end
 
       HmacTimingCheck.report("P-256 signing, nonce 1 against random nonces", measurement)
@@ -203,9 +225,11 @@ if RequestedSpecTag.includes?("constant_time")
         PublicKeyTimingCheck.fill_p256_scalars(list_of_scalars, list_of_classes, generator)
       end
       prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        SignatureNonce.generate(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE),
-          digest_integer, P256::Arithmetic::GROUP_ORDER)
+      Beryl::Crypto::DataIndependentTiming.run do
+        measurement.run(fill_batch, prepare) do |slot|
+          SignatureNonce.generate(HmacTimingCheck.slot_of(list_of_scalars, slot, PublicKeyTimingCheck::SCALAR_BYTESIZE),
+            digest_integer, P256::Arithmetic::GROUP_ORDER)
+        end
       end
 
       HmacTimingCheck.report("RFC 6979 nonce for P-256, key 1 against random keys", measurement)

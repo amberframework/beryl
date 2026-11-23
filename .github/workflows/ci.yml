@@ -51,9 +51,11 @@ jobs:
         run: crystal spec -Dberyl_portable_hashes
       - name: Run the quick suite again on the portable ciphers alone
         run: crystal spec -Dberyl_portable_ciphers
+      - name: Run the quick suite again on the curves' fiat-crypto field arithmetic alone (no assembly)
+        run: crystal spec -Dberyl_portable_curves
       - name: Run the slow vectors (PBKDF2 at 16,777,216 iterations, X25519 iterated 1,000,000 times)
         run: crystal spec --release --tag slow
-      - name: "Field arithmetic: every translated function equals fiat-crypto's C (1,000,000 inputs each)"
+      - name: "Field arithmetic: every translated function and every one in assembly equals fiat-crypto's C (1,000,000 inputs each)"
         run: |
           cc -O2 -c spec/field_arithmetic/fiat_crypto_c_shim.c -o spec/field_arithmetic/fiat_crypto_c_shim.o
           crystal build --release spec/field_arithmetic/fiat_crypto_equality.cr -o fiat_crypto_equality
@@ -140,9 +142,11 @@ jobs:
         run: crystal spec
       - name: Run the cipher vectors again on the code written without eor3
         run: crystal spec -Dberyl_without_eor3 spec/beryl/crypto
+      - name: Run the public-key suite again without assembly (fiat-crypto field arithmetic, RSA multiplication in Crystal)
+        run: crystal spec -Dberyl_portable_curves -Dberyl_portable_rsa spec/beryl/crypto
       - name: Run the slow vectors (PBKDF2 at 16,777,216 iterations, X25519 iterated 1,000,000 times)
         run: crystal spec --release --tag slow
-      - name: "Field arithmetic: every translated function equals fiat-crypto's C (1,000,000 inputs each)"
+      - name: "Field arithmetic: every translated function and every one in assembly equals fiat-crypto's C (1,000,000 inputs each)"
         run: |
           cc -O2 -c spec/field_arithmetic/fiat_crypto_c_shim.c -o spec/field_arithmetic/fiat_crypto_c_shim.o
           crystal build --release spec/field_arithmetic/fiat_crypto_equality.cr -o fiat_crypto_equality

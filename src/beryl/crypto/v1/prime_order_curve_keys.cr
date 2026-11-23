@@ -86,7 +86,7 @@ module Beryl::Crypto::V1
         candidate = {{ arithmetic }}.multiply_and_add_public(first_scalar, @point, second_scalar)
         return false if {{ arithmetic }}.neutral_bit(candidate) == 1
 
-        {{ arithmetic }}.limbs_to_big_endian({{ arithmetic }}.x_coordinate_modulo_order(candidate)) == encoded_r
+        {{ arithmetic }}.x_coordinate_matches_public?(candidate, encoded_r)
       end
     end
 

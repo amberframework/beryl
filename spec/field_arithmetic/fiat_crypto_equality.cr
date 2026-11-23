@@ -1,4 +1,6 @@
-# Compares every translated field function with fiat-crypto's own C.
+# Compares every translated field function, and every field function written
+# in assembly (spec/field_arithmetic/assembly_equality_cases.cr), with
+# fiat-crypto's own C.
 #
 #     cc -O2 -c spec/field_arithmetic/fiat_crypto_c_shim.c -o spec/field_arithmetic/fiat_crypto_c_shim.o
 #     crystal-alpha build --release spec/field_arithmetic/fiat_crypto_equality.cr -o fiat_crypto_equality
@@ -62,6 +64,7 @@ class InputDraw
 end
 
 require "./fiat_crypto_equality_cases"
+require "./assembly_equality_cases"
 
 inputs_per_function = (ARGV[0]? || "100000000").to_i64
 seed = (ARGV[1]? || Random::Secure.rand(UInt64).to_s).to_u64
@@ -70,7 +73,7 @@ selected_field = ARGV[2]?
 STDOUT.puts "fiat-crypto equality: #{inputs_per_function} inputs per function, seed #{seed}"
 total_differences = 0_i64
 functions_checked = 0
-FiatCryptoEquality::LIST_OF_CASES.each_with_index do |(field_name, function_name, check), index|
+(FiatCryptoEquality::LIST_OF_CASES + AssemblyEquality::LIST_OF_CASES).each_with_index do |(field_name, function_name, check), index|
   next if selected_field && selected_field != field_name
 
   started_at = Time.instant

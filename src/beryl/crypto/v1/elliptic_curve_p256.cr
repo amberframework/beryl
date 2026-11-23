@@ -20,14 +20,15 @@ module Beryl::Crypto::V1
   # ```
   #
   # Key generation, signing and ECDH multiply by a secret scalar in
-  # constant time on fiat-crypto's field arithmetic with complete addition
-  # formulas. Verification is variable time; its inputs are public.
+  # constant time, on field arithmetic in assembly that equals fiat-crypto's
+  # output for every input (`FieldArithmetic::P256FieldWithAssembly`).
+  # Verification is variable time; its inputs are public.
   module EllipticCurveP256
     # :nodoc:
     module Arithmetic
       ::Beryl::Crypto::V1.define_prime_order_curve_arithmetic(
-        Beryl::Crypto::FieldArithmetic::P256Field,
-        Beryl::Crypto::FieldArithmetic::P256ScalarField,
+        Beryl::Crypto::FieldArithmetic::P256FieldWithAssembly,
+        Beryl::Crypto::FieldArithmetic::P256ScalarFieldWithAssembly,
         32,
         "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff",
         "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",

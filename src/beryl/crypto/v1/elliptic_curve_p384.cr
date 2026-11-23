@@ -18,8 +18,8 @@ module Beryl::Crypto::V1
     # :nodoc:
     module Arithmetic
       ::Beryl::Crypto::V1.define_prime_order_curve_arithmetic(
-        Beryl::Crypto::FieldArithmetic::P384Field,
-        Beryl::Crypto::FieldArithmetic::P384ScalarField,
+        Beryl::Crypto::FieldArithmetic::P384FieldWithAssembly,
+        Beryl::Crypto::FieldArithmetic::P384ScalarFieldWithAssembly,
         48,
         "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff",
         "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973",
