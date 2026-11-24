@@ -79,7 +79,7 @@ module Beryl::Crypto::V1
         digest_integer = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
         r = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(encoded_r))
         s = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(encoded_s))
-        inverse_s = {{ arithmetic }}.scalar_power(s, {{ arithmetic }}.scalar_inverse_exponent)
+        inverse_s = {{ arithmetic }}.scalar_invert(s)
         first_scalar = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(scalar_field.mul(digest_integer, inverse_s)))
         second_scalar = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(scalar_field.mul(r, inverse_s)))
 
@@ -162,7 +162,7 @@ module Beryl::Crypto::V1
             digest_integer = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
             private_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(@scalar))
             nonce_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(nonce))
-            inverse_nonce = {{ arithmetic }}.scalar_power(nonce_scalar, {{ arithmetic }}.scalar_inverse_exponent)
+            inverse_nonce = {{ arithmetic }}.scalar_invert(nonce_scalar)
             s = scalar_field.mul(inverse_nonce, scalar_field.add(digest_integer, scalar_field.mul(r, private_scalar)))
             encoded_s = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(s))
             has_zero_component = ConstantTimeSelection.all_zero_bit(encoded_r) | ConstantTimeSelection.all_zero_bit(encoded_s)
@@ -181,10 +181,16 @@ module Beryl::Crypto::V1
         # the point at infinity.
         def shared_secret(peer : PublicKey) : Bytes
           DataIndependentTiming.run do
-            multiples = {{ arithmetic }}.multiples_of(peer.point)
+            # A decoded peer key has Z = 1 (public), which allows mixed
+            # additions in the table of its multiples.
+            peer_point = peer.point
+            multiples = if {{ arithmetic }}.public_point_has_unit_z?(peer_point)
+                          {{ arithmetic }}.multiples_of_affine({{ arithmetic }}::AffinePoint.new(peer_point.x, peer_point.y))
+                        else
+                          {{ arithmetic }}.multiples_of(peer_point)
+                        end
             product = {{ arithmetic }}.multiply_constant_time(@scalar, multiples)
-            x, _ = {{ arithmetic }}.to_affine(product)
-            {{ arithmetic }}.field_element_to_big_endian(x)
+            {{ arithmetic }}.field_element_to_big_endian({{ arithmetic }}.to_affine_x(product))
           end
         end
 
