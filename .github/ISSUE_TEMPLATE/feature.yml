@@ -1,0 +1,23 @@
+name: Algorithm or feature request
+description: An algorithm, format or feature Beryl should have.
+labels: ["enhancement"]
+body:
+  - type: input
+    id: feature
+    attributes:
+      label: Algorithm, format or feature
+      placeholder: "e.g. P-384 signing, ML-KEM, RSA key generation"
+    validations:
+      required: true
+  - type: input
+    id: standard
+    attributes:
+      label: The standard it follows
+      placeholder: RFC, FIPS or spec link
+  - type: textarea
+    id: use
+    attributes:
+      label: Where you would use it
+      description: The app or protocol that needs it.
+    validations:
+      required: true
