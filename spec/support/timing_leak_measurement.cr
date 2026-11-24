@@ -92,6 +92,12 @@ class TimingLeakMeasurement
     end
   end
 
+  # The first class's mean time minus the second's, over the uncut data, in
+  # nanoseconds: negative when the first (fixed) class runs faster.
+  def mean_difference_nanoseconds : Float64
+    @statistics_of_first_class[0].mean - @statistics_of_second_class[0].mean
+  end
+
   def shows_no_leak? : Bool
     @largest_absolute_t < LEAK_THRESHOLD
   end
