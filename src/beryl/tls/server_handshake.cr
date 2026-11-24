@@ -42,7 +42,11 @@ module Beryl::TLS
 
       unless selection.client_key_share
         # No share for the group the server wants: one HelloRetryRequest
-        # (§4.1.4).
+        # (§4.1.4). The client waits for it, so the first ClientHello ends
+        # its record.
+        unless @record_layer.handshake_buffer_empty?
+          raise Error.new("data after the first ClientHello in its record", AlertDescription::UnexpectedMessage)
+        end
         @transcript.add(client_hello_message)
         @transcript.replace_with_message_hash(selection.cipher_suite.hash_algorithm)
         hello_retry_request = Messages::ServerHello.new(Messages::HELLO_RETRY_REQUEST_RANDOM, client_hello.legacy_session_id,

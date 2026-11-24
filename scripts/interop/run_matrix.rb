@@ -146,7 +146,7 @@ Dir.mktmpdir("beryl-interop") do |work|
     run_checked({}, options[:crystal], "build", "-Dwithout_openssl", File.join(REPOSITORY_ROOT, "examples", "#{name}.cr"),
                 "-o", File.join(work, name), chdir: REPOSITORY_ROOT)
   end
-  go_environment = { "GOTOOLCHAIN" => "local", "GOFLAGS" => "-mod=mod", "CGO_ENABLED" => "0",
+  go_environment = { "GOTOOLCHAIN" => "local", "GOFLAGS" => "-mod=mod -modcacherw", "CGO_ENABLED" => "0",
                      "GOPATH" => File.join(work, "gopath"), "GOCACHE" => File.join(work, "gocache") }
   run_checked(go_environment, GO, "build", "-o", File.join(work, "go_peer"), ".", chdir: File.join(__dir__, "go_peer"))
 

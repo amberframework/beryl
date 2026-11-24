@@ -4,7 +4,9 @@
 # Installs the interop matrix's peers into PREFIX, each at an exact version
 # checked by sha256 before it is unpacked (scripts/interop/TOOLS.md):
 #
-#   /usr/bin/ruby scripts/interop/install_tools.rb PREFIX
+#   /usr/bin/ruby scripts/interop/install_tools.rb PREFIX [--go-only]
+#
+# --go-only installs Go alone, for the BoGo run (scripts/bogo/run_bogo.rb).
 #
 # OpenSSL and curl are built from their release tarballs (curl against that
 # OpenSSL); Go is the release archive. A download whose sha256 differs from
@@ -71,13 +73,14 @@ def run(*command, chdir:)
   end
 end
 
-prefix = File.expand_path(ARGV[0] || abort("usage: install_tools.rb PREFIX"))
+prefix = File.expand_path(ARGV[0] || abort("usage: install_tools.rb PREFIX [--go-only]"))
+is_go_only = ARGV.include?("--go-only")
 work = File.join(prefix, "build")
 FileUtils.mkdir_p(work)
 processor_count = Etc.nprocessors
 
 openssl_prefix = File.join(prefix, "openssl")
-unless File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
+unless is_go_only || File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
   archive = File.join(work, "openssl.tar.gz")
   fetch_checked(OPENSSL[:url], OPENSSL[:sha256], archive)
   run("tar", "xzf", archive, chdir: work)
@@ -88,7 +91,7 @@ unless File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
 end
 
 curl_prefix = File.join(prefix, "curl")
-unless File.exist?(File.join(curl_prefix, "bin", "curl"))
+unless is_go_only || File.exist?(File.join(curl_prefix, "bin", "curl"))
   archive = File.join(work, "curl.tar.xz")
   fetch_checked(CURL[:url], CURL[:sha256], archive)
   run("tar", "xJf", archive, chdir: work)
@@ -113,8 +116,10 @@ end
 
 FileUtils.rm_rf(work)
 environment = { "LD_LIBRARY_PATH" => File.join(openssl_prefix, "lib"), "DYLD_LIBRARY_PATH" => File.join(openssl_prefix, "lib") }
-[["openssl", File.join(openssl_prefix, "bin", "openssl"), "version"], ["curl", File.join(curl_prefix, "bin", "curl"), "--version"],
- ["go", File.join(go_root, "bin", "go"), "version"]].each do |(name, path, flag)|
+tools = [["openssl", File.join(openssl_prefix, "bin", "openssl"), "version"], ["curl", File.join(curl_prefix, "bin", "curl"), "--version"],
+         ["go", File.join(go_root, "bin", "go"), "version"]]
+tools = tools.last(1) if is_go_only
+tools.each do |(name, path, flag)|
   output, = Open3.capture2e(environment, path, flag)
   puts "#{name}: #{path}: #{output.lines.first&.strip}"
 end

@@ -50,13 +50,13 @@ module TestCertificateAuthority
     # certified key (leaf then this authority's certificate).
     def issue(key_kind : KeyKind = KeyKind::P256, *, list_of_dns_names : Array(String) = ["localhost"],
               list_of_ip_addresses : Array(Bytes) = [Bytes[127, 0, 0, 1]], not_before : Time = Time.utc - 1.day,
-              not_after : Time = Time.utc + 30.days) : Beryl::TLS::CertifiedKey
+              not_after : Time = Time.utc + 30.days, key_usage : Bytes = Bytes[7, 0x80]) : Beryl::TLS::CertifiedKey
       private_key, public_key_info = TestCertificateAuthority.generate_key(key_kind)
       list_of_names = list_of_dns_names.map { |name| DerWriter.element(0x82_u8, name.to_slice) } +
                       list_of_ip_addresses.map { |address| DerWriter.element(0x87_u8, address) }
       extensions = [
         TestCertificateAuthority.extension("2.5.29.19", true, DerWriter.element(0x30_u8, Bytes.empty)),
-        TestCertificateAuthority.extension("2.5.29.15", true, DerWriter.element(0x03_u8, Bytes[7, 0x80])),
+        TestCertificateAuthority.extension("2.5.29.15", true, DerWriter.element(0x03_u8, key_usage)),
         TestCertificateAuthority.extension("2.5.29.37", false, DerWriter.sequence(DerWriter.object_identifier("1.3.6.1.5.5.7.3.1"))),
         TestCertificateAuthority.extension("2.5.29.35", false, DerWriter.sequence(DerWriter.element(0x80_u8,
           TestCertificateAuthority.key_identifier(@private_key.public_key.to_uncompressed)))),

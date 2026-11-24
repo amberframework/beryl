@@ -158,6 +158,20 @@ describe Beryl::TLS::RecordLayer do
       expect_alert(TLS::AlertDescription::RecordOverflow) { layer.read_handshake_message }
     end
 
+    it "refuses a protected record whose inner plaintext, padding included, is over 2^14 + 1 bytes" do
+      key, iv = TLS::KeySchedule.traffic_key_and_iv(SUITE.hash_algorithm, Bytes.new(32, 3), 16)
+      # 16,384 bytes of content, its type, then one byte of padding.
+      inner = Bytes.new(16_386, 1)
+      inner[16_384] = TLS::ContentType::ApplicationData.value
+      inner[16_385] = 0
+      length = inner.size + 16
+      header = Bytes[23, 3, 3, (length >> 8).to_u8, (length & 0xFF).to_u8]
+      record = header + Beryl::Crypto::V1::AESGCM.new(key).encrypt(inner, nonce: iv, associated_data: header)
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 3))
+      expect_alert(TLS::AlertDescription::RecordOverflow) { layer.read_after_handshake }
+    end
+
     it "refuses a record that fails authentication" do
       _, complete_record = record_step(3, "server", "send handshake record", 2)
       tampered = complete_record.dup

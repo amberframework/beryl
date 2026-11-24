@@ -30,6 +30,7 @@ module Beryl::TLS
     @write_mutex = Mutex.new
     @key_update_times = Deque(Time::Instant).new
     @has_failed = false
+    @is_key_update_owed = false
 
     protected def initialize(@io : IO, @sync_close : Bool, limits : Limits)
       @record_layer = RecordLayer.new(@io, limits)
@@ -105,6 +106,7 @@ module Beryl::TLS
       @write_mutex.synchronize do
         request = request_peer_update ? KeyUpdateRequest::UpdateRequested : KeyUpdateRequest::UpdateNotRequested
         send_key_update(outcome, request)
+        @is_key_update_owed = false
       end
     end
 
@@ -128,8 +130,12 @@ module Beryl::TLS
     end
 
     def unbuffered_write(slice : Bytes) : Nil
-      handshake_outcome
+      outcome = handshake_outcome
       @write_mutex.synchronize do
+        if @is_key_update_owed
+          with_alert_on_failure { send_key_update(outcome, KeyUpdateRequest::UpdateNotRequested) }
+          @is_key_update_owed = false
+        end
         with_alert_on_failure { @record_layer.write_application_data(slice) }
       end
     end
@@ -186,8 +192,10 @@ module Beryl::TLS
         outcome = handshake_outcome
         hash = outcome.cipher_suite.hash_algorithm
         advance_read_secret(outcome, hash)
+        # The answer to update_requested is one KeyUpdate before the next
+        # application data, however many requests arrive first (§4.6.3).
         if key_update.request.update_requested?
-          @write_mutex.synchronize { send_key_update(outcome, KeyUpdateRequest::UpdateNotRequested) }
+          @write_mutex.synchronize { @is_key_update_owed = true }
         end
       else
         handle_other_post_handshake_message(handshake_type, body)

@@ -71,6 +71,10 @@ module Beryl::TLS
       nonce = peek_nonce
       return nil unless @authenticated_encryption.decrypt(ciphertext, into: inner_plaintext, nonce: nonce, associated_data: header)
       advance_sequence_number
+      # Content, type and padding together stay within 2^14 + 1 bytes (§5.4).
+      if inner_plaintext.size > LARGEST_INNER_PLAINTEXT_BYTESIZE
+        raise Error.new("a protected record with #{inner_plaintext.size} bytes of inner plaintext", AlertDescription::RecordOverflow)
+      end
 
       # The padding is zeros after the content type; its length is chosen
       # by the sender and is not secret from the receiver (§5.4).
