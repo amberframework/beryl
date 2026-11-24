@@ -159,7 +159,7 @@ module HashesAgainstLibcrypto
     {Math.exp(mean - half_width), Math.exp(mean + half_width)}
   end
 
-  # States a ratio of Beryl's speed to libcrypto's the way Seth reads it.
+  # States a ratio of Beryl's speed to libcrypto's as "N× as fast" or "N× slower".
   def self.describe_ratio(ratio : Float64) : String
     # Three decimals near 1, where the second would hide which side it is on.
     factor = ratio >= 1.0 ? ratio : 1.0 / ratio
