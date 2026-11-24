@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   before-and-after:
-    name: Main against the third version of the fix on AMD runners ${{ matrix.run }}
+    name: Main, the third fix and X25519 blinding on AMD runners ${{ matrix.run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -34,7 +34,7 @@ jobs:
       - name: Build the probe from main and from the fix
         if: steps.processor.outputs.measure == 'yes'
         run: |
-          for side in main x86-timing-gate; do
+          for side in main x86-timing-gate x86-timing-x25519-blinding; do
             git worktree add "../$side" "origin/$side"
             cp spec/probes/curve_timing_probe.cr "../$side/spec/probes/"
             cp spec/support/timing_leak_measurement.cr "../$side/spec/support/"
@@ -45,8 +45,14 @@ jobs:
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
           for round in 1 2; do
-            for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed; do
+            for case_name in p256-generator-one p256-ecdh-one; do
               for side in main x86-timing-gate; do
+                line=$(taskset -c 1 ./probe_$side $case_name 1000000)
+                echo "RESULT | $model | $side | round $round | $line"
+              done
+            done
+            for case_name in x25519-zero x25519-fixed; do
+              for side in x86-timing-gate x86-timing-x25519-blinding; do
                 line=$(taskset -c 1 ./probe_$side $case_name 1000000)
                 echo "RESULT | $model | $side | round $round | $line"
               done
@@ -58,7 +64,7 @@ jobs:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
           BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
         run: |
-          cd ../x86-timing-gate
+          cd ../x86-timing-x25519-blinding
           git checkout -- spec/support/timing_leak_measurement.cr
           crystal build --release spec/constant_time/hmac_timing_spec.cr spec/constant_time/cipher_timing_spec.cr spec/constant_time/public_key_timing_spec.cr -o constant_time_specs
           taskset -c 1 ./constant_time_specs --tag constant_time | grep -E "constant time|examples"
