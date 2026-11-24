@@ -329,13 +329,37 @@ module BerylBogoShim
   def self.run_connection(configuration : Configuration, context : Beryl::TLS::Context, settings : ConnectionSettings,
                           is_resume : Bool) : Nil
     tcp = connect(configuration)
+    begin
+      run_tls(tcp, context, settings, is_resume)
+    rescue error
+      close_after_failure(tcp)
+      raise error
+    end
+    tcp.close
+  end
+
+  # Closing a socket with unread input resets the connection, which can
+  # reach the runner before the alert it should read; so after a failure
+  # the shim stops writing, reads to the end, and then closes.
+  private def self.close_after_failure(tcp : TCPSocket) : Nil
+    tcp.close_write
+    tcp.read_timeout = 2.seconds
+    buffer = Bytes.new(4096)
+    while tcp.read(buffer) > 0
+    end
+  rescue IO::Error
+  ensure
+    tcp.close
+  end
+
+  private def self.run_tls(tcp : TCPSocket, context : Beryl::TLS::Context, settings : ConnectionSettings, is_resume : Bool) : Nil
     socket = if context.is_a?(Beryl::TLS::Context::Server)
                configure_server(context, settings)
-               Beryl::TLS::Socket::Server.new(tcp, context, sync_close: true)
+               Beryl::TLS::Socket::Server.new(tcp, context, sync_close: false)
              else
                client_context = context.as(Beryl::TLS::Context::Client)
                configure_client(client_context, settings)
-               Beryl::TLS::Socket::Client.new(tcp, client_context, sync_close: true,
+               Beryl::TLS::Socket::Client.new(tcp, client_context, sync_close: false,
                  hostname: settings.host_name || "127.0.0.1")
              end
     socket.sync = true
