@@ -19,7 +19,8 @@ module HmacTimingCheck
 
   def self.report(description : String, measurement : TimingLeakMeasurement) : Nil
     STDOUT.puts "constant time, #{description}: #{measurement.measurements_per_class} measurements per class, " \
-                "largest |t| = #{measurement.largest_absolute_t.round(2)} (a leak shows as #{TimingLeakMeasurement::LEAK_THRESHOLD} or more)"
+                "largest |t| per run = #{measurement.list_of_absolute_t.map(&.round(2)).join(", ")}, " \
+                "#{measurement.shows_no_leak? ? "no leak" : "leak"} by two runs of three (a leak shows as #{TimingLeakMeasurement::LEAK_THRESHOLD} or more)"
   end
 
   # Returns slot number *slot* of a batch laid out end to end in *storage*.
