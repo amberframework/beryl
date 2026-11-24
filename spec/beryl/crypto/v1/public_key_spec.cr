@@ -214,18 +214,26 @@ end
 {% end %}
 
 {% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
-  describe "{{ curve[0].id }} stand-in of the generator multiplication" do
-    it "starts at [17]G and is neither equal nor opposite to any entry of the window it meets" do
-      stand_in = {{ curve[1].id }}::Arithmetic.generator_stand_in
-      seventeen = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
-      seventeen[-1] = 17_u8
-      expected = {{ curve[1].id }}::Arithmetic.multiply_and_add_public(seventeen, {{ curve[1].id }}::Arithmetic.generator, Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE))
-      {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)).should eq({{ curve[1].id }}::Arithmetic.encode_uncompressed(expected))
-      moving_stand_in = {{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)
-      {{ curve[1].id }}::Arithmetic.generator_window_tables.each do |table|
-        stand_in_x, _ = {{ curve[1].id }}::Arithmetic.to_affine(moving_stand_in)
-        table.each { |entry| (entry.x == stand_in_x).should be_false }
-        moving_stand_in = moving_stand_in.add_affine_public(table[0])
+  describe "{{ curve[0].id }} odd digits of the generator multiplication" do
+    it "sum to the scalar made odd, every one of them odd and from -31 to 31" do
+      order = BigInt.new({{ curve[1].id }}::Arithmetic::GROUP_ORDER.hexstring, 16)
+      list_of_scalars = SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER) + [Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE), Random::Secure.random_bytes({{ curve[1].id }}::Arithmetic::BYTESIZE)]
+      list_of_scalars.each do |scalar|
+        value = BigInt.new(scalar.hexstring, 16) % order
+        scalar_bytes = value.to_s(16).rjust({{ curve[1].id }}::Arithmetic::BYTESIZE * 2, '0').hexbytes
+        odd_scalar = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+        is_even = {{ curve[1].id }}::Arithmetic.odd_scalar_of(scalar_bytes, odd_scalar)
+        expected = value.even? ? order - value : value
+        is_even.should eq(value.even? ? 1_u64 : 0_u64)
+        BigInt.new(odd_scalar.hexstring, 16).should eq(expected)
+        total = BigInt.new(0)
+        {{ curve[1].id }}::Arithmetic::GENERATOR_WINDOW_COUNT.times do |window_index|
+          index, is_negative = {{ curve[1].id }}::Arithmetic.odd_digit(odd_scalar, window_index)
+          (index <= 15).should be_true
+          digit = BigInt.new(2 * index + 1)
+          total += (is_negative == 1 ? -digit : digit) * BigInt.new(32) ** window_index
+        end
+        total.should eq(expected)
       end
     end
   end
