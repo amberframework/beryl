@@ -2,8 +2,9 @@
 # Builds Beryl's README art in light and dark: badges, the public-key and
 # certificate speed chart, the verification panel and the Amber lockup.
 # Every number below is quoted from the repo's docs: docs/crypto/public-key.md
-# (milestone F3, commit b3c72ee, Apple M4) and docs/certificates.md (milestone
-# B4, commit 4735c87, Apple M4), and the test counts from the same documents.
+# (milestone F3b: curves at commit e7a0765, RSA at commit 05d1481, Apple M4)
+# and docs/certificates.md (milestone F3b, commit 05d1481, Apple M4), and the
+# test counts from the same documents.
 # Usage: assets.rb <art-dir> <out-dir> [chart ...]
 #   With chart names (badges, public-key-speed, verified, amber-lockup) only
 #   those are written.
@@ -58,32 +59,32 @@ end
 # [group, operation, ratio]: ratio > 0 is "N× as fast", ratio < 0 is "N× slower".
 # Median of ten rounds, Beryl against libcrypto, from the docs' tables.
 SPEED_GROUPS = [
-  ['Curves', 'docs/crypto/public-key.md, Apple M4, commit b3c72ee', [
-    ['X25519 key generation', 1.15],
-    ['X25519 shared secret', -1.013],
-    ['Ed25519 key generation', 1.16],
-    ['Ed25519 sign', 1.088],
-    ['Ed25519 verify', 1.38],
-    ['P-256 key generation', 1.43],
-    ['P-256 ECDSA sign', -1.074],
-    ['P-256 ECDSA verify', 1.096],
-    ['P-256 ECDH shared secret', -1.1],
-    ['P-384 ECDSA verify', 1.41]
+  ['Curves', 'docs/crypto/public-key.md, Apple M4, commit e7a0765', [
+    ['X25519 key generation', 1.21],
+    ['X25519 shared secret', 1.034],
+    ['Ed25519 key generation', 1.23],
+    ['Ed25519 sign', 1.15],
+    ['Ed25519 verify', 1.34],
+    ['P-256 key generation', 1.49],
+    ['P-256 ECDSA sign', 1.28],
+    ['P-256 ECDSA verify', 1.3],
+    ['P-256 ECDH shared secret', 1.056],
+    ['P-384 ECDSA verify', 1.5]
   ]],
-  ['RSA, PKCS #1 v1.5', 'docs/crypto/public-key.md, Apple M4, commit b3c72ee', [
-    ['RSA-2048 sign', 1.069],
-    ['RSA-2048 verify', -1.5],
-    ['RSA-2048 OAEP decrypt', 1.078],
-    ['RSA-3072 sign', -1.51],
-    ['RSA-3072 verify', -1.58],
-    ['RSA-4096 sign', -1.62],
-    ['RSA-4096 verify', -1.63]
+  ['RSA, PKCS #1 v1.5', 'docs/crypto/public-key.md, Apple M4, commit 05d1481', [
+    ['RSA-2048 sign', 1.11],
+    ['RSA-2048 verify', 1.17],
+    ['RSA-2048 OAEP decrypt', 1.12],
+    ['RSA-3072 sign', 1.092],
+    ['RSA-3072 verify', 1.2],
+    ['RSA-4096 sign', 1.087],
+    ['RSA-4096 verify', 1.21]
   ]],
-  ['Certificates', 'docs/certificates.md, Apple M4, commit 4735c87', [
-    ['Read 256 certificates', 6.26],
-    ['Read 256, keys decoded', -4.09],
-    ['Verify a chain, ECDSA leaf', -1.54],
-    ['Verify a chain, RSA leaf', -2.01]
+  ['Certificates', 'docs/certificates.md, Apple M4, commit 05d1481', [
+    ['Read 256 certificates', 6.21],
+    ['Read 256, keys decoded', 5.27],
+    ['Verify a chain, ECDSA leaf', 1.34],
+    ['Verify a chain, RSA leaf', 1.17]
   ]]
 ].freeze
 
