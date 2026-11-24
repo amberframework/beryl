@@ -3,73 +3,41 @@ name: x86-64 timing investigation
 on:
   push:
     branches: [x86-timing-investigation]
-  workflow_dispatch:
-    inputs:
-      measurements:
-        description: Measurements per class
-        default: "1000000"
-      cases:
-        description: Cases to time, space separated
-        default: "p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed x25519-zero x25519-fixed field-mul-zero field-mul-fixed"
 
 permissions:
   contents: read
 
 jobs:
-  disassembly:
-    name: Machine code of the curve functions
+  ci-replica:
+    name: CI timing step, repeated ${{ matrix.run }}
     runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
-        with:
-          crystal: 1.21.0
-      - run: shards install --frozen --skip-postinstall --skip-executables
-      - run: crystal --version
-      - name: Assembly build
-        run: |
-          crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o probe_assembly
-          objdump -d --no-show-raw-insn -C probe_assembly > probe_assembly.dis
-          ruby scripts/list_machine_branches.rb probe_assembly.dis
-      - name: Portable build
-        run: |
-          crystal build --release -Dwithout_openssl -Dberyl_portable_curves spec/probes/curve_timing_probe.cr -o probe_portable
-          objdump -d --no-show-raw-insn -C probe_portable > probe_portable.dis
-          ruby scripts/list_machine_branches.rb probe_portable.dis
-      - name: Full text of the timed functions (assembly build)
-        run: |
-          awk '/^[0-9a-f]+ <.*(timed_multiply_generator|timed_multiply_constant_time|timed_field_chain|P256FieldWithAssembly::mul|ladder).*>:$/{p=1} /^$/{p=0} p' probe_assembly.dis
-
-  timing:
-    name: Timing ${{ matrix.run }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - name: Processor
         run: |
           lscpu
           grep -m1 microcode /proc/cpuinfo
-          grep -m1 'model name' /proc/cpuinfo
-          cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "no cpufreq"
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
           crystal: 1.21.0
       - run: shards install --frozen --skip-postinstall --skip-executables
-      - name: Build both
+      - run: ruby scripts/fetch_vectors.rb --missing
+      - name: Build the suite once, as crystal spec builds it
         run: |
-          crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o probe_assembly
-          crystal build --release -Dwithout_openssl -Dberyl_portable_curves spec/probes/curve_timing_probe.cr -o probe_portable
-      - name: Time every case on both builds, pinned to one processor
+          echo 'require "./spec/**"' > all_specs.cr
+          crystal build --release all_specs.cr -o all_specs
+      - name: Run CI's timing step six times
+        env:
+          BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
+          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for case_name in ${{ inputs.cases || 'p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed x25519-zero x25519-fixed field-mul-zero field-mul-fixed' }}; do
-            for build in assembly portable; do
-              line=$(taskset -c 1 ./probe_$build $case_name ${{ inputs.measurements || '1000000' }})
-              echo "RESULT | $model | $build | $line"
-            done
+          for repetition in 1 2 3 4 5 6; do
+            ./all_specs --tag constant_time --tag "~rsa_constant_time" > out.txt 2>&1 || true
+            grep -oE "constant time, (X25519|Ed25519|P-256|RFC 6979)[^:]*: [0-9]+ measurements per class, largest \|t\| = [0-9.]+" out.txt | sed "s/^/RESULT | $model | rep $repetition | /"
           done
