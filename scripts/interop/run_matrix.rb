@@ -94,10 +94,26 @@ ensure
   end
 end
 
+# Runs a client to its end. *stdin_data* is a string, or a list of strings
+# written one second apart and followed by two seconds of open input, for an
+# interactive s_client that reads its commands only after the handshake.
 def client_output(command, stdin_data: "")
   Timeout.timeout(30) do
-    output, = Open3.capture2e(TOOL_ENVIRONMENT, *command, stdin_data: stdin_data)
-    output
+    Open3.popen2e(TOOL_ENVIRONMENT, *command) do |stdin, output, _|
+      reader = Thread.new { output.read }
+      if stdin_data.is_a?(Array)
+        stdin_data.each do |piece|
+          sleep 1
+          stdin.write(piece)
+          stdin.flush
+        end
+        sleep 2
+      else
+        stdin.write(stdin_data)
+      end
+      stdin.close
+      reader.value
+    end
   end
 rescue Timeout::Error
   "TIMEOUT"
@@ -195,8 +211,10 @@ Dir.mktmpdir("beryl-interop") do |work|
     record.call("openssl s_client -> Beryl server", "resumption with a ticket", output, [/Reused, TLSv1\.3/, /hello from beryl/])
   end
   with_beryl_server.call("p256", []) do |port|
-    output = client_output(s_client.(port, "-ign_eof"), stdin_data: "K\n#{get}")
-    record.call("openssl s_client -> Beryl server", "KeyUpdate (update requested)", output, [/KEYUPDATE/, /hello from beryl/])
+    # Interactive commands work only without -ign_eof and -quiet.
+    output = client_output(s_client.(port, "-msg"), stdin_data: ["K\n", get])
+    record.call("openssl s_client -> Beryl server", "KeyUpdate (update requested)", output,
+                [/>>> TLS 1\.3, Handshake \[length 0005\], KeyUpdate/, /<<< TLS 1\.3, Handshake \[length 0005\], KeyUpdate/, /hello from beryl/])
   end
 
   # Beryl server, curl.

@@ -77,14 +77,14 @@ FileUtils.mkdir_p(work)
 processor_count = Etc.nprocessors
 
 openssl_prefix = File.join(prefix, "openssl")
-unless File.exist?(File.join(openssl_prefix, "bin", "openssl"))
+unless File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
   archive = File.join(work, "openssl.tar.gz")
   fetch_checked(OPENSSL[:url], OPENSSL[:sha256], archive)
   run("tar", "xzf", archive, chdir: work)
   source = File.join(work, "openssl-#{OPENSSL[:version]}")
   run("./config", "--prefix=#{openssl_prefix}", "--libdir=lib", "no-docs", "no-tests", chdir: source)
   run("make", "-j#{processor_count}", chdir: source)
-  run("make", "install_sw", chdir: source)
+  run("make", "install_sw", "install_ssldirs", chdir: source)
 end
 
 curl_prefix = File.join(prefix, "curl")
