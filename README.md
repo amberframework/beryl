@@ -25,7 +25,7 @@
 dependencies:
   beryl:
     github: amberframework/beryl
-    version: 0.1.0
+    version: 0.2.0
 ```
 
 ```crystal
@@ -48,7 +48,7 @@ Beryl::Certificates.verify_server_chain(chain, hostname: "example.com") # => the
 The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones that existing formats still need.
 
 > [!NOTE]
-> Beryl is opt-in today. It becomes a default in Amber once its own gates pass, and every pull request must pass them to merge. 0.1.0 has the hashes, MACs, AEADs, public-key algorithms and certificate validation below; TLS comes in a later release ([CHANGELOG.md](CHANGELOG.md)).
+> Beryl is opt-in today. It becomes a default in Amber once its own gates pass, and every pull request must pass them to merge. 0.2.0 has the hashes, MACs, AEADs, public-key algorithms and certificate validation below, and TLS 1.3 as a client and a server ([docs/tls.md](docs/tls.md), [CHANGELOG.md](CHANGELOG.md)).
 
 ## What's inside
 
