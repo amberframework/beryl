@@ -440,12 +440,17 @@ module Beryl::TLS
       record_size_limit = nil
       encrypted_extensions.list_of_extensions.each do |extension|
         type = extension.type?
+        # An extension the client did not offer is refused first, whatever
+        # its type (§4.2); one it offered but that has no place here is an
+        # illegal_parameter below.
+        unless type && offer.client_hello.has_extension?(type)
+          raise Error.new("the server sent extension #{extension.type_value}, which the client did not offer", AlertDescription::UnsupportedExtension)
+        end
         case type
         when ExtensionType::ServerName
           raise Error.new("a server_name acknowledgement with contents", AlertDescription::DecodeError) unless extension.contents.empty?
         when ExtensionType::SupportedGroups
           ExtensionCodec.decode_u16_list(extension.contents)
-          next
         when ExtensionType::ApplicationLayerProtocolNegotiation
           list_of_names = ExtensionCodec.decode_protocol_names(extension.contents)
           unless list_of_names.size == 1 && @context.list_of_alpn_protocols.includes?(list_of_names.first)
@@ -458,12 +463,6 @@ module Beryl::TLS
              ExtensionType::PskKeyExchangeModes, ExtensionType::SignatureAlgorithms, ExtensionType::SignatureAlgorithmsCert,
              ExtensionType::CertificateAuthorities, ExtensionType::OidFilters, ExtensionType::PostHandshakeAuth
           raise Error.new("#{type} in EncryptedExtensions", AlertDescription::IllegalParameter)
-        else
-          # early_data was never offered; any other extension the client
-          # did not offer is refused as well (§4.2).
-        end
-        unless type && offer.client_hello.has_extension?(type)
-          raise Error.new("the server sent extension #{extension.type_value}, which the client did not offer", AlertDescription::UnsupportedExtension)
         end
       end
       {alpn_protocol, record_size_limit}
