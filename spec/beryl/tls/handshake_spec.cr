@@ -378,7 +378,7 @@ describe "Beryl::TLS handshakes over a socket pair" do
       error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
     end
 
-    it "refuses a ClientHello whose legacy_version is below SSL 3.0 (protocol_version)" do
+    it "refuses a ClientHello whose legacy_version is SSL 3.0 or older (protocol_version)" do
       client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
       expect_raises(IO::EOFError) do
         TLS::Socket::Client.new(client_output, TlsHarness.client_context, hostname: "localhost")
@@ -386,7 +386,7 @@ describe "Beryl::TLS handshakes over a socket pair" do
       record = client_output.output.to_slice.dup
       # The ClientHello's legacy_version follows the record header and the
       # handshake header.
-      record[9] = 0x02
+      record[9] = 0x03
       record[10] = 0x00
       error = expect_raises(TLS::Error) { TLS::Socket::Server.new(TlsHarness::ScriptedIO.new(record), TlsHarness.server_context) }
       error.alert_description.should eq(TLS::AlertDescription::ProtocolVersion)

@@ -196,8 +196,9 @@ module Beryl::TLS
 
     # The checks on any ClientHello (§4.1.2, §4.2, §9.2).
     private def check_client_hello(client_hello : Messages::ClientHello) : Nil
-      # Below SSL 3.0 is no TLS ClientHello at all (Appendix D.5).
-      if client_hello.legacy_version < 0x0300_u16
+      # SSL 3.0 and older are never negotiated (Appendix D.5), so such a
+      # legacy_version is no TLS 1.3 ClientHello.
+      if client_hello.legacy_version < ProtocolVersion::TLS_1_0
         raise Error.new("a ClientHello with legacy_version #{client_hello.legacy_version}", AlertDescription::ProtocolVersion)
       end
       versions_contents = client_hello.extension(ExtensionType::SupportedVersions)

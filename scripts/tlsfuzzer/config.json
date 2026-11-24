@@ -5,82 +5,215 @@
     "python-ecdsa": "71e3fc7240cf31584fb0e10bd58e2830f2fc5afc"
   },
   "scripts": [
-    { "script": "test-tls13-conversation.py", "certificate": "rsa" },
-    { "script": "test-tls13-ccs.py", "certificate": "rsa" },
-    { "script": "test-tls13-count-tickets.py", "certificate": "rsa", "arguments": ["-t", "1"] },
-    { "script": "test-tls13-empty-alert.py", "certificate": "rsa" },
-    { "script": "test-tls13-finished.py", "certificate": "rsa" },
-    { "script": "test-tls13-finished-plaintext.py", "certificate": "rsa" },
-    { "script": "test-tls13-hrr.py", "certificate": "rsa" },
-    { "script": "test-tls13-invalid-ciphers.py", "certificate": "rsa" },
-    { "script": "test-tls13-keyshare-omitted.py", "certificate": "rsa" },
-    { "script": "test-tls13-keyupdate.py", "certificate": "rsa" },
-    { "script": "test-tls13-large-number-of-extensions.py", "certificate": "rsa" },
-    { "script": "test-tls13-legacy-version.py", "certificate": "rsa" },
-    { "script": "test-tls13-multiple-ccs-messages.py", "certificate": "rsa" },
-    { "script": "test-tls13-nociphers.py", "certificate": "rsa" },
-    { "script": "test-tls13-record-layer-limits.py", "certificate": "rsa" },
-    { "script": "test-tls13-record-padding.py", "certificate": "rsa" },
-    { "script": "test-tls13-shuffled-extentions.py", "certificate": "rsa" },
-    { "script": "test-tls13-signature-algorithms.py", "certificate": "rsa", "arguments": ["-n", "0"] },
-    { "script": "test-tls13-rsa-signatures.py", "certificate": "rsa" },
-    { "script": "test-tls13-pkcs-signature.py", "certificate": "rsa" },
-    { "script": "test-tls13-unencrypted-alert.py", "certificate": "rsa" },
-    { "script": "test-tls13-zero-content-type.py", "certificate": "rsa" },
-    { "script": "test-tls13-zero-length-data.py", "certificate": "rsa" },
     {
-      "script": "test-tls13-0rtt-garbage.py", "certificate": "rsa",
-      "expected_failures": { "downgrade to TLS 1\\.2": "Needs a TLS 1.2 fallback. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6." }
+      "script": "test-tls13-conversation.py",
+      "certificate": "rsa"
     },
     {
-      "script": "test-tls13-connection-abort.py", "certificate": "rsa",
-      "expected_failures": { "^After NewSessionTicket$": "The script's ClientHello offers no psk_key_exchange_modes, and Beryl sends tickets only to a client that lists psk_dhe_ke (RFC 9846 §4.2.9), so the NewSessionTicket this probe waits for never comes." }
+      "script": "test-tls13-ccs.py",
+      "certificate": "rsa"
     },
     {
-      "script": "test-tls13-session-resumption.py", "certificate": "rsa",
+      "script": "test-tls13-count-tickets.py",
+      "certificate": "rsa",
+      "arguments": [
+        "-t",
+        "1"
+      ]
+    },
+    {
+      "script": "test-tls13-empty-alert.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-finished.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "pad_right (196608|16777167)$": "Beryl refuses a handshake message over its 64 KiB limit (plan §4) from the message header with illegal_parameter, before reading the body; tlsfuzzer expects decode_error. Both refuse."
+      }
+    },
+    {
+      "script": "test-tls13-finished-plaintext.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-hrr.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-invalid-ciphers.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-keyshare-omitted.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-keyupdate.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-large-number-of-extensions.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-legacy-version.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-multiple-ccs-messages.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-nociphers.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-record-layer-limits.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-record-padding.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-shuffled-extentions.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-signature-algorithms.py",
+      "certificate": "rsa",
+      "arguments": [
+        "-n",
+        "0"
+      ],
+      "expected_failures": {
+        "32715": "The ClientHello with 32,715 signature schemes is over Beryl's 64 KiB handshake message limit (plan §4), refused with illegal_parameter."
+      }
+    },
+    {
+      "script": "test-tls13-rsa-signatures.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-pkcs-signature.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-unencrypted-alert.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-zero-content-type.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-zero-length-data.py",
+      "certificate": "rsa"
+    },
+    {
+      "script": "test-tls13-0rtt-garbage.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "downgrade to TLS 1\\.2": "Needs a TLS 1.2 fallback. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6."
+      }
+    },
+    {
+      "script": "test-tls13-connection-abort.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "^After NewSessionTicket$": "The script's ClientHello offers no psk_key_exchange_modes, and Beryl sends tickets only to a client that lists psk_dhe_ke (RFC 9846 §4.2.9), so the NewSessionTicket this probe waits for never comes."
+      }
+    },
+    {
+      "script": "test-tls13-session-resumption.py",
+      "certificate": "rsa",
       "expected_failures": {
         "TLS 1\\.2": "Needs TLS 1.2 sessions. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6.",
         "PSK_ONLY": "Beryl refuses psk_ke: every resumption runs a fresh ECDHE exchange (plan §2), so a psk_ke-only offer gets a full handshake."
       }
     },
     {
-      "script": "test-tls13-version-negotiation.py", "certificate": "rsa",
+      "script": "test-tls13-version-negotiation.py",
+      "certificate": "rsa",
       "expected_failures": {
         "to 1\\.2$": "Expects a fallback to TLS 1.2. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6.",
-        "TLS 1\\.2": "Expects TLS 1.2. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6."
+        "TLS 1\\.2": "Expects TLS 1.2. Beryl speaks TLS 1.3 only; TLS 1.2 is milestone B6.",
+        "to 1\\.1$": "Expects a fallback to TLS 1.1. Beryl speaks TLS 1.3 only.",
+        "in client hello legacy field$": "Without supported_versions this ClientHello asks for TLS 1.2, which Beryl does not speak; TLS 1.2 is milestone B6."
       }
     },
     {
-      "script": "test-tls13-dhe-shared-secret-padding.py", "certificate": "rsa",
-      "expected_failures": { "x448": "X448 is not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "script": "test-tls13-dhe-shared-secret-padding.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "x448|secp384r1|secp521r1": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+      }
     },
     {
-      "script": "test-tls13-ecdhe-curves.py", "certificate": "rsa",
-      "expected_failures": { "secp384r1|secp521r1|x448": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "script": "test-tls13-ecdhe-curves.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "secp384r1|secp521r1|x448": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+      }
     },
     {
-      "script": "test-tls13-crfg-curves.py", "certificate": "rsa",
-      "expected_failures": { "x448|X448": "X448 is not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "script": "test-tls13-crfg-curves.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "x448|X448": "X448 is not implemented; Beryl offers x25519 and secp256r1 (plan §2).",
+        "^empty x25519 key share$": "An empty key_exchange breaks KeyShareEntry's length bounds (opaque key_exchange<1..2^16-1>), which Beryl refuses with decode_error while decoding; tlsfuzzer expects illegal_parameter. Both refuse."
+      }
     },
     {
-      "script": "test-tls13-obsolete-curves.py", "certificate": "rsa", "arguments": ["-a", "handshake_failure", "--relaxed"],
+      "script": "test-tls13-obsolete-curves.py",
+      "certificate": "rsa",
+      "arguments": [
+        "-a",
+        "handshake_failure",
+        "--relaxed"
+      ],
       "arguments_reason": "-a handshake_failure: with no group in common Beryl sends handshake_failure (RFC 9846 §4.1.1). --relaxed: a client that also speaks TLS 1.2 may list TLS 1.2 curves beside secp256r1, and Beryl negotiates secp256r1.",
-      "expected_failures": { "^(secp384r1|secp521r1|x448) in supported_groups and key_share$": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "expected_failures": {
+        "^(secp384r1|secp521r1|x448) in supported_groups and key_share$": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+      }
     },
     {
-      "script": "test-tls13-unrecognised-groups.py", "certificate": "rsa",
-      "expected_failures": { "ffdhe": "FFDHE groups (RFC 7919) are not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "script": "test-tls13-unrecognised-groups.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "ffdhe": "FFDHE groups (RFC 7919) are not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+      }
     },
     {
-      "script": "test-tls13-serverhello-random.py", "certificate": "rsa",
-      "expected_failures": { "ffdhe": "FFDHE groups (RFC 7919) are not implemented; Beryl offers x25519 and secp256r1 (plan §2)." }
+      "script": "test-tls13-serverhello-random.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "ffdhe": "FFDHE groups (RFC 7919) are not implemented; Beryl offers x25519 and secp256r1 (plan §2).",
+        "secp384r1|secp521r1|x448": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+      }
     },
     {
-      "script": "test-tls13-symetric-ciphers.py", "certificate": "rsa",
-      "expected_failures": { "CCM": "TLS_AES_128_CCM_SHA256 and TLS_AES_128_CCM_8_SHA256 are not implemented; Beryl offers the three suites of plan §2." }
+      "script": "test-tls13-symetric-ciphers.py",
+      "certificate": "rsa",
+      "expected_failures": {
+        "CCM": "TLS_AES_128_CCM_SHA256 and TLS_AES_128_CCM_8_SHA256 are not implemented; Beryl offers the three suites of plan §2."
+      }
     },
-    { "script": "test-tls13-ecdsa-support.py", "certificate": "p256" },
-    { "script": "test-tls13-eddsa.py", "certificate": "ed25519" }
+    {
+      "script": "test-tls13-ecdsa-support.py",
+      "certificate": "p256",
+      "expected_failures": {
+        "secp384r1_sha384|secp521r1_sha512|brainpool": "The script expects a server key for each curve; the server holds a P-256 key, and Beryl signs with P-256, Ed25519 and RSA (plan §2). It refuses the other schemes with handshake_failure."
+      }
+    },
+    {
+      "script": "test-tls13-eddsa.py",
+      "certificate": "ed25519",
+      "expected_failures": {
+        "^ed448 only$": "The script expects an Ed448 key too; Ed448 is not implemented, and with only ed448 offered Beryl refuses with handshake_failure."
+      }
+    }
   ],
   "not_run": {
     "test-tls13-lengths.py": "Needs an echo server; the example server answers HTTP.",
