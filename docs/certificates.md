@@ -126,4 +126,13 @@ crystal-alpha build --release spec/fuzz/der_parser_fuzz.cr -o der_parser_fuzz
 
 ## Speed
 
-`bench/certificates_against_libcrypto.cr` compares reading and chain verification with OpenSSL 4.1.0; the measured table is added once the reference run on a whole Mac completes.
+`bench/certificates_against_libcrypto.cr` against OpenSSL 4.1.0, on m4-mini-01 (Apple M4) with all ten cores reserved for the run: ten rounds of 2 s of processor time per arm, the arms taking turns of 5 ms and counting thread processor time. Inputs are the first 256 distinct certificates of the corpus and two logged chains verified against the Mozilla roots at their log time with the host name checked. B4 code as merged (commit 4735c87).
+
+| Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
+|---|---|---|---|---|---|
+| read 256 certificates, Beryl leaving keys until used | 1472 | 235 | 6.26× as fast | 6.26× as fast to 6.27× as fast | yes |
+| read 256 certificates, public keys decoded | 57 | 234 | 4.09× slower | 4.1× slower to 4.08× slower | no |
+| verify a chain with an ECDSA leaf (two ECDSA signatures and one RSA signature) | 2666 | 4096 | 1.54× slower | 1.54× slower to 1.53× slower | no |
+| verify a chain with an RSA leaf (three RSA signatures) | 11469 | 23099 | 2.01× slower | 2.02× slower to 2.01× slower | no |
+
+Reading a certificate takes Beryl about 2.7 µs and OpenSSL about 16.6 µs, but `d2i_X509` also builds every public key, and Beryl builds a key only when a signature is first checked with it. Counting that work, Beryl is 4.1 times slower, nearly all of it in RSA keys: `RSA::PublicKey.new` takes about 128 µs, against 0.3 µs for a P-256 key, because it computes the Montgomery constant R² mod n up front. Chain verification is 1.5 to 2 times slower for the same reason as the signature speeds in [crypto/public-key.md](crypto/public-key.md): P-256 and RSA run on portable arithmetic, while OpenSSL's run on hand-written assembly. Both are the subject of the F3 speed milestone.
