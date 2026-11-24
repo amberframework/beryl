@@ -75,7 +75,7 @@ On Arm, every operation on a secret (HMAC, HKDF, PBKDF2, the AEADs, AES key setu
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/brand/public-key-speed-dark.svg">
-  <img src="docs/brand/public-key-speed-light.svg" width="100%" alt="Beryl against OpenSSL on an Apple M4, median of ten rounds. Curves: X25519 key generation 1.15× as fast, X25519 shared secret 1.013× slower, Ed25519 key generation 1.16× as fast, sign 1.088× as fast, verify 1.38× as fast, P-256 key generation 1.43× as fast, P-256 ECDSA sign 1.074× slower, verify 1.096× as fast, P-256 ECDH 1.1× slower, P-384 ECDSA verify 1.41× as fast. RSA PKCS #1 v1.5: 2,048-bit sign 1.069× as fast, verify 1.5× slower, OAEP decrypt 1.078× as fast; 3,072-bit sign 1.51× slower, verify 1.58× slower; 4,096-bit sign 1.62× slower, verify 1.63× slower. Certificates: reading 256 certificates 6.26× as fast, with public keys decoded 4.09× slower, verifying a chain with an ECDSA leaf 1.54× slower, with an RSA leaf 2.01× slower.">
+  <img src="docs/brand/public-key-speed-light.svg" width="100%" alt="Beryl against OpenSSL on an Apple M4, median of ten rounds; every row is at least as fast. Curves: X25519 key generation 1.21× as fast, X25519 shared secret 1.034× as fast, Ed25519 key generation 1.23× as fast, sign 1.15× as fast, verify 1.34× as fast, P-256 key generation 1.49× as fast, P-256 ECDSA sign 1.28× as fast, verify 1.3× as fast, P-256 ECDH 1.056× as fast, P-384 ECDSA verify 1.5× as fast. RSA PKCS #1 v1.5: 2,048-bit sign 1.11× as fast, verify 1.17× as fast, OAEP decrypt 1.12× as fast; 3,072-bit sign 1.092× as fast, verify 1.2× as fast; 4,096-bit sign 1.087× as fast, verify 1.21× as fast. Certificates: reading 256 certificates 6.21× as fast, with public keys decoded 5.27× as fast, verifying a chain with an ECDSA leaf 1.34× as fast, with an RSA leaf 1.17× as fast.">
 </picture>
 
 Hashes, MACs and AEADs, against OpenSSL 4.1.0 on an Apple M1 Max (median of ten or more rounds of 2 s per arm). All 42 hash and HMAC rows and all 32 AEAD rows are at least as fast, with the whole paired 95% interval on that side:
@@ -100,31 +100,31 @@ The hashes were measured at 64 B, 1 KiB and 1 MiB. AES-CBC, which does not authe
 <summary><b>The public-key and certificate numbers as a table</b></summary>
 <br>
 
-Apple M4 with all ten cores reserved, ten rounds of 2 s of processor time per arm. Curves and RSA: milestone F3, commit `b3c72ee`, against OpenSSL as the bench prints it (4.0.1). Certificates: milestone B4, commit `4735c87`, against OpenSSL 4.1.0.
+Apple M4 with all ten cores reserved, ten rounds of 2 s of processor time per arm, against OpenSSL as the bench prints it (4.0.1). Milestone F3b: curves at commit `e7a0765`, RSA and certificates at commit `05d1481`.
 
 | Operation | Beryl against OpenSSL |
 |---|---|
-| X25519 key generation | 1.15× as fast |
-| X25519 shared secret | 1.013× slower |
-| Ed25519 key generation | 1.16× as fast |
-| Ed25519 sign | 1.088× as fast |
-| Ed25519 verify | 1.38× as fast |
-| P-256 key generation | 1.43× as fast |
-| P-256 ECDSA sign | 1.074× slower |
-| P-256 ECDSA verify | 1.096× as fast |
-| P-256 ECDH shared secret | 1.1× slower |
-| P-384 ECDSA verify | 1.41× as fast |
-| RSA-2048 PKCS #1 v1.5 sign | 1.069× as fast |
-| RSA-2048 PKCS #1 v1.5 verify | 1.5× slower |
-| RSA-2048 OAEP decrypt | 1.078× as fast |
-| RSA-3072 PKCS #1 v1.5 sign | 1.51× slower |
-| RSA-3072 PKCS #1 v1.5 verify | 1.58× slower |
-| RSA-4096 PKCS #1 v1.5 sign | 1.62× slower |
-| RSA-4096 PKCS #1 v1.5 verify | 1.63× slower |
-| Read 256 certificates, keys left until used | 6.26× as fast |
-| Read 256 certificates, public keys decoded | 4.09× slower |
-| Verify a chain with an ECDSA leaf | 1.54× slower |
-| Verify a chain with an RSA leaf | 2.01× slower |
+| X25519 key generation | 1.21× as fast |
+| X25519 shared secret | 1.034× as fast |
+| Ed25519 key generation | 1.23× as fast |
+| Ed25519 sign | 1.15× as fast |
+| Ed25519 verify | 1.34× as fast |
+| P-256 key generation | 1.49× as fast |
+| P-256 ECDSA sign | 1.28× as fast |
+| P-256 ECDSA verify | 1.3× as fast |
+| P-256 ECDH shared secret | 1.056× as fast |
+| P-384 ECDSA verify | 1.5× as fast |
+| RSA-2048 PKCS #1 v1.5 sign | 1.11× as fast |
+| RSA-2048 PKCS #1 v1.5 verify | 1.17× as fast |
+| RSA-2048 OAEP decrypt | 1.12× as fast |
+| RSA-3072 PKCS #1 v1.5 sign | 1.092× as fast |
+| RSA-3072 PKCS #1 v1.5 verify | 1.2× as fast |
+| RSA-4096 PKCS #1 v1.5 sign | 1.087× as fast |
+| RSA-4096 PKCS #1 v1.5 verify | 1.21× as fast |
+| Read 256 certificates, keys left until used | 6.21× as fast |
+| Read 256 certificates, public keys decoded | 5.27× as fast |
+| Verify a chain with an ECDSA leaf | 1.34× as fast |
+| Verify a chain with an RSA leaf | 1.17× as fast |
 
 </details>
 
@@ -201,10 +201,10 @@ P-384 is verification only. RSA key generation and keys of three or more primes 
 </details>
 
 <details>
-<summary><b>Where is Beryl still slower than OpenSSL?</b></summary>
+<summary><b>Is Beryl slower than OpenSSL anywhere?</b></summary>
 <br>
 
-On the Apple M4 above, P-256 signing is 1.074× slower and ECDH 1.1× slower than OpenSSL's nistz256 assembly, and RSA public operations and every 3,072 and 4,096-bit operation are 1.5× to 1.63× slower. Certificate chain verification, which checks those signatures, is 1.54× to 2.01× slower. [public-key.md](docs/crypto/public-key.md#speed) has every measured ratio.
+Not in the public-key and certificate rows above: since milestone F3b every one is at least as fast as OpenSSL 4.0.1 on the Apple M4, from 1.034× as fast (X25519 key agreement) to 6.21× as fast (reading certificates). Among the symmetric rows, AES-128-CBC decryption at 1 MiB is 1.073× slower. [public-key.md](docs/crypto/public-key.md#speed) and [certificates.md](docs/certificates.md#speed) have every measured ratio.
 
 </details>
 
