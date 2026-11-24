@@ -1274,6 +1274,20 @@
     {
       "source": "rfc",
       "license": "IETF Trust Legal Provisions (RFC text reproduced unmodified)",
+      "url": "https://www.rfc-editor.org/rfc/rfc8448.txt",
+      "pinned_at": "retrieved 2026-11-24 (RFCs are immutable once published)",
+      "kind": "file",
+      "sha256": "6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba",
+      "list_of_files": [
+        {
+          "stored_path": "rfc/rfc8448.txt",
+          "sha256": "6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba"
+        }
+      ]
+    },
+    {
+      "source": "rfc",
+      "license": "IETF Trust Legal Provisions (RFC text reproduced unmodified)",
       "url": "https://www.ietf.org/archive/id/draft-irtf-cfrg-xchacha-03.txt",
       "pinned_at": "retrieved 2026-11-22 (a numbered Internet-Draft revision is immutable)",
       "kind": "file",

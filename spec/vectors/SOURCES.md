@@ -393,6 +393,10 @@ License: IETF Trust Legal Provisions (RFC text reproduced unmodified)
   - Pinned at: retrieved 2026-11-22 (RFCs are immutable once published)
   - Download sha256: `25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c`
   - `spec/vectors/rfc/rfc8439.txt` sha256 `25bef70fbf7a07ff45c2fe4cb7c6ce954eac687413d8610603268b4e4415324c`
+- Download: https://www.rfc-editor.org/rfc/rfc8448.txt
+  - Pinned at: retrieved 2026-11-24 (RFCs are immutable once published)
+  - Download sha256: `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba`
+  - `spec/vectors/rfc/rfc8448.txt` sha256 `6564d1376d1ec744fc7a9993da15ebc1b9be361908b166091f47ef605c537fba`
 - Download: https://www.ietf.org/archive/id/draft-irtf-cfrg-xchacha-03.txt
   - Pinned at: retrieved 2026-11-22 (a numbered Internet-Draft revision is immutable)
   - Download sha256: `fa796b50265eeee383d40e82fed880267c7835e1b3d64c50c4f06162adaa1cfd`
