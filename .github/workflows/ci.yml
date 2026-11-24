@@ -45,8 +45,9 @@ jobs:
         run: |
           crystal build --no-codegen spec/differential/libcrypto_certificate_differential.cr
           crystal build --no-codegen spec/fuzz/der_parser_fuzz.cr
-      - name: Type-check the TLS examples
+      - name: Type-check the TLS examples and the handshake fuzzer
         run: |
+          crystal build --no-codegen spec/fuzz/tls_handshake_fuzz.cr
           crystal build --no-codegen -Dwithout_openssl examples/https_server.cr
           crystal build --no-codegen -Dwithout_openssl examples/https_client.cr
       - name: Run the quick suite (unit specs and every published vector)
@@ -351,6 +352,37 @@ jobs:
       - name: "Fuzz: 1,000,000 mutated inputs through every reader, no finding"
         run: ./der_parser_fuzz 1000000 "${{ github.run_id }}" spec/vectors/x509-limbo/limbo.json
 
+  tls-fuzz:
+    name: TLS handshake fuzzer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Build the fuzzer
+        run: crystal build --release spec/fuzz/tls_handshake_fuzz.cr -o tls_handshake_fuzz
+      - name: "Fuzz: 200,000 mutated handshakes through every parser and both state machines, no finding"
+        run: ./tls_handshake_fuzz 200000 "${{ github.run_id }}"
+
+  tls-interop:
+    name: TLS against OpenSSL, curl and Go (pinned and checked by sha256)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Build OpenSSL 4.1.0 and curl 8.23.0, unpack Go 1.27.4 (scripts/interop/TOOLS.md)
+        run: ruby scripts/interop/install_tools.rb "$RUNNER_TEMP/interop-tools"
+      - name: "Interop: every cell of the matrix completes its handshake and exchange"
+        run: ruby scripts/interop/run_matrix.rb "$RUNNER_TEMP/interop-tools" --crystal crystal
 
   differential:
     name: Differential against libcrypto, hashes and MACs (${{ matrix.code }} on ${{ matrix.runner }})
