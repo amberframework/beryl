@@ -620,9 +620,14 @@ module Beryl::Crypto::V1
     # operands are never equal.
     #
     # No step computes on infinity. While H = 0 the sum is marked by
-    # *is_infinity* and holds the stand-in [32]P, which is never ±[d]P for
-    # d from 1 to 16 (n is prime and far above 48); its doublings and sums
-    # are computed and dropped by mask. A digit d = 0 reads [1]P and drops
+    # *is_infinity* and holds a stand-in that starts at [32]P and is doubled
+    # with the real sum, five times a window, so it is [2^e]P with e from 5
+    # to 5 + 5·(windows - 1); its sums are computed and dropped by mask.
+    # [2^e]P is never ±[d]P for d from 1 to 16: 2^e mod n is not ±d for any
+    # of those e, which a spec checks for both curves. The stand-in changes
+    # every window, because the same operands window after window (a
+    # stand-in chosen afresh each time) still ran faster on AMD EPYC 9V74
+    # for the key 1. A digit d = 0 reads [1]P and drops
     # the sum: then H_i = 32·H with H >= 1, and 32·H - 1 and 32·H + 1 lie
     # strictly between 0 and n + 1, so [32·H]P is not ±P either (32·H + 1
     # = n would need H_i = n - 1, whose sum is dropped all the same). The
@@ -630,12 +635,10 @@ module Beryl::Crypto::V1
     # adding [d]P to it would give [d]P all the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
       multiples_pointer = pointerof(multiples).as(Point*)
-      stand_in = multiples[15].double
       result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
-      result = result.replace_if(is_infinity, stand_in)
+      result = result.replace_if(is_infinity, multiples[15].double)
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         5.times { result = result.double }
-        result = result.replace_if(is_infinity, stand_in)
         selected, is_zero = signed_multiple(scalar, window_index, multiples_pointer)
         sum = result.add_unchecked(selected)
         sum = sum.replace_if(is_infinity, selected)

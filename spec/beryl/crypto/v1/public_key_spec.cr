@@ -1,4 +1,5 @@
 require "../../../spec_helper"
+require "big"
 
 private alias X25519 = Beryl::Crypto::V1::X25519
 private alias Ed25519 = Beryl::Crypto::V1::Ed25519
@@ -222,6 +223,22 @@ end
       {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)).should eq({{ curve[1].id }}::Arithmetic.encode_uncompressed(expected))
       {{ curve[1].id }}::Arithmetic.generator_window_tables.each do |table|
         table.each { |entry| (entry.x == stand_in.x).should be_false }
+      end
+    end
+  end
+{% end %}
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} stand-in of the variable-point multiplication" do
+    it "is [2^e]P, never ±[d]P for a digit d from 1 to 16, at every window" do
+      group_order = {{ curve[1].id }}::Arithmetic::GROUP_ORDER.hexstring.to_big_i(16)
+      last_exponent = 5 + 5 * ({{ curve[1].id }}::Arithmetic::GENERATOR_WINDOW_COUNT - 1)
+      residue = BigInt.new(16)
+      (5..last_exponent).each do
+        residue = (residue * 2) % group_order
+        (1..16).each do |digit|
+          (residue == digit || residue == group_order - digit).should be_false
+        end
       end
     end
   end
