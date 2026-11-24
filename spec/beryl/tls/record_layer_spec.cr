@@ -158,6 +158,20 @@ describe Beryl::TLS::RecordLayer do
       expect_alert(TLS::AlertDescription::RecordOverflow) { layer.read_handshake_message }
     end
 
+    it "refuses a protected record whose inner plaintext, padding included, is over 2^14 + 1 bytes" do
+      key, iv = TLS::KeySchedule.traffic_key_and_iv(SUITE.hash_algorithm, Bytes.new(32, 3), 16)
+      # 16,384 bytes of content, its type, then one byte of padding.
+      inner = Bytes.new(16_386, 1)
+      inner[16_384] = TLS::ContentType::ApplicationData.value
+      inner[16_385] = 0
+      length = inner.size + 16
+      header = Bytes[23, 3, 3, (length >> 8).to_u8, (length & 0xFF).to_u8]
+      record = header + Beryl::Crypto::V1::AESGCM.new(key).encrypt(inner, nonce: iv, associated_data: header)
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 3))
+      expect_alert(TLS::AlertDescription::RecordOverflow) { layer.read_after_handshake }
+    end
+
     it "refuses a record that fails authentication" do
       _, complete_record = record_step(3, "server", "send handshake record", 2)
       tampered = complete_record.dup
@@ -198,6 +212,50 @@ describe Beryl::TLS::RecordLayer do
       expect_alert(TLS::AlertDescription::DecodeError) do
         layer_reading(plaintext_record(TLS::ContentType::Alert, Bytes[2, 40, 0])).read_handshake_message
       end
+    end
+
+    it "refuses a record of an unknown type from its header, before reading its body (unexpected_message)" do
+      # An SSL 2.0 ClientHello header: its length is never waited for.
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer_reading(Bytes[0x80, 0x2e, 1, 3, 4]).read_handshake_message }
+    end
+
+    it "reassembles a large handshake message sent one byte per record in linear time" do
+      message = Bytes.new(4 + 60_000, 7_u8)
+      message[0] = 1_u8
+      message[1] = 0_u8
+      message[2] = (60_000 >> 8).to_u8
+      message[3] = (60_000 & 0xFF).to_u8
+      input = IO::Memory.new
+      message.each { |byte| input.write(plaintext_record(TLS::ContentType::Handshake, Bytes[byte])) }
+      started = Time.instant
+      layer_reading(input.to_slice).read_handshake_message.should eq(message)
+      (Time.instant - started).should be < 2.seconds
+    end
+
+    it "refuses an empty alert record (unexpected_message)" do
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) do
+        layer_reading(plaintext_record(TLS::ContentType::Alert, Bytes.empty)).read_handshake_message
+      end
+    end
+
+    it "refuses application data during the handshake, an empty record included (unexpected_message)" do
+      writer = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      layer = layer_reading(writer.seal(TLS::ContentType::ApplicationData, Bytes.empty))
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer.read_handshake_message }
+    end
+
+    it "reads a plaintext alert under protection only while plaintext alerts are accepted" do
+      record = plaintext_record(TLS::ContentType::Alert, Bytes[2, TLS::AlertDescription::BadCertificate.value])
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer.read_handshake_message }
+
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      layer.is_accepting_plaintext_alerts = true
+      error = expect_raises(TLS::PeerAlert) { layer.read_handshake_message }
+      error.alert_description.should eq(TLS::AlertDescription::BadCertificate)
     end
 
     it "raises PeerAlert with the peer's description" do

@@ -21,6 +21,7 @@ require "optparse"
 require "socket"
 require "timeout"
 require "tmpdir"
+require_relative "test_certificates"
 
 REPOSITORY_ROOT = File.expand_path("../..", __dir__)
 
@@ -121,32 +122,14 @@ end
 
 Dir.mktmpdir("beryl-interop") do |work|
   # Certificates: one root, a leaf per key type for localhost and 127.0.0.1.
-  run_checked(TOOL_ENVIRONMENT, OPENSSL, "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
-              "-keyout", "ca.key", "-out", "ca.pem", "-days", "30", "-subj", "/CN=Beryl Interop Root",
-              "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign", chdir: work)
-  File.write(File.join(work, "leaf.ext"), <<~EXT)
-    basicConstraints=critical,CA:FALSE
-    keyUsage=critical,digitalSignature
-    extendedKeyUsage=serverAuth
-    subjectAltName=DNS:localhost,IP:127.0.0.1
-    authorityKeyIdentifier=keyid
-    subjectKeyIdentifier=hash
-  EXT
-  { "p256" => ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256"], "rsa" => ["-newkey", "rsa:2048"],
-    "ed25519" => ["-newkey", "ed25519"] }.each do |kind, key_arguments|
-    run_checked(TOOL_ENVIRONMENT, OPENSSL, "req", *key_arguments, "-nodes", "-keyout", "#{kind}.key", "-out", "#{kind}.csr",
-                "-subj", "/CN=localhost", chdir: work)
-    run_checked(TOOL_ENVIRONMENT, OPENSSL, "x509", "-req", "-in", "#{kind}.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
-                "-CAcreateserial", "-out", "#{kind}.pem", "-days", "20", "-extfile", "leaf.ext", chdir: work)
-    File.write(File.join(work, "#{kind}-chain.pem"), File.read(File.join(work, "#{kind}.pem")) + File.read(File.join(work, "ca.pem")))
-  end
+  TestCertificates.generate(OPENSSL, TOOL_ENVIRONMENT, work)
 
   # The Beryl examples, linked without OpenSSL, and the Go peer.
   %w(https_server https_client).each do |name|
     run_checked({}, options[:crystal], "build", "-Dwithout_openssl", File.join(REPOSITORY_ROOT, "examples", "#{name}.cr"),
                 "-o", File.join(work, name), chdir: REPOSITORY_ROOT)
   end
-  go_environment = { "GOTOOLCHAIN" => "local", "GOFLAGS" => "-mod=mod", "CGO_ENABLED" => "0",
+  go_environment = { "GOTOOLCHAIN" => "local", "GOFLAGS" => "-mod=mod -modcacherw", "CGO_ENABLED" => "0",
                      "GOPATH" => File.join(work, "gopath"), "GOCACHE" => File.join(work, "gocache") }
   run_checked(go_environment, GO, "build", "-o", File.join(work, "go_peer"), ".", chdir: File.join(__dir__, "go_peer"))
 

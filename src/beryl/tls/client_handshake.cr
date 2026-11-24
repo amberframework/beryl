@@ -95,6 +95,9 @@ module Beryl::TLS
       # flight goes out under the handshake key the server reads with.
       client_handshake_protection = RecordProtection.new(cipher_suite, client_handshake_secret)
       @record_layer.write_protection = client_handshake_protection
+      # In compatibility mode the dummy change_cipher_spec goes before the
+      # client's first protected record, an alert included (Appendix D.4).
+      send_change_cipher_spec_once if offer.client_hello.legacy_session_id.size > 0
 
       encrypted_extensions_message = read_message(HandshakeType::EncryptedExtensions)
       encrypted_extensions = Messages::EncryptedExtensions.decode(Messages.unwrap(encrypted_extensions_message)[1])
@@ -131,6 +134,7 @@ module Beryl::TLS
         rescue error : Certificates::Error
           raise Error.new("a server certificate does not parse: #{error.message}", AlertDescription::BadCertificate)
         end
+        check_leaf_entry(certificate_message.list_of_entries.first, list_of_peer_certificates.first)
         @context.certificate_verifier.verify_chain(list_of_peer_certificates, @hostname)
         @transcript.add(message)
 
@@ -161,7 +165,6 @@ module Beryl::TLS
       exporter_master_secret = schedule.exporter_master_secret(application_digest)
       install_read_protection(RecordProtection.new(cipher_suite, server_application_secret))
 
-      send_change_cipher_spec_once if offer.client_hello.legacy_session_id.size > 0
       if certificate_request
         # Beryl's client holds no certificate: an empty Certificate tells
         # the server so, and the server decides (§4.4.2.4).
@@ -185,6 +188,20 @@ module Beryl::TLS
       HandshakeOutcome.new(cipher_suite, client_application_secret, server_application_secret, exporter_master_secret,
         resumption_master_secret, alpn_protocol, server_name_sent(offer), list_of_peer_certificates, is_resumed,
         peer_record_size_limit, key_exchange.group)
+    end
+
+    # The leaf's CertificateEntry may carry only extensions the client
+    # asked for, and Beryl's client asks for none (status_request and
+    # signed_certificate_timestamp are not offered, §4.4.2). A leaf whose
+    # key usage leaves out digitalSignature cannot sign CertificateVerify
+    # (§4.4.2.2), whatever the certificate verifier decides.
+    private def check_leaf_entry(entry : Messages::CertificateEntry, leaf : Certificates::Certificate) : Nil
+      if extension = entry.list_of_extensions.first?
+        raise Error.new("the extension #{extension.type_value} on the server's certificate, which the client did not ask for", AlertDescription::UnsupportedExtension)
+      end
+      if (key_usage = leaf.key_usage) && !key_usage.digital_signature?
+        raise Error.new("the server certificate's key usage leaves out digitalSignature", AlertDescription::BadCertificate)
+      end
     end
 
     private def server_name_sent(offer : Offer) : String?
@@ -265,6 +282,11 @@ module Beryl::TLS
     end
 
     private def answer_hello_retry_request(offer : Offer, hello_retry_request : Messages::ServerHello, message : Bytes) : Offer
+      # The server waits for the second ClientHello, so its
+      # HelloRetryRequest ends its record.
+      unless @record_layer.handshake_buffer_empty?
+        raise Error.new("data after the HelloRetryRequest in its record", AlertDescription::UnexpectedMessage)
+      end
       cipher_suite = check_server_hello(offer, hello_retry_request)
       @hello_retry_cipher_suite = cipher_suite
       selected_group = hello_retry_request.extension(ExtensionType::KeyShare).try { |contents| ExtensionCodec.decode_selected_group(contents) }
@@ -293,8 +315,14 @@ module Beryl::TLS
       offer.client_hello.list_of_extensions.each do |extension|
         case extension.type?
         when ExtensionType::KeyShare
-          list_of_extensions << Messages::Extension.new(extension.type_value, ExtensionCodec.encode_client_key_shares(
-            list_of_key_exchanges.map { |exchange| ExtensionCodec::KeyShareEntry.new(exchange.group.value, exchange.public_key_bytes) }))
+          # Without a selected group the key_share is sent again unchanged,
+          # its GREASE entry included (§4.1.2).
+          list_of_extensions << if selected_group
+            Messages::Extension.new(extension.type_value, ExtensionCodec.encode_client_key_shares(
+              list_of_key_exchanges.map { |exchange| ExtensionCodec::KeyShareEntry.new(exchange.group.value, exchange.public_key_bytes) }))
+          else
+            extension
+          end
           list_of_extensions << Messages::Extension.new(ExtensionType::Cookie.value, ExtensionCodec.encode_cookie(cookie)) if cookie
         when ExtensionType::PreSharedKey, ExtensionType::EarlyData
           # Rebuilt below, or dropped.
@@ -412,12 +440,17 @@ module Beryl::TLS
       record_size_limit = nil
       encrypted_extensions.list_of_extensions.each do |extension|
         type = extension.type?
+        # An extension the client did not offer is refused first, whatever
+        # its type (§4.2); one it offered but that has no place here is an
+        # illegal_parameter below.
+        unless type && offer.client_hello.has_extension?(type)
+          raise Error.new("the server sent extension #{extension.type_value}, which the client did not offer", AlertDescription::UnsupportedExtension)
+        end
         case type
         when ExtensionType::ServerName
           raise Error.new("a server_name acknowledgement with contents", AlertDescription::DecodeError) unless extension.contents.empty?
         when ExtensionType::SupportedGroups
           ExtensionCodec.decode_u16_list(extension.contents)
-          next
         when ExtensionType::ApplicationLayerProtocolNegotiation
           list_of_names = ExtensionCodec.decode_protocol_names(extension.contents)
           unless list_of_names.size == 1 && @context.list_of_alpn_protocols.includes?(list_of_names.first)
@@ -430,12 +463,6 @@ module Beryl::TLS
              ExtensionType::PskKeyExchangeModes, ExtensionType::SignatureAlgorithms, ExtensionType::SignatureAlgorithmsCert,
              ExtensionType::CertificateAuthorities, ExtensionType::OidFilters, ExtensionType::PostHandshakeAuth
           raise Error.new("#{type} in EncryptedExtensions", AlertDescription::IllegalParameter)
-        else
-          # early_data was never offered; any other extension the client
-          # did not offer is refused as well (§4.2).
-        end
-        unless type && offer.client_hello.has_extension?(type)
-          raise Error.new("the server sent extension #{extension.type_value}, which the client did not offer", AlertDescription::UnsupportedExtension)
         end
       end
       {alpn_protocol, record_size_limit}

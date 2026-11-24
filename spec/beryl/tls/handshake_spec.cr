@@ -18,6 +18,43 @@ private def expect_connected(client, server) : {TLS::Socket::Client, TLS::Socket
   {client, server}
 end
 
+# Wraps an IO and keeps a copy of every byte read through it.
+private class RecordingIO < IO
+  getter received = IO::Memory.new
+
+  def initialize(@io : IO)
+  end
+
+  def read(slice : Bytes) : Int32
+    count = @io.read(slice)
+    @received.write(slice[0, count])
+    count
+  end
+
+  def write(slice : Bytes) : Nil
+    @io.write(slice)
+  end
+
+  def flush : Nil
+    @io.flush
+  end
+
+  def close : Nil
+    @io.close
+  end
+end
+
+# The content type of each record in *bytes*.
+private def list_of_record_types(bytes : Bytes) : Array(UInt8)
+  list = [] of UInt8
+  offset = 0
+  while offset + 5 <= bytes.size
+    list << bytes[offset]
+    offset += 5 + ((bytes[offset + 3].to_i << 8) | bytes[offset + 4].to_i)
+  end
+  list
+end
+
 describe "Beryl::TLS handshakes over a socket pair" do
   TLS::CipherSuite.each do |suite|
     TLS::NamedGroup.each do |group|
@@ -111,6 +148,34 @@ describe "Beryl::TLS handshakes over a socket pair" do
         client_result.as(TLS::CertificateRejected).alert_description.should eq(TLS::AlertDescription::BadCertificate)
         server_result.as(TLS::PeerAlert).alert_description.should eq(TLS::AlertDescription::BadCertificate)
       end
+    end
+
+    it "refuses a leaf whose key usage leaves out digitalSignature, even without verification (bad_certificate)" do
+      server_context = TLS::Context::Server.new
+      # keyEncipherment alone.
+      server_context.certified_key = TlsHarness.authority.issue(key_usage: Bytes[5, 0x20])
+      TlsHarness.connect(server_context, TLS::Context::Client.insecure) do |client_result, server_result|
+        client_result.as(TLS::Error).alert_description.should eq(TLS::AlertDescription::BadCertificate)
+        server_result.as(TLS::PeerAlert).alert_description.should eq(TLS::AlertDescription::BadCertificate)
+      end
+    end
+
+    it "sends its compatibility change_cipher_spec before an alert it raises while reading the server's flight" do
+      client_io, server_io = UNIXSocket.pair
+      recording = RecordingIO.new(server_io)
+      server_done = Channel(Nil).new(1)
+      spawn do
+        TLS::Socket::Server.new(recording, TlsHarness.server_context, sync_close: true)
+      rescue TLS::Error
+      ensure
+        server_done.send(nil)
+      end
+      expect_raises(TLS::CertificateRejected) do
+        TLS::Socket::Client.new(client_io, TlsHarness.client_context, sync_close: true, hostname: "example.com")
+      end
+      server_done.receive
+      # ClientHello, change_cipher_spec, then the protected alert.
+      list_of_record_types(recording.received.to_slice).should eq([22_u8, 20_u8, 23_u8])
     end
 
     it "refuses a chain to a root the client does not trust (unknown_ca)" do
@@ -212,6 +277,18 @@ describe "Beryl::TLS handshakes over a socket pair" do
       end
     end
 
+    it "answers several requested KeyUpdates with one, sent before its next data" do
+      client_context = TlsHarness.client_context
+      # More than one KeyUpdate from the server would exceed this limit.
+      client_context.limits = TLS::Limits.new(largest_key_update_count_per_minute: 1)
+      TlsHarness.connect(TlsHarness.server_context, client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        3.times { client.update_keys(request_peer_update: true) }
+        exchange_data(client, server)
+        exchange_data(client, server)
+      end
+    end
+
     it "refuses more than 32 KeyUpdates in a minute" do
       TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
         client, server = expect_connected(client_result, server_result)
@@ -283,6 +360,69 @@ describe "Beryl::TLS handshakes over a socket pair" do
       end
       (Time.instant - started).should be < 5.seconds
       client_io.close
+    end
+
+    it "refuses data after the first ClientHello in its record when it asks for another group (unexpected_message)" do
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, TlsHarness.client_context, hostname: "localhost")
+      end
+      first_record = client_output.output.to_slice
+      # The start of another handshake message in the same record.
+      extra = Bytes[1, 0, 0]
+      length = first_record.size - 5 + extra.size
+      record = Bytes[22, 3, 1, (length >> 8).to_u8, (length & 0xFF).to_u8] + first_record[5..] + extra
+      server_context = TlsHarness.server_context
+      server_context.list_of_groups = [TLS::NamedGroup::Secp256r1]
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(TlsHarness::ScriptedIO.new(record), server_context) }
+      error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
+    end
+
+    it "ends a handshake at its deadline even when the client trickles bytes" do
+      client_io, server_io = UNIXSocket.pair
+      server_context = TlsHarness.server_context
+      server_context.limits = TLS::Limits.new(handshake_timeout: 300.milliseconds)
+      spawn do
+        20.times do
+          client_io.write(Bytes[22])
+          client_io.flush
+          sleep 100.milliseconds
+        end
+      rescue IO::Error
+      end
+      started = Time.instant
+      expect_raises(TLS::HandshakeTimeout) do
+        TLS::Socket::Server.new(server_io, server_context, sync_close: true)
+      end
+      (Time.instant - started).should be < 1.5.seconds
+      client_io.close
+    end
+
+    it "refuses a ClientHello whose legacy_version is SSL 3.0 or older (protocol_version)" do
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, TlsHarness.client_context, hostname: "localhost")
+      end
+      record = client_output.output.to_slice.dup
+      # The ClientHello's legacy_version follows the record header and the
+      # handshake header.
+      record[9] = 0x03
+      record[10] = 0x00
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(TlsHarness::ScriptedIO.new(record), TlsHarness.server_context) }
+      error.alert_description.should eq(TLS::AlertDescription::ProtocolVersion)
+    end
+
+    it "refuses a client that offers none of its key's signature schemes before any ServerHello (handshake_failure)" do
+      client_context = TlsHarness.client_context
+      client_context.list_of_signature_schemes = [TLS::SignatureScheme::Ed25519]
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, client_context, hostname: "localhost")
+      end
+      server_io = TlsHarness::ScriptedIO.new(client_output.output.to_slice)
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(server_io, TlsHarness.server_context(KeyKind::P256)) }
+      error.alert_description.should eq(TLS::AlertDescription::HandshakeFailure)
+      server_io.output.to_slice.should eq(Bytes[21, 3, 3, 0, 2, 2, 40])
     end
 
     it "refuses a ClientHello without TLS 1.3 (protocol_version)" do

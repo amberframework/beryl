@@ -27,9 +27,11 @@ module Beryl::TLS
     @outcome : HandshakeOutcome? = nil
     @read_buffer = Bytes.empty
     @handshake_mutex = Mutex.new
-    @write_mutex = Mutex.new
+    # Reentrant: a failed write sends its alert while holding the lock.
+    @write_mutex = Mutex.new(:reentrant)
     @key_update_times = Deque(Time::Instant).new
     @has_failed = false
+    @is_key_update_owed = false
 
     protected def initialize(@io : IO, @sync_close : Bool, limits : Limits)
       @record_layer = RecordLayer.new(@io, limits)
@@ -105,6 +107,7 @@ module Beryl::TLS
       @write_mutex.synchronize do
         request = request_peer_update ? KeyUpdateRequest::UpdateRequested : KeyUpdateRequest::UpdateNotRequested
         send_key_update(outcome, request)
+        @is_key_update_owed = false
       end
     end
 
@@ -128,8 +131,14 @@ module Beryl::TLS
     end
 
     def unbuffered_write(slice : Bytes) : Nil
-      handshake_outcome
+      outcome = handshake_outcome
+      # After a fatal alert either way, nothing more is sent (§6.2).
+      raise ConnectionClosed.new("the connection failed earlier", AlertDescription::InternalError) if @has_failed
       @write_mutex.synchronize do
+        if @is_key_update_owed
+          with_alert_on_failure { send_key_update(outcome, KeyUpdateRequest::UpdateNotRequested) }
+          @is_key_update_owed = false
+        end
         with_alert_on_failure { @record_layer.write_application_data(slice) }
       end
     end
@@ -186,8 +195,10 @@ module Beryl::TLS
         outcome = handshake_outcome
         hash = outcome.cipher_suite.hash_algorithm
         advance_read_secret(outcome, hash)
+        # The answer to update_requested is one KeyUpdate before the next
+        # application data, however many requests arrive first (§4.6.3).
         if key_update.request.update_requested?
-          @write_mutex.synchronize { send_key_update(outcome, KeyUpdateRequest::UpdateNotRequested) }
+          @write_mutex.synchronize { @is_key_update_owed = true }
         end
       else
         handle_other_post_handshake_message(handshake_type, body)
@@ -200,6 +211,24 @@ module Beryl::TLS
 
     private abstract def advance_read_secret(outcome : HandshakeOutcome, hash : HashAlgorithm) : Nil
     private abstract def send_key_update(outcome : HandshakeOutcome, request : KeyUpdateRequest) : Nil
+
+    # The next traffic secret; the previous one is wiped once the next is
+    # derived (§7.2).
+    private def next_secret(hash : HashAlgorithm, secret : Bytes) : Bytes
+      next_secret = KeySchedule.next_application_traffic_secret(hash, secret)
+      Crypto::SecretWiping.wipe(secret)
+      next_secret
+    end
+
+    private def replace_read_protection(protection : RecordProtection) : Nil
+      @record_layer.read_protection.try(&.wipe)
+      @record_layer.read_protection = protection
+    end
+
+    private def replace_write_protection(protection : RecordProtection) : Nil
+      @record_layer.write_protection.try(&.wipe)
+      @record_layer.write_protection = protection
+    end
 
     private def record_key_update : Nil
       now = Time.instant
@@ -222,7 +251,11 @@ module Beryl::TLS
       raise error
     rescue error : TLS::Error
       @has_failed = true
-      @record_layer.write_alert(AlertLevel::Fatal, error.alert_description) unless error.is_a?(ConnectionClosed)
+      # The read path sends alerts too, so the alert takes the write lock:
+      # two records sealed at once could share a nonce.
+      unless error.is_a?(ConnectionClosed)
+        @write_mutex.synchronize { @record_layer.write_alert(AlertLevel::Fatal, error.alert_description) }
+      end
       raise error
     rescue error : IO::Error
       @has_failed = true
@@ -230,21 +263,38 @@ module Beryl::TLS
     end
 
     # Bounds the whole handshake by `Limits#handshake_timeout` when the
-    # IO below is a socket.
+    # IO below is a socket: a watchdog fiber closes the socket at the
+    # deadline, so a peer that trickles bytes or stops reading cannot hold
+    # the connection open.
     private def with_handshake_deadline(&)
       io = @io
       unless io.is_a?(::Socket)
         return yield
       end
-      previous = io.read_timeout
-      io.read_timeout = @limits.handshake_timeout
+      done = Channel(Nil).new(1)
+      has_timed_out = false
+      timeout = @limits.handshake_timeout
+      spawn do
+        select
+        when done.receive
+        when timeout(timeout)
+          has_timed_out = true
+          begin
+            io.close
+          rescue IO::Error
+          end
+        end
+      end
       begin
         yield
-      rescue IO::TimeoutError
-        @has_failed = true
-        raise HandshakeTimeout.new("the handshake took longer than #{@limits.handshake_timeout}", AlertDescription::InternalError)
+      rescue error : IO::Error
+        if has_timed_out
+          @has_failed = true
+          raise HandshakeTimeout.new("the handshake took longer than #{timeout}", AlertDescription::InternalError)
+        end
+        raise error
       ensure
-        io.read_timeout = previous
+        done.send(nil) unless has_timed_out
       end
     end
 
@@ -300,14 +350,14 @@ module Beryl::TLS
       end
 
       private def advance_read_secret(outcome : HandshakeOutcome, hash : HashAlgorithm) : Nil
-        @server_application_secret = KeySchedule.next_application_traffic_secret(hash, @server_application_secret)
-        @record_layer.read_protection = RecordProtection.new(outcome.cipher_suite, @server_application_secret)
+        @server_application_secret = next_secret(hash, @server_application_secret)
+        replace_read_protection(RecordProtection.new(outcome.cipher_suite, @server_application_secret))
       end
 
       private def send_key_update(outcome : HandshakeOutcome, request : KeyUpdateRequest) : Nil
         @record_layer.write_handshake(Messages::KeyUpdate.new(request).encode)
-        @client_application_secret = KeySchedule.next_application_traffic_secret(outcome.cipher_suite.hash_algorithm, @client_application_secret)
-        @record_layer.write_protection = RecordProtection.new(outcome.cipher_suite, @client_application_secret)
+        @client_application_secret = next_secret(outcome.cipher_suite.hash_algorithm, @client_application_secret)
+        replace_write_protection(RecordProtection.new(outcome.cipher_suite, @client_application_secret))
         @io.flush
       end
 
@@ -384,14 +434,14 @@ module Beryl::TLS
       end
 
       private def advance_read_secret(outcome : HandshakeOutcome, hash : HashAlgorithm) : Nil
-        @client_application_secret = KeySchedule.next_application_traffic_secret(hash, @client_application_secret)
-        @record_layer.read_protection = RecordProtection.new(outcome.cipher_suite, @client_application_secret)
+        @client_application_secret = next_secret(hash, @client_application_secret)
+        replace_read_protection(RecordProtection.new(outcome.cipher_suite, @client_application_secret))
       end
 
       private def send_key_update(outcome : HandshakeOutcome, request : KeyUpdateRequest) : Nil
         @record_layer.write_handshake(Messages::KeyUpdate.new(request).encode)
-        @server_application_secret = KeySchedule.next_application_traffic_secret(outcome.cipher_suite.hash_algorithm, @server_application_secret)
-        @record_layer.write_protection = RecordProtection.new(outcome.cipher_suite, @server_application_secret)
+        @server_application_secret = next_secret(outcome.cipher_suite.hash_algorithm, @server_application_secret)
+        replace_write_protection(RecordProtection.new(outcome.cipher_suite, @server_application_secret))
         @io.flush
       end
     end

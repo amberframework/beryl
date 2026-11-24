@@ -42,7 +42,11 @@ module Beryl::TLS
 
       unless selection.client_key_share
         # No share for the group the server wants: one HelloRetryRequest
-        # (§4.1.4).
+        # (§4.1.4). The client waits for it, so the first ClientHello ends
+        # its record.
+        unless @record_layer.handshake_buffer_empty?
+          raise Error.new("data after the first ClientHello in its record", AlertDescription::UnexpectedMessage)
+        end
         @transcript.add(client_hello_message)
         @transcript.replace_with_message_hash(selection.cipher_suite.hash_algorithm)
         hello_retry_request = Messages::ServerHello.new(Messages::HELLO_RETRY_REQUEST_RANDOM, client_hello.legacy_session_id,
@@ -72,6 +76,14 @@ module Beryl::TLS
 
       hash = selection.cipher_suite.hash_algorithm
       resumed_state, selected_identity = find_resumable_session(client_hello, client_hello_message, selection)
+      # The CertificateVerify scheme is chosen before the ServerHello, so a
+      # client that offers none of this key's schemes is refused in the clear.
+      certificate_scheme = nil
+      unless resumed_state
+        list_of_offered_schemes = client_hello.extension(ExtensionType::SignatureAlgorithms).try { |contents| ExtensionCodec.decode_u16_list(contents) } || [] of UInt16
+        certificate_scheme = @context.certified_key.signature_scheme_for(list_of_offered_schemes) ||
+                             raise Error.new("the client offers no signature scheme this server's key signs", AlertDescription::HandshakeFailure)
+      end
       @transcript.add(client_hello_message)
 
       key_exchange = KeyExchange.generate(selection.group, @randomness)
@@ -112,11 +124,8 @@ module Beryl::TLS
       end
       write_and_record(Messages::EncryptedExtensions.new(list_of_encrypted_extensions).encode)
 
-      unless resumed_state
+      if scheme = certificate_scheme
         certified_key = @context.certified_key
-        list_of_offered_schemes = client_hello.extension(ExtensionType::SignatureAlgorithms).try { |contents| ExtensionCodec.decode_u16_list(contents) } || [] of UInt16
-        scheme = certified_key.signature_scheme_for(list_of_offered_schemes) ||
-                 raise Error.new("the client offers no signature scheme this server's key signs", AlertDescription::HandshakeFailure)
         entries = certified_key.list_of_certificates.map { |certificate| Messages::CertificateEntry.new(certificate.encoded, [] of Messages::Extension) }
         write_and_record(Messages::CertificateMessage.new(Bytes.empty, entries).encode)
         content = Messages::CertificateVerify.signed_content(@transcript.digest(hash), is_server: true)
@@ -134,7 +143,9 @@ module Beryl::TLS
       @record_layer.flush
 
       install_read_protection(RecordProtection.new(selection.cipher_suite, client_handshake_secret))
+      @record_layer.is_accepting_plaintext_alerts = true
       finished_message = @record_layer.read_handshake_message
+      @record_layer.is_accepting_plaintext_alerts = false
       expect_type(finished_message, HandshakeType::Finished)
       finished = Messages::Finished.decode(Messages.unwrap(finished_message)[1], hash.bytesize)
       unless KeySchedule.finished_matches?(hash, client_handshake_secret, @transcript.digest(hash), finished.verify_data)
@@ -185,6 +196,11 @@ module Beryl::TLS
 
     # The checks on any ClientHello (§4.1.2, §4.2, §9.2).
     private def check_client_hello(client_hello : Messages::ClientHello) : Nil
+      # SSL 3.0 and older are never negotiated (Appendix D.5), so such a
+      # legacy_version is no TLS 1.3 ClientHello.
+      if client_hello.legacy_version < ProtocolVersion::TLS_1_0
+        raise Error.new("a ClientHello with legacy_version #{client_hello.legacy_version}", AlertDescription::ProtocolVersion)
+      end
       versions_contents = client_hello.extension(ExtensionType::SupportedVersions)
       unless versions_contents && ExtensionCodec.decode_client_supported_versions(versions_contents).includes?(ProtocolVersion::TLS_1_3)
         raise Error.new("the client does not offer TLS 1.3", AlertDescription::ProtocolVersion)
@@ -230,6 +246,30 @@ module Beryl::TLS
       if second.has_extension?(ExtensionType::Cookie)
         raise Error.new("a cookie the server did not send", AlertDescription::IllegalParameter)
       end
+      unless first.legacy_version == second.legacy_version && first.legacy_compression_methods == second.legacy_compression_methods
+        raise Error.new("the second ClientHello changes more than the HelloRetryRequest allows", AlertDescription::IllegalParameter)
+      end
+      # The same extensions in the same order and with the same contents,
+      # apart from the changes §4.1.2 allows: a new key_share, pre_shared_key
+      # recomputed or dropped, early_data dropped, padding resized.
+      unless comparable_extensions(first) == comparable_extensions(second)
+        raise Error.new("the second ClientHello changes its extensions beyond what the HelloRetryRequest allows", AlertDescription::IllegalParameter)
+      end
+    end
+
+    private def comparable_extensions(client_hello : Messages::ClientHello) : Array({UInt16, Bytes})
+      list = [] of {UInt16, Bytes}
+      client_hello.list_of_extensions.each do |extension|
+        case extension.type?
+        when ExtensionType::PreSharedKey, ExtensionType::EarlyData, ExtensionType::Padding
+          next
+        when ExtensionType::KeyShare
+          list << {extension.type_value, Bytes.empty}
+        else
+          list << {extension.type_value, extension.contents}
+        end
+      end
+      list
     end
 
     # The suite, group, ALPN and name from *client_hello*. When

@@ -37,6 +37,12 @@ module Beryl::TLS
     # Whether one compatibility change_cipher_spec is still accepted
     # (RFC 9846 §5, Appendix D.4). Turned off once the handshake ends.
     property? is_change_cipher_spec_allowed : Bool = true
+    # Whether a plaintext alert is read while protection is installed: a
+    # server sets it while it waits for the client's flight, since a
+    # client that refuses the ServerHello has no keys to protect its alert
+    # with.
+    property? is_accepting_plaintext_alerts : Bool = false
+    @is_reading_handshake = false
     # Whether the peer sent close_notify.
     getter? peer_closed : Bool = false
     # Whether a close_notify was written.
@@ -45,6 +51,9 @@ module Beryl::TLS
     @consecutive_empty_record_count = 0
     @consecutive_warning_alert_count = 0
     @handshake_buffer = Bytes.empty
+    # Spare room the handshake buffer grows into, doubling, so a message
+    # sent in many small records costs linear time to reassemble.
+    @handshake_storage = Bytes.empty
     @record_header = Bytes.new(RecordProtection::HEADER_BYTESIZE)
 
     def initialize(@io : IO, @limits : Limits = Limits.new)
@@ -93,6 +102,7 @@ module Beryl::TLS
     # Reads the next whole handshake message, header included. Raises when
     # anything but handshake records arrives, or the peer closes.
     def read_handshake_message : Bytes
+      @is_reading_handshake = true
       loop do
         if message = take_buffered_handshake_message
           return message
@@ -103,6 +113,8 @@ module Beryl::TLS
         end
         append_handshake(content)
       end
+    ensure
+      @is_reading_handshake = false
     end
 
     # Reads the next record after the handshake. Returns application data
@@ -153,6 +165,11 @@ module Beryl::TLS
       loop do
         @io.read_fully(@record_header)
         outer_type = ContentType.new(@record_header[0])
+        # An unknown record type is refused from its header, before its
+        # length is trusted (§5); an SSL 2.0 ClientHello ends here too.
+        unless ContentType::ChangeCipherSpec.value <= outer_type.value <= ContentType::ApplicationData.value
+          raise Error.new("a record of type #{outer_type.value}", AlertDescription::UnexpectedMessage)
+        end
         length = (@record_header[3].to_i << 8) | @record_header[4].to_i
         if length > RecordProtection::LARGEST_CIPHERTEXT_BYTESIZE
           raise Error.new("a record of #{length} bytes", AlertDescription::RecordOverflow)
@@ -169,6 +186,10 @@ module Beryl::TLS
         end
 
         content_type, content = if protection = @read_protection
+                                  if outer_type.alert? && @is_accepting_plaintext_alerts && length == 2
+                                    return nil if read_alert(fragment)
+                                    next
+                                  end
                                   unless outer_type.application_data?
                                     raise Error.new("a protected record of outer type #{outer_type}", AlertDescription::UnexpectedMessage)
                                   end
@@ -202,6 +223,8 @@ module Beryl::TLS
           return {content_type, content}
         when ContentType::ApplicationData
           @consecutive_warning_alert_count = 0
+          # Application data of any length has no place in the handshake.
+          return {content_type, content} if @is_reading_handshake
           if content.empty?
             @consecutive_empty_record_count += 1
             if @consecutive_empty_record_count > @limits.largest_consecutive_empty_record_count
@@ -226,6 +249,7 @@ module Beryl::TLS
     # Handles an alert; returns true for close_notify, raises for every
     # other alert TLS 1.3 treats as fatal.
     private def read_alert(content : Bytes) : Bool
+      raise Error.new("an empty alert record", AlertDescription::UnexpectedMessage) if content.empty?
       raise Error.new("an alert of #{content.size} bytes", AlertDescription::DecodeError) unless content.size == 2
       unless handshake_buffer_empty?
         raise Error.new("an alert inside a handshake message", AlertDescription::UnexpectedMessage)
@@ -252,10 +276,16 @@ module Beryl::TLS
       if @handshake_buffer.empty?
         @handshake_buffer = content
       else
-        combined = Bytes.new(@handshake_buffer.size + content.size)
-        @handshake_buffer.copy_to(combined)
-        content.copy_to(combined + @handshake_buffer.size)
-        @handshake_buffer = combined
+        size = @handshake_buffer.size
+        needed = size + content.size
+        is_in_storage = !@handshake_storage.empty? && @handshake_buffer.to_unsafe == @handshake_storage.to_unsafe
+        unless is_in_storage && @handshake_storage.size >= needed
+          storage = Bytes.new(Math.max(needed, size * 2))
+          @handshake_buffer.copy_to(storage)
+          @handshake_storage = storage
+        end
+        content.copy_to(@handshake_storage + size)
+        @handshake_buffer = @handshake_storage[0, needed]
       end
       # Refuse as soon as a declared length is over the limit, before the
       # rest of the message is read.
