@@ -63,7 +63,7 @@ puts "boringssl: #{head}"
 
 # 2. Go.
 tools = File.join(work, "tools")
-puts run_checked("/usr/bin/ruby", File.join(REPOSITORY_ROOT, "scripts", "interop", "install_tools.rb"), tools, "--go-only")
+puts run_checked("/usr/bin/ruby", File.join(REPOSITORY_ROOT, "scripts", "interop", "install_tools.rb"), tools, "--only", "go")
 go = File.join(tools, "go", "bin", "go")
 go_environment = { "GOTOOLCHAIN" => "local", "GOFLAGS" => "-mod=readonly -modcacherw", "GOPATH" => File.join(work, "gopath"),
                    "GOCACHE" => File.join(work, "gocache") }

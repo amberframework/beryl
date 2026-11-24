@@ -214,6 +214,37 @@ describe Beryl::TLS::RecordLayer do
       end
     end
 
+    it "refuses a record of an unknown type from its header, before reading its body (unexpected_message)" do
+      # An SSL 2.0 ClientHello header: its length is never waited for.
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer_reading(Bytes[0x80, 0x2e, 1, 3, 4]).read_handshake_message }
+    end
+
+    it "refuses an empty alert record (unexpected_message)" do
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) do
+        layer_reading(plaintext_record(TLS::ContentType::Alert, Bytes.empty)).read_handshake_message
+      end
+    end
+
+    it "refuses application data during the handshake, an empty record included (unexpected_message)" do
+      writer = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      layer = layer_reading(writer.seal(TLS::ContentType::ApplicationData, Bytes.empty))
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer.read_handshake_message }
+    end
+
+    it "reads a plaintext alert under protection only while plaintext alerts are accepted" do
+      record = plaintext_record(TLS::ContentType::Alert, Bytes[2, TLS::AlertDescription::BadCertificate.value])
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer.read_handshake_message }
+
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      layer.is_accepting_plaintext_alerts = true
+      error = expect_raises(TLS::PeerAlert) { layer.read_handshake_message }
+      error.alert_description.should eq(TLS::AlertDescription::BadCertificate)
+    end
+
     it "raises PeerAlert with the peer's description" do
       error = expect_raises(TLS::PeerAlert) do
         layer_reading(plaintext_record(TLS::ContentType::Alert, Bytes[2, 40])).read_handshake_message

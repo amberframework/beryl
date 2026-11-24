@@ -4,9 +4,11 @@
 # Installs the interop matrix's peers into PREFIX, each at an exact version
 # checked by sha256 before it is unpacked (scripts/interop/TOOLS.md):
 #
-#   /usr/bin/ruby scripts/interop/install_tools.rb PREFIX [--go-only]
+#   /usr/bin/ruby scripts/interop/install_tools.rb PREFIX [--only openssl,curl,go]
 #
-# --go-only installs Go alone, for the BoGo run (scripts/bogo/run_bogo.rb).
+# --only installs the named tools alone: Go for the BoGo run
+# (scripts/bogo/run_bogo.rb), OpenSSL for tlsfuzzer's certificates
+# (scripts/tlsfuzzer/run_tlsfuzzer.rb). curl needs OpenSSL.
 #
 # OpenSSL and curl are built from their release tarballs (curl against that
 # OpenSSL); Go is the release archive. A download whose sha256 differs from
@@ -73,14 +75,16 @@ def run(*command, chdir:)
   end
 end
 
-prefix = File.expand_path(ARGV[0] || abort("usage: install_tools.rb PREFIX [--go-only]"))
-is_go_only = ARGV.include?("--go-only")
+prefix = File.expand_path(ARGV[0] || abort("usage: install_tools.rb PREFIX [--only openssl,curl,go]"))
+only_index = ARGV.index("--only")
+list_of_wanted = only_index ? ARGV.fetch(only_index + 1).split(",") : %w(openssl curl go)
+list_of_wanted |= ["openssl"] if list_of_wanted.include?("curl")
 work = File.join(prefix, "build")
 FileUtils.mkdir_p(work)
 processor_count = Etc.nprocessors
 
 openssl_prefix = File.join(prefix, "openssl")
-unless is_go_only || File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
+if list_of_wanted.include?("openssl") && !File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf"))
   archive = File.join(work, "openssl.tar.gz")
   fetch_checked(OPENSSL[:url], OPENSSL[:sha256], archive)
   run("tar", "xzf", archive, chdir: work)
@@ -91,7 +95,7 @@ unless is_go_only || File.exist?(File.join(openssl_prefix, "ssl", "openssl.cnf")
 end
 
 curl_prefix = File.join(prefix, "curl")
-unless is_go_only || File.exist?(File.join(curl_prefix, "bin", "curl"))
+if list_of_wanted.include?("curl") && !File.exist?(File.join(curl_prefix, "bin", "curl"))
   archive = File.join(work, "curl.tar.xz")
   fetch_checked(CURL[:url], CURL[:sha256], archive)
   run("tar", "xJf", archive, chdir: work)
@@ -105,7 +109,7 @@ unless is_go_only || File.exist?(File.join(curl_prefix, "bin", "curl"))
 end
 
 go_root = File.join(prefix, "go")
-unless File.exist?(File.join(go_root, "bin", "go"))
+if list_of_wanted.include?("go") && !File.exist?(File.join(go_root, "bin", "go"))
   host_os = RbConfig::CONFIG["host_os"].include?("darwin") ? "darwin" : "linux"
   host_cpu = RbConfig::CONFIG["host_cpu"].match?(/arm64|aarch64/) ? "arm64" : "amd64"
   release = GO["#{host_os}-#{host_cpu}"] || abort("no Go pin for #{host_os}-#{host_cpu}")
@@ -118,7 +122,7 @@ FileUtils.rm_rf(work)
 environment = { "LD_LIBRARY_PATH" => File.join(openssl_prefix, "lib"), "DYLD_LIBRARY_PATH" => File.join(openssl_prefix, "lib") }
 tools = [["openssl", File.join(openssl_prefix, "bin", "openssl"), "version"], ["curl", File.join(curl_prefix, "bin", "curl"), "--version"],
          ["go", File.join(go_root, "bin", "go"), "version"]]
-tools = tools.last(1) if is_go_only
+tools = tools.select { |(name, _, _)| list_of_wanted.include?(name) }
 tools.each do |(name, path, flag)|
   output, = Open3.capture2e(environment, path, flag)
   puts "#{name}: #{path}: #{output.lines.first&.strip}"

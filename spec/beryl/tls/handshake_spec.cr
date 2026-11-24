@@ -378,6 +378,33 @@ describe "Beryl::TLS handshakes over a socket pair" do
       error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
     end
 
+    it "refuses a ClientHello whose legacy_version is below SSL 3.0 (protocol_version)" do
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, TlsHarness.client_context, hostname: "localhost")
+      end
+      record = client_output.output.to_slice.dup
+      # The ClientHello's legacy_version follows the record header and the
+      # handshake header.
+      record[9] = 0x02
+      record[10] = 0x00
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(TlsHarness::ScriptedIO.new(record), TlsHarness.server_context) }
+      error.alert_description.should eq(TLS::AlertDescription::ProtocolVersion)
+    end
+
+    it "refuses a client that offers none of its key's signature schemes before any ServerHello (handshake_failure)" do
+      client_context = TlsHarness.client_context
+      client_context.list_of_signature_schemes = [TLS::SignatureScheme::Ed25519]
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, client_context, hostname: "localhost")
+      end
+      server_io = TlsHarness::ScriptedIO.new(client_output.output.to_slice)
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(server_io, TlsHarness.server_context(KeyKind::P256)) }
+      error.alert_description.should eq(TLS::AlertDescription::HandshakeFailure)
+      server_io.output.to_slice.should eq(Bytes[21, 3, 3, 0, 2, 2, 40])
+    end
+
     it "refuses a ClientHello without TLS 1.3 (protocol_version)" do
       client_hello = TLS::Messages::ClientHello.new(Bytes.new(32, 1), Bytes.empty, [0x1301_u16], [] of TLS::Messages::Extension).encode
       record = Bytes[22, 3, 1, 0, client_hello.size.to_u8] + client_hello
