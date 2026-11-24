@@ -1,0 +1,77 @@
+name: Bug report
+description: Beryl gave a wrong result, refused valid input, crashed or ran slow.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If it could leak a secret, let a forgery through or verify a chain that should fail, please report it privately through [SECURITY.md](https://github.com/amberframework/beryl/security/policy) instead.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of Beryl?
+      options:
+        - Hashes, HMAC, HKDF, PBKDF2
+        - AEADs (XChaCha20-Poly1305, ChaCha20-Poly1305, AES-GCM) or AES-CBC
+        - X25519 or Ed25519
+        - P-256 or P-384
+        - RSA
+        - Certificates, CRLs, key files or chain verification
+        - Something else
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong?
+      options:
+        - Wrong result (differs from the standard or from OpenSSL)
+        - Valid input refused
+        - Slower than the docs say
+        - Crash or exception
+        - Compile error
+    validations:
+      required: true
+  - type: dropdown
+    id: processor
+    attributes:
+      label: Processor and system
+      options:
+        - Apple Silicon, macOS
+        - Linux on AArch64
+        - Linux on x86-64
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Beryl commit
+      placeholder: the commit from shard.lock
+    validations:
+      required: true
+  - type: input
+    id: flags
+    attributes:
+      label: Build flags
+      placeholder: "e.g. --release, -Dberyl_portable_hashes, -Dwithout_openssl"
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Smallest program that shows it
+      description: The key, input and call, or a short Crystal program. Use test keys only.
+      render: crystal
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What the standard says, or what OpenSSL returns for the same input.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error
+      render: shell

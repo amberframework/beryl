@@ -134,7 +134,7 @@ module CertificatesAgainstLibcrypto
     {Math.exp(mean - half_width), Math.exp(mean + half_width)}
   end
 
-  # States a ratio of Beryl's speed to libcrypto's the way Seth reads it.
+  # States a ratio of Beryl's speed to libcrypto's as "N× as fast" or "N× slower".
   def self.describe_ratio(ratio : Float64) : String
     factor = ratio >= 1.0 ? ratio : 1.0 / ratio
     rounded = factor < 1.1 ? factor.round(3) : factor.round(2)
