@@ -78,10 +78,19 @@ module CurveTimingProbe
   # Lays out one scalar per slot: *fixed* for the first class, a fresh
   # random one (below n when *below_order*) for the second.
   def self.fill(storage : Bytes, list_of_classes : Array(Bool), generator : Random::PCG32, fixed : Bytes, below_order : Bool) : Nil
+    batch_value = Bytes.new(SCALAR_BYTESIZE)
+    if below_order
+      random_p256_scalar(generator).copy_to(batch_value)
+    else
+      generator.random_bytes(batch_value)
+    end
+    one_per_batch = ENV["BERYL_SECOND_CLASS_PER_BATCH"]? == "1"
     list_of_classes.each_with_index do |is_second_class, slot|
       destination = slot_of(storage, slot)
       if !is_second_class
         fixed.copy_to(destination)
+      elsif one_per_batch
+        batch_value.copy_to(destination)
       elsif below_order
         random_p256_scalar(generator).copy_to(destination)
       else
