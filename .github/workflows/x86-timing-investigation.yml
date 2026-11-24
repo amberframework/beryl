@@ -22,7 +22,7 @@ jobs:
         run: |
           lscpu
           grep -m1 microcode /proc/cpuinfo
-          if grep -q 'EPYC 9V74' /proc/cpuinfo; then echo "measure=yes" >> "$GITHUB_OUTPUT"; else echo "measure=no" >> "$GITHUB_OUTPUT"; fi
+          if grep -q 'AMD EPYC' /proc/cpuinfo; then echo "measure=yes" >> "$GITHUB_OUTPUT"; else echo "measure=no" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         if: steps.processor.outputs.measure == 'yes'
         with:
