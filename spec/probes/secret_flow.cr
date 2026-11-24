@@ -8,8 +8,8 @@
 # `scripts/check_secret_flow.rb` follows them through the optimized LLVM IR
 # and reports any branch, table index or division that depends on one.
 # `leaky_comparison`, `leaky_comparison_of_round_keys`,
-# `leaky_table_selection` and `leaky_limb_lookup` are the faults the check
-# exists to catch and must be reported.
+# `leaky_table_selection`, `leaky_limb_lookup` and `leaky_flags_clobber` are
+# the faults the check exists to catch and must be reported.
 require "../../src/beryl/crypto"
 require "../support/wycheproof"
 
@@ -224,6 +224,21 @@ module SecretFlowProbe
     table[limbs[0] & 0xf_u64]
   end
 
+  # Adds in assembly that writes the condition flags without the clobber
+  # name the processor's LLVM backend knows ("cc" is ignored on x86-64, and
+  # AArch64 needs "cc"), so the optimizer may keep a flag value live across
+  # it: the fault that broke milestone F3's x86-64 P-256 multiplication.
+  @[NoInline]
+  def self.leaky_flags_clobber(first : UInt64, second : UInt64) : UInt64
+    sum = 0_u64
+    {% if flag?(:x86_64) %}
+      asm("movq $1, $0\naddq $2, $0" : "=&r"(sum) : "r"(first), "r"(second) : "cc")
+    {% else %}
+      asm("adds $0, $1, $2" : "=r"(sum) : "r"(first), "r"(second))
+    {% end %}
+    sum
+  end
+
   # Reads a table entry at an index taken from a secret exponent byte, the
   # fault a modular exponentiation without a full-table scan would have.
   @[NoInline]
@@ -300,6 +315,7 @@ p256_shared = SecretFlowProbe.p256_key_agreement(key, p256_peer)
 p256_signature = SecretFlowProbe.p256_signing(key, plaintext)
 p256_signature_in_der = SecretFlowProbe.p256_signing_in_der(key, plaintext)
 is_verified &= SecretFlowProbe.leaky_limb_lookup(StaticArray(UInt64, 4).new { |index| key[index].to_u64 }) != 1_u64
+is_verified &= SecretFlowProbe.leaky_flags_clobber(key[0].to_u64, key[1].to_u64) != 0_u64
 is_verified &= ed25519_signature.size == 64 && p256_shared.size == 32 && p256_signature.size == 64 && p256_signature_in_der.size >= 8
 
 encrypted_message = SecretFlowProbe.sealed_message(plaintext, key)

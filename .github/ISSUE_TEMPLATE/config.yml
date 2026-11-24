@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem privately
+    url: https://github.com/amberframework/beryl/security/advisories/new
+    about: A timing or memory leak of a secret, a forgery Beryl accepts, or a chain it verifies that should fail. Please do not open a public issue.
+  - name: Ask a question without a GitHub account
+    url: https://amberframework.org
+    about: The Amber framework site, docs and community links.
+  - name: Need security or Amber work done for your business?
+    url: https://agentc.consulting
+    about: AgentC Consulting builds and maintains Beryl and Amber. Email agent_c@agentc.consulting.

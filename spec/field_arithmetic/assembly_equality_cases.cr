@@ -27,7 +27,38 @@ module AssemblyEquality
     end }
   end
 
+  # `P256FieldWithAssembly.half` has no fiat-crypto function of its own:
+  # its result r for an input a below p (the only inputs the curve code
+  # gives it) is checked by fiat-crypto's C `add`, which must give back a
+  # from r + r, and against the portable Crystal halving bit for bit.
+  macro halving_case
+    {"P256FieldWithAssembly", "half", ->(count : Int64, draw : InputDraw) do
+      differences = 0_i64
+      prime = Beryl::Crypto::FieldArithmetic::P256FieldWithAssembly::PRIME_WORDS
+      argument = StaticArray(UInt64, 4).new(0_u64)
+      count.times do
+        loop do
+          4.times { |index| argument[index] = draw.next_within(0_u64, UInt64::MAX) }
+          is_below_prime = false
+          3.downto(0) do |index|
+            next if argument[index] == prime[index]
+            is_below_prime = argument[index] < prime[index]
+            break
+          end
+          break if is_below_prime
+        end
+        halved = Beryl::Crypto::FieldArithmetic::P256FieldWithAssembly.half(argument)
+        doubled = StaticArray(UInt64, 4).new(0_u64)
+        LibFiatCryptoC.p256_64_add(doubled.to_unsafe, halved.to_unsafe, halved.to_unsafe)
+        portable = Beryl::Crypto::FieldArithmetic::FieldsInAssembly.half_portable(argument, prime)
+        differences += 1 unless doubled == argument && portable == halved
+      end
+      differences
+    end}
+  end
+
   LIST_OF_CASES = [
+    halving_case,
     equality_case(P256FieldWithAssembly, mul, p256_64_mul, 4, 2),
     equality_case(P256FieldWithAssembly, square, p256_64_square, 4, 1),
     equality_case(P256FieldWithAssembly, add, p256_64_add, 4, 2),
