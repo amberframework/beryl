@@ -45,6 +45,10 @@ jobs:
         run: |
           crystal build --no-codegen spec/differential/libcrypto_certificate_differential.cr
           crystal build --no-codegen spec/fuzz/der_parser_fuzz.cr
+      - name: Type-check the TLS examples
+        run: |
+          crystal build --no-codegen -Dwithout_openssl examples/https_server.cr
+          crystal build --no-codegen -Dwithout_openssl examples/https_client.cr
       - name: Run the quick suite (unit specs and every published vector)
         run: crystal spec
       - name: Run the quick suite again on the portable code alone
@@ -67,6 +71,15 @@ jobs:
           ldd no_libcrypto
           if ldd no_libcrypto | grep -E 'libssl|libcrypto'; then
             echo "the probe links OpenSSL"
+            exit 1
+          fi
+      - name: Prove the TLS example server and client link no OpenSSL
+        run: |
+          crystal build --release -Dwithout_openssl examples/https_server.cr -o https_server
+          crystal build --release -Dwithout_openssl examples/https_client.cr -o https_client
+          ldd https_server https_client
+          if ldd https_server https_client | grep -E 'libssl|libcrypto'; then
+            echo "a TLS example links OpenSSL"
             exit 1
           fi
 
