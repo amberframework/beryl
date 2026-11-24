@@ -29,7 +29,7 @@
       "script": "test-tls13-finished.py",
       "certificate": "rsa",
       "expected_failures": {
-        "pad_right (196608|16777167)$": "Beryl refuses a handshake message over its 64 KiB limit (plan §4) from the message header with illegal_parameter, before reading the body; tlsfuzzer expects decode_error. Both refuse."
+        "pad_right (131072|196608|16777183|16777167)$": "Beryl refuses a handshake message over its 64 KiB limit (plan §4) from the message header with illegal_parameter, before reading the body; tlsfuzzer expects decode_error. Both refuse."
       }
     },
     {
@@ -50,7 +50,14 @@
     },
     {
       "script": "test-tls13-keyupdate.py",
-      "certificate": "rsa"
+      "certificate": "rsa",
+      "arguments": [
+        "--coalescing"
+      ],
+      "arguments_reason": "Beryl answers every update_requested KeyUpdate that arrives before its next application data with a single KeyUpdate, as BoringSSL does and BoGo requires (KeyUpdate-Requested); RFC 9846 §4.6.3 allows either.",
+      "expected_failures": {
+        "^app data split, conversation with KeyUpdate msg$": "The script sends part of an HTTP request, then a KeyUpdate asking for an answer, and waits for that answer before sending the rest. Beryl, like BoringSSL, sends the answering KeyUpdate before its next application data record (RFC 9846 §4.6.3), and the example server writes nothing until the request is complete, so the script times out. The answer arrives first in every probe that lets the server reply."
+      }
     },
     {
       "script": "test-tls13-large-number-of-extensions.py",
@@ -147,7 +154,7 @@
       "script": "test-tls13-dhe-shared-secret-padding.py",
       "certificate": "rsa",
       "expected_failures": {
-        "x448|secp384r1|secp521r1": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
+        "x448|secp384r1|secp521r1|ffdhe2048|ffdhe3072": "Group not implemented; Beryl offers x25519 and secp256r1 (plan §2)."
       }
     },
     {

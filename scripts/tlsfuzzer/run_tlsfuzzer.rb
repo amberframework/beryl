@@ -11,9 +11,10 @@
 # 2. Builds OpenSSL 4.1.0 (scripts/interop/install_tools.rb, sha256
 #    checked) to make the test certificates, and the example server.
 # 3. Runs every script the config lists against a fresh server with the
-#    listed certificate, and reads the script's FAILED list. A failure
-#    passes the gate only when it matches one of the script's
-#    expected_failures patterns, each of which carries its reason; scripts
+#    listed certificate, running every probe (a script that samples its
+#    probes gets -n 0), and reads the script's FAILED list. A failure passes
+#    the gate only when it matches one of the script's expected_failures
+#    patterns, each of which carries its reason; scripts
 #    under not_run are listed in the report with theirs.
 # 4. Exits 1 when any failure is unexplained or a script ends without its
 #    summary.
@@ -104,8 +105,12 @@ results = []
 CONFIG.fetch("scripts").each do |entry|
   script = entry.fetch("script")
   pid, port = start_server(server, certificates, entry.fetch("certificate"))
+  # A script that samples its probes (num_limit) runs every one with -n 0,
+  # so each run checks the same probes.
+  application = File.join(work, "tlsfuzzer", "tlsfuzzer", "_apps", script.tr("-", "_"))
+  sampling = File.exist?(application) && File.read(application).include?("num_limit") ? ["-n", "0"] : []
   command = [options[:python], File.join(work, "tlsfuzzer", "scripts", script), "-h", "127.0.0.1", "-p", port.to_s,
-             *entry.fetch("arguments", [])]
+             *sampling, *entry.fetch("arguments", [])]
   started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
   output, = Open3.capture2e({ "PYTHONPATH" => python_path }, *command, chdir: File.join(work, "tlsfuzzer"))
   elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
