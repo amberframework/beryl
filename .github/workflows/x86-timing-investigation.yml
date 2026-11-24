@@ -8,36 +8,41 @@ permissions:
   contents: read
 
 jobs:
-  ci-replica:
-    name: CI timing step, repeated ${{ matrix.run }}
+  zen4-probe:
+    name: Probe on AMD Zen 4 ${{ matrix.run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
     steps:
       - name: Processor
+        id: processor
         run: |
           lscpu
           grep -m1 microcode /proc/cpuinfo
+          if grep -q 'EPYC 9V74' /proc/cpuinfo; then echo "zen4=yes" >> "$GITHUB_OUTPUT"; else echo "zen4=no" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        if: steps.processor.outputs.zen4 == 'yes'
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        if: steps.processor.outputs.zen4 == 'yes'
         with:
           crystal: 1.21.0
-      - run: shards install --frozen --skip-postinstall --skip-executables
-      - run: ruby scripts/fetch_vectors.rb --missing
-      - name: Build the suite once, as crystal spec builds it
+      - if: steps.processor.outputs.zen4 == 'yes'
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: Build both
+        if: steps.processor.outputs.zen4 == 'yes'
         run: |
-          find spec -name '*_spec.cr' | sort | sed 's|^\(.*\)\.cr$|require "./\1"|' > all_specs.cr
-          crystal build --release all_specs.cr -o all_specs
-      - name: Run CI's timing step six times
-        env:
-          BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
-          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
+          crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o probe_assembly
+          crystal build --release -Dwithout_openssl -Dberyl_portable_curves spec/probes/curve_timing_probe.cr -o probe_portable
+      - name: Time every case on both builds, pinned to one processor
+        if: steps.processor.outputs.zen4 == 'yes'
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for repetition in 1 2 3 4 5 6; do
-            ./all_specs --tag constant_time --tag "~rsa_constant_time" > out.txt 2>&1 || true
-            grep -oE "constant time, (X25519|Ed25519|P-256|RFC 6979)[^:]*: [0-9]+ measurements per class, largest \|t\| = [0-9.]+" out.txt | sed "s/^/RESULT | $model | rep $repetition | /"
+          for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed double-neutral double-fixed add-zero-entry add-fixed-entry field-mul-zero field-mul-fixed x25519-zero x25519-fixed; do
+            for build in assembly portable; do
+              line=$(taskset -c 1 ./probe_$build $case_name 1000000)
+              echo "RESULT | $model | $build | $line"
+            done
           done

@@ -104,7 +104,9 @@ class TimingLeakMeasurement
 
   private def record(is_second_class : Bool, nanoseconds : Float64) : Nil
     list_of_statistics = is_second_class ? @statistics_of_second_class : @statistics_of_first_class
-    list_of_statistics[0] = list_of_statistics[0].tap(&.add(nanoseconds))
+    uncut = list_of_statistics[0]
+    uncut.add(nanoseconds)
+    list_of_statistics[0] = uncut
     @list_of_crop_thresholds.each_with_index do |threshold, index|
       next unless nanoseconds < threshold
 

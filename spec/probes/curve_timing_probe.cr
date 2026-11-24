@@ -45,6 +45,24 @@ module CurveTimingProbe
     product
   end
 
+  # 16 doublings in a chain.
+  @[NoInline]
+  def self.timed_doublings(point : P256::Arithmetic::Point) : P256::Arithmetic::Point
+    16.times { point = point.double }
+    point
+  end
+
+  # 16 mixed additions of *entry* in a chain, kept or dropped by *is_zero*.
+  @[NoInline]
+  def self.timed_mixed_additions(point : P256::Arithmetic::Point, entry : P256::Arithmetic::AffinePoint, is_zero : UInt64) : P256::Arithmetic::Point
+    16.times { point = point.add_affine(entry, is_zero) }
+    point
+  end
+
+  def self.random_point(generator : Random::PCG32) : P256::Arithmetic::Point
+    P256::Arithmetic.multiply_generator(random_p256_scalar(generator))
+  end
+
   def self.slot_of(storage : Bytes, slot : Int32) : Bytes
     storage[slot * SCALAR_BYTESIZE, SCALAR_BYTESIZE]
   end
@@ -118,6 +136,29 @@ module CurveTimingProbe
         nil
       end
       measurement.run(fill_batch, prepare) { |slot| sink &+= timed_field_chain(list_of_first[slot], second)[0] }
+    when "double-neutral", "double-fixed"
+      fixed_point = case_name.ends_with?("neutral") ? P256::Arithmetic::Point.neutral : random_point(generator)
+      list_of_points = Array(P256::Arithmetic::Point).new(BATCH_SIZE, fixed_point)
+      fill_batch = ->(list_of_classes : Array(Bool)) do
+        list_of_classes.each_with_index { |is_second_class, slot| list_of_points[slot] = is_second_class ? random_point(generator) : fixed_point }
+        nil
+      end
+      measurement.run(fill_batch, prepare) { |slot| sink &+= timed_doublings(list_of_points[slot]).x[0] }
+    when "add-zero-entry", "add-fixed-entry"
+      running = random_point(generator)
+      table = P256::Arithmetic.generator_window_tables
+      fixed_entry = case_name == "add-zero-entry" ? P256::Arithmetic::AffinePoint.new(StaticArray(UInt64, 4).new(0_u64), StaticArray(UInt64, 4).new(0_u64)) : table[3][5]
+      fixed_is_zero = case_name == "add-zero-entry" ? 1_u64 : 0_u64
+      list_of_entries = Array(P256::Arithmetic::AffinePoint).new(BATCH_SIZE, fixed_entry)
+      list_of_is_zero = Array(UInt64).new(BATCH_SIZE, 0_u64)
+      fill_batch = ->(list_of_classes : Array(Bool)) do
+        list_of_classes.each_with_index do |is_second_class, slot|
+          list_of_entries[slot] = is_second_class ? table[generator.rand(40) + 1][generator.rand(16)] : fixed_entry
+          list_of_is_zero[slot] = is_second_class ? 0_u64 : fixed_is_zero
+        end
+        nil
+      end
+      measurement.run(fill_batch, prepare) { |slot| sink &+= timed_mixed_additions(running, list_of_entries[slot], list_of_is_zero[slot]).x[0] }
     else
       abort "unknown case #{case_name}"
     end
