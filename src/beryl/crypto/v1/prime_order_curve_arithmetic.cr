@@ -626,10 +626,11 @@ module Beryl::Crypto::V1
     # of those e, which a spec checks for both curves. The stand-in changes
     # every window, because the same operands window after window (a
     # stand-in chosen afresh each time) still ran faster on AMD EPYC 9V74
-    # for the key 1. A digit d = 0 reads [1]P and drops
-    # the sum: then H_i = 32·H with H >= 1, and 32·H - 1 and 32·H + 1 lie
-    # strictly between 0 and n + 1, so [32·H]P is not ±P either (32·H + 1
-    # = n would need H_i = n - 1, whose sum is dropped all the same). The
+    # for the key 1. A digit d = 0 reads [j]P, j = 1 + (i mod 16), a
+    # different multiple from one window to the next, and drops the sum:
+    # then H_i = 32·H with H >= 1, so 32·H - j lies strictly between 0 and
+    # n, and [32·H]P is not [j]P; it is -[j]P only if H_i = n - j, a sum
+    # that is dropped all the same. The
     # top window starts the sum directly: doubling infinity five times and
     # adding [d]P to it would give [d]P all the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
@@ -650,12 +651,14 @@ module Beryl::Crypto::V1
     # Returns [d]P for the signed digit d of *scalar* at *window_index*,
     # from the 16 points at *multiples* (the multiple picked by reading all
     # 16, negated by mask when d < 0), and 1 when d = 0, else 0. For d = 0
-    # the point is P, a real point for the caller to compute on and drop.
+    # the point is [1 + (window_index mod 16)]P, a real point for the caller
+    # to compute on and drop.
     @[AlwaysInline]
     def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : {Point, UInt64}
       digit, is_negative = booth_digit(scalar, window_index)
       is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
-      selected = select_multiple(multiples, digit &- 1_u64 &+ is_zero)
+      stand_in_index = (window_index & 15).to_u64
+      selected = select_multiple(multiples, (digit &- 1_u64) &+ (ConstantTimeSelection.mask_of(is_zero) & (stand_in_index &+ 1_u64)))
       {Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z), is_zero}
     end
 
