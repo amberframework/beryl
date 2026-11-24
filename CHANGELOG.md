@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+- **TLS security review follow-ups** (review of fa2cd41, items M4, L1, L2,
+  L3, L5, L6, L8):
+  - Handshakes wipe every secret they derive in an `ensure`, including on
+    failure; connections wipe the traffic, exporter and resumption master
+    secrets and the record IVs at close and after a failure (M4).
+  - A plaintext alert read while keys are installed raises
+    `UnauthenticatedAlert` instead of passing as the peer's alert (L1).
+  - Duplicate extensions and key shares are found with sets, so a
+    ClientHello of many entries is checked in linear time (L2).
+  - change_cipher_spec is refused before the first ClientHello and between
+    the fragments of a handshake message (L3).
+  - A ticket issued in the future is never resumed (L5).
+  - A client ticket records the certificate verifier of its connection and
+    is offered only by a context with the same verifier (L6).
+  - A sending key moves on with an automatic KeyUpdate after
+    `Limits#largest_record_count_per_key` records (16,777,216 by default);
+    `Context::Server#session_ticket_count=` accepts 0 to 16 (L8).
+  - The client sends its own `record_size_limit` (RFC 8449) and the server
+    answers with its own; both come from `Limits#record_size_limit` and
+    are enforced on what each end reads once both sent one.
+
 ## 0.1.0 (2026-11-24)
 
 The first release: cryptography for Amber V2 in pure Crystal. A program

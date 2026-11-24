@@ -155,7 +155,8 @@ module TlsHandshakeFuzz
         hash = outcome.cipher_suite.hash_algorithm
         client_context.session_cache.store(TLS::SessionTicket.new("localhost", outcome.cipher_suite,
           TLS::KeySchedule.resumption_pre_shared_key(hash, outcome.resumption_master_secret, ticket.ticket_nonce),
-          ticket.ticket, ticket.ticket_age_add, Time.instant, ticket.ticket_lifetime.seconds, outcome.alpn_protocol))
+          ticket.ticket, ticket.ticket_age_add, Time.instant, ticket.ticket_lifetime.seconds, outcome.alpn_protocol,
+          client_context.certificate_verifier))
       end
     end
     client_io.close
