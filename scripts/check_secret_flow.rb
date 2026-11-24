@@ -80,16 +80,18 @@ CIPHER_OBJECT_METHOD = /AuthenticatedEncryption|GaloisCounterMode|CipherBlockCha
 SECRET_VALUE_FUNCTION = /FieldArithmetic::|Curve25519FieldElement[\#:]|DiffieHellmanOverCurve25519::ladder|
                          Edwards25519Group::(?:Point\#(?:add|double|negate|select|encode)|multiply_base|multiply_constant_time|
                          Scalar::(?:reduce|chunk|encode|multiply_add))|
-                         ::Arithmetic::(?:Point\#(?:add|double|negate|replace_if)|multiply_constant_time|multiply_generator|
-                         multiples_of|signed_multiple|to_affine|field_|scalar_power|scalar_invert|reduce_once_modulo_order|limbs_|x_coordinate_modulo_order|below_bit)|
+                         ::Arithmetic::(?:Point\#(?:add(?!_public|_affine_public)|double|negate|replace_if)|multiply_constant_time|multiply_generator|
+                         multiples_of|signed_multiple|to_affine(?!_together)|field_|scalar_power|scalar_invert|reduce_once_modulo_order|limbs_|x_coordinate_modulo_order|below_bit)|
                          ConstantTimeSelection::|DeterministicSignatureNonce|SecretFlowProbe::leaky_limb_lookup/x.freeze
 PUBLIC_ARGUMENT = /\A%(?:exponent|count|start|bytesize)\z/.freeze
 
 # Functions written for public data: the signature encoder, whose input is
-# a signature about to be returned. They may branch on what they are given,
-# so a secret must not reach one unless it went through
-# Declassification.reveal first; the check reports it when one does.
-PUBLIC_DATA_FUNCTION = /EllipticCurveSignatureEncoding::/.freeze
+# a signature about to be returned, and the curve additions and the batch
+# conversion to affine coordinates that build the precomputed tables and
+# verify signatures. They may branch on what they are given, so a secret
+# must not reach one unless it went through Declassification.reveal first;
+# the check reports it when one does.
+PUBLIC_DATA_FUNCTION = /EllipticCurveSignatureEncoding::|::Arithmetic::(?:Point\#add_public|Point\#add_affine_public|to_affine_together)</.freeze
 
 # The one place a verdict computed from secrets may decide what happens
 # next (src/beryl/crypto/declassification.cr). Its result is public.
