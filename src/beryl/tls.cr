@@ -5,6 +5,9 @@ require "./tls/error"
 require "./tls/hash_algorithm"
 require "./tls/transcript_hash"
 require "./tls/key_schedule"
+require "./tls/limits"
+require "./tls/record_protection"
+require "./tls/record_layer"
 
 # TLS 1.3 (RFC 9846) written in Crystal, on Beryl's own cryptography.
 #
