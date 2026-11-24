@@ -2,8 +2,6 @@
 
 ## 0.2.0 (2026-11-24)
 
-## 0.2.0 (2026-11-24)
-
 TLS 1.3, client and server, in pure Crystal. A program that serves or
 fetches HTTPS through Beryl links no OpenSSL. TLS 1.3 is the only version
 Beryl speaks.
