@@ -311,6 +311,19 @@ describe "Beryl::TLS handshakes over a socket pair" do
       end
     end
 
+    it "answers closed? after close, closes once, and refuses IO after it as a closed stream" do
+      TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        client.closed?.should be_false
+        client.close
+        client.closed?.should be_true
+        client.close
+        expect_raises(IO::Error, "Closed stream") { client.print "x"; client.flush }
+        expect_raises(IO::Error, "Closed stream") { client.read_byte }
+        server.gets_to_end.should eq("")
+      end
+    end
+
     it "exports the same keying material on both ends" do
       TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
         client, server = expect_connected(client_result, server_result)
