@@ -8,10 +8,10 @@ permissions:
   contents: read
 
 jobs:
-  zen4-probe:
-    name: Probe on processors other than Xeon 6975P-C ${{ matrix.run }}
+  before-and-after:
+    name: Main against the fix, on the runner's processor ${{ matrix.run }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -22,27 +22,42 @@ jobs:
         run: |
           lscpu
           grep -m1 microcode /proc/cpuinfo
-          if ! grep -q '6975P-C' /proc/cpuinfo; then echo "zen4=yes" >> "$GITHUB_OUTPUT"; else echo "zen4=no" >> "$GITHUB_OUTPUT"; fi
+          if grep -q 'EPYC 9V74' /proc/cpuinfo; then echo "measure=yes" >> "$GITHUB_OUTPUT"; else echo "measure=no" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        if: steps.processor.outputs.zen4 == 'yes'
+        if: steps.processor.outputs.measure == 'yes'
+        with:
+          fetch-depth: 0
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
-        if: steps.processor.outputs.zen4 == 'yes'
+        if: steps.processor.outputs.measure == 'yes'
         with:
           crystal: 1.21.0
-      - if: steps.processor.outputs.zen4 == 'yes'
-        run: shards install --frozen --skip-postinstall --skip-executables
-      - name: Build both
-        if: steps.processor.outputs.zen4 == 'yes'
+      - name: Build the probe from main and from the fix
+        if: steps.processor.outputs.measure == 'yes'
         run: |
-          crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o probe_assembly
-          crystal build --release -Dwithout_openssl -Dberyl_portable_curves spec/probes/curve_timing_probe.cr -o probe_portable
-      - name: Time every case on both builds, pinned to one processor
-        if: steps.processor.outputs.zen4 == 'yes'
+          for side in main x86-timing-gate; do
+            git worktree add "../$side" "origin/$side"
+            cp spec/probes/curve_timing_probe.cr "../$side/spec/probes/"
+            cp spec/support/timing_leak_measurement.cr "../$side/spec/support/"
+            (cd "../$side" && shards install --frozen --skip-postinstall --skip-executables && crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o "$GITHUB_WORKSPACE/probe_$side")
+          done
+      - name: Time main and the fix in turn, pinned to one processor
+        if: steps.processor.outputs.measure == 'yes'
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed double-neutral double-fixed add-zero-entry add-fixed-entry field-mul-zero field-mul-fixed x25519-zero x25519-fixed; do
-            for build in assembly portable; do
-              line=$(taskset -c 1 ./probe_$build $case_name 1000000)
-              echo "RESULT | $model | $build | $line"
+          for round in 1 2; do
+            for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed; do
+              for side in main x86-timing-gate; do
+                line=$(taskset -c 1 ./probe_$side $case_name 1000000)
+                echo "RESULT | $model | $side | round $round | $line"
+              done
             done
           done
+      - name: The fix's CI timing step (two runs of three per check)
+        if: steps.processor.outputs.measure == 'yes'
+        env:
+          BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
+          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
+        run: |
+          cd ../x86-timing-gate
+          crystal build --release spec/constant_time/hmac_timing_spec.cr spec/constant_time/cipher_timing_spec.cr spec/constant_time/public_key_timing_spec.cr -o constant_time_specs
+          taskset -c 1 ./constant_time_specs --tag constant_time | grep -E "constant time|examples"
