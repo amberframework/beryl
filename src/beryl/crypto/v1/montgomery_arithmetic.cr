@@ -23,8 +23,11 @@ module Beryl::Crypto::V1
   # it multiplies two numbers in Montgomery form and keeps the result in it.
   module MontgomeryArithmetic
     # Window of the constant-time exponentiation, in exponent bits: a table
-    # of 2^WINDOW_BIT_COUNT powers is built and read once per window.
-    WINDOW_BIT_COUNT  = 4
+    # of 2^WINDOW_BIT_COUNT powers is built and read once per window. Five
+    # bits cost one multiplication per five squarings, and reading the 32
+    # entries costs less than the multiplications a four-bit window adds
+    # for exponents of 1,024 bits and more.
+    WINDOW_BIT_COUNT  = 5
     TABLE_ENTRY_COUNT = 1 << WINDOW_BIT_COUNT
 
     # Returns *value* unchanged, through an empty piece of inline assembly
@@ -143,8 +146,7 @@ module Beryl::Crypto::V1
     # `negated_inverse_of_low_word(modulus[0])`. *b* must be below the
     # modulus; *a* may be any number of as many words (its product with *b*
     # still reduces to below the modulus). *result* may be *a* or *b*.
-    # *scratch* holds at least `modulus.size + 2` words.
-    #
+    # *scratch* holds at least `multiplication_scratch_word_count` words.
     def self.multiply(result : Slice(UInt64), a : Slice(UInt64), b : Slice(UInt64), modulus : Slice(UInt64),
                       negated_inverse : UInt64, scratch : Slice(UInt64)) : Nil
       result_pointer, a_pointer, b_pointer = result.to_unsafe, a.to_unsafe, b.to_unsafe
@@ -158,7 +160,7 @@ module Beryl::Crypto::V1
             MontgomeryMultiplicationInAssembly.multiply_16(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse)
           {% else %}
             MontgomeryMultiplicationInAssembly.multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer,
-              negated_inverse, accumulator)
+              negated_inverse, scratch[0, 2 * {{ word_count }} + 2].to_unsafe)
           {% end %}
         {% else %}
           multiply_{{ word_count }}(result_pointer, a_pointer, b_pointer, modulus_pointer, negated_inverse, accumulator)
@@ -170,20 +172,37 @@ module Beryl::Crypto::V1
       {% end %}
     end
 
-    # Sets *result* to a·a/R mod *modulus*, the same as `multiply(result, a,
-    # a, ...)`. *scratch* holds `2 * modulus.size + 2` words; *result* may
-    # be *a*. On AArch64, 16-word numbers (the primes of a 2,048-bit key)
-    # take `MontgomeryMultiplicationInAssembly.square_16`.
+    # Sets *result* to a·a/R mod *modulus* (*a* below it), the same as
+    # `multiply(result, a, a, ...)`. *scratch* holds
+    # `multiplication_scratch_word_count` words; *result* may be *a*. On
+    # AArch64 the specialized word counts take the squarings of
+    # `MontgomeryMultiplicationInAssembly`, which form each product
+    # a_i·a_j once.
     def self.square(result : Slice(UInt64), a : Slice(UInt64), modulus : Slice(UInt64), negated_inverse : UInt64,
                     scratch : Slice(UInt64)) : Nil
       {% if flag?(:aarch64) && !flag?(:beryl_portable_rsa) %}
-        if modulus.size == 16
-          MontgomeryMultiplicationInAssembly.square_16(result.to_unsafe, a.to_unsafe, modulus.to_unsafe, negated_inverse,
-            scratch[0, 32].to_unsafe)
-          return
-        end
+        {% begin %}
+          case modulus.size
+          when 16
+            MontgomeryMultiplicationInAssembly.square_16(result.to_unsafe, a.to_unsafe, modulus.to_unsafe, negated_inverse,
+              scratch[0, 32].to_unsafe)
+            return
+          {% for word_count in SPECIALIZED_WORD_COUNTS.reject { |count| count == 16 } %}
+          when {{ word_count }}
+            MontgomeryMultiplicationInAssembly.square_{{ word_count }}(result.to_unsafe, a.to_unsafe, modulus.to_unsafe,
+              negated_inverse, scratch[0, 2 * {{ word_count }} + 2].to_unsafe)
+            return
+          {% end %}
+          end
+        {% end %}
       {% end %}
       multiply(result, a, a, modulus, negated_inverse, scratch)
+    end
+
+    # The number of words of scratch `multiply` and `square` need for a
+    # modulus of *word_count* words.
+    def self.multiplication_scratch_word_count(word_count : Int32) : Int32
+      2 * word_count + 2
     end
 
     # The word counts of the moduli and primes of 2,048, 3,072 and 4,096-bit
@@ -291,17 +310,36 @@ module Beryl::Crypto::V1
       end
     end
 
-    # Sets *result* to R² mod *modulus*, without dividing: 1 is doubled
-    # modulo the modulus 64n + n times, giving R·2^n mod m, and six
+    # Sets *result* to R² mod *modulus*, a modulus of *bit_count* bits (its
+    # bit length, public), without dividing. 2^b mod m, for b the bit
+    # length, is 2^b - m, which is -m mod 2^(64n) cut to its low b bits;
+    # doubling that modulo m 64n + n - b times gives R·2^n mod m, and six
     # Montgomery squarings take R·2^a to R·2^(2a) each, ending at
-    # R·2^(64n) = R² mod m. The modulus must be odd and above 1.
-    # *scratch* holds `2 * modulus.size` words.
-    def self.compute_r_squared(result : Slice(UInt64), modulus : Slice(UInt64), negated_inverse : UInt64,
+    # R·2^(64n) = R² mod m. Starting from 2^b rather than from 1 saves about
+    # 64n doublings. The modulus must be odd and above 1. *scratch* holds
+    # `multiplication_scratch_word_count` words.
+    def self.compute_r_squared(result : Slice(UInt64), modulus : Slice(UInt64), bit_count : Int32, negated_inverse : UInt64,
                                scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
-      result.fill(0_u64)
-      result[0] = 1_u64
-      (64 * word_count + word_count).times { double(result, modulus, scratch) }
+      borrow = 0_u64
+      word_count.times do |index|
+        difference = 0_u128 &- modulus[index].to_u128 &- borrow.to_u128
+        result[index] = difference.to_u64!
+        borrow = (difference >> 127).to_u64!
+      end
+      word_count.times do |index|
+        low_bit = 64 * index
+        if low_bit >= bit_count
+          result[index] = 0_u64
+        elsif bit_count - low_bit < 64
+          result[index] &= (1_u64 << (bit_count - low_bit)) &- 1_u64
+        end
+      end
+      # A modulus shorter than *bit_count* says (only the probes build one)
+      # leaves the value above it; one subtraction keeps it in range there.
+      result.copy_to(scratch[0, word_count])
+      subtract_modulus_when_not_below(result, scratch[0, word_count], 0_u64, modulus)
+      (64 * word_count + word_count - bit_count).times { double(result, modulus, scratch) }
       6.times { multiply(result, result, result, modulus, negated_inverse, scratch) }
     end
 
@@ -322,14 +360,14 @@ module Beryl::Crypto::V1
     # step multiplying by R and adding the next chunk, all in Montgomery
     # form (multiplying a chunk below R by R² mod m gives the chunk's
     # Montgomery form, reduced). Nothing is divided. *scratch* holds
-    # `3 * modulus.size + 2` words.
+    # `2 * modulus.size + multiplication_scratch_word_count` words.
     def self.reduce_to_montgomery_form(result : Slice(UInt64), value : Slice(UInt64), modulus : Slice(UInt64),
                                        r_squared : Slice(UInt64), negated_inverse : UInt64,
                                        scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
       chunk = scratch[0, word_count]
       chunk_in_montgomery_form = scratch[word_count, word_count]
-      multiplication_scratch = scratch[2 * word_count, word_count + 2]
+      multiplication_scratch = scratch[2 * word_count, multiplication_scratch_word_count(word_count)]
       chunk_count = (value.size + word_count - 1) // word_count
       result.fill(0_u64)
       (chunk_count - 1).downto(0) do |chunk_index|
@@ -345,7 +383,7 @@ module Beryl::Crypto::V1
 
     # The number of words of scratch `exponentiate` needs.
     def self.exponentiation_scratch_word_count(word_count : Int32) : Int32
-      TABLE_ENTRY_COUNT * word_count + 3 * word_count
+      TABLE_ENTRY_COUNT * word_count + word_count + multiplication_scratch_word_count(word_count)
     end
 
     # Sets *result* to base^exponent·R mod *modulus* (the Montgomery form
@@ -360,18 +398,24 @@ module Beryl::Crypto::V1
       word_count = modulus.size
       table = scratch[0, TABLE_ENTRY_COUNT * word_count]
       selected = scratch[TABLE_ENTRY_COUNT * word_count, word_count]
-      multiplication_scratch = scratch[TABLE_ENTRY_COUNT * word_count + word_count, 2 * word_count]
+      multiplication_scratch = scratch[TABLE_ENTRY_COUNT * word_count + word_count, multiplication_scratch_word_count(word_count)]
 
-      # table[0] = R mod m (one, in Montgomery form), table[1] = base,
-      # table[i] = table[i - 1]·base.
+      # table[0] = R mod m (one, in Montgomery form), table[1] = base, each
+      # even entry the square of the entry half its index, and each odd
+      # entry the one before it times the base.
       one = selected
       one.fill(0_u64)
       one[0] = 1_u64
       multiply(table[0, word_count], one, r_squared, modulus, negated_inverse, multiplication_scratch)
       base_in_montgomery_form.copy_to(table[word_count, word_count])
       (2...TABLE_ENTRY_COUNT).each do |entry|
-        multiply(table[entry * word_count, word_count], table[(entry - 1) * word_count, word_count],
-          base_in_montgomery_form, modulus, negated_inverse, multiplication_scratch)
+        if entry.even?
+          square(table[entry * word_count, word_count], table[(entry // 2) * word_count, word_count], modulus,
+            negated_inverse, multiplication_scratch)
+        else
+          multiply(table[entry * word_count, word_count], table[(entry - 1) * word_count, word_count],
+            base_in_montgomery_form, modulus, negated_inverse, multiplication_scratch)
+        end
       end
 
       table[0, word_count].copy_to(result)
@@ -426,20 +470,23 @@ module Beryl::Crypto::V1
     end
 
     # Sets *result* to base^exponent mod *modulus* for a public *exponent*
-    # (an RSA public exponent), by left-to-right square and multiply. Its
-    # time depends on the exponent's bits, which are public, and not on
-    # the base. *scratch* holds `3 * modulus.size` words.
+    # (an RSA public exponent) and a *base* below the modulus, by left to
+    # right square and multiply: the base enters Montgomery form (a
+    # multiplication by R²), and the power leaves it (a multiplication by
+    # 1). Its time depends on the exponent's bits, which are public, and
+    # not on the base. *scratch* holds
+    # `public_exponentiation_scratch_word_count` words.
     def self.exponentiate_by_public_exponent(result : Slice(UInt64), base : Slice(UInt64), exponent : UInt64,
                                              modulus : Slice(UInt64), r_squared : Slice(UInt64),
                                              negated_inverse : UInt64, scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
       base_in_montgomery_form = scratch[0, word_count]
-      multiplication_scratch = scratch[word_count, 2 * word_count]
+      multiplication_scratch = scratch[word_count, multiplication_scratch_word_count(word_count)]
       multiply(base_in_montgomery_form, base, r_squared, modulus, negated_inverse, multiplication_scratch)
       base_in_montgomery_form.copy_to(result)
       highest_bit = 63 - exponent.leading_zeros_count
       (highest_bit - 1).downto(0) do |bit_position|
-        multiply(result, result, result, modulus, negated_inverse, multiplication_scratch)
+        square(result, result, modulus, negated_inverse, multiplication_scratch)
         if (exponent >> bit_position) & 1_u64 == 1_u64
           multiply(result, result, base_in_montgomery_form, modulus, negated_inverse, multiplication_scratch)
         end
@@ -447,15 +494,69 @@ module Beryl::Crypto::V1
       leave_montgomery_form(result, modulus, negated_inverse, scratch)
     end
 
+    # `exponentiate_by_public_exponent` with one multiplication fewer, for
+    # a key used more than once: left to right square and multiply on the
+    # plain base, with no conversion into Montgomery form. A Montgomery
+    # square or product of values of the form x^k/R^(k-1) keeps that form
+    # (x^(2k)/R^(2k-1), x^(k+1)/R^k), so the chain ends at x^e/R^(e-1), and
+    # one multiplication by *correction* = R^e mod m
+    # (`compute_public_exponent_correction`) gives x^e mod m.
+    def self.exponentiate_by_public_exponent_with_correction(result : Slice(UInt64), base : Slice(UInt64), exponent : UInt64,
+                                                             modulus : Slice(UInt64), correction : Slice(UInt64),
+                                                             negated_inverse : UInt64, scratch : Slice(UInt64)) : Nil
+      word_count = modulus.size
+      multiplication_scratch = scratch[word_count, multiplication_scratch_word_count(word_count)]
+      plain_base = scratch[0, word_count]
+      base.copy_to(plain_base)
+      plain_base.copy_to(result)
+      highest_bit = 63 - exponent.leading_zeros_count
+      (highest_bit - 1).downto(0) do |bit_position|
+        square(result, result, modulus, negated_inverse, multiplication_scratch)
+        if (exponent >> bit_position) & 1_u64 == 1_u64
+          multiply(result, result, plain_base, modulus, negated_inverse, multiplication_scratch)
+        end
+      end
+      multiply(result, result, correction, modulus, negated_inverse, multiplication_scratch)
+    end
+
+    # Sets *result* to R^exponent mod *modulus*, the correction
+    # `exponentiate_by_public_exponent_with_correction` multiplies by: R² mod m is the
+    # Montgomery form of R, its Montgomery power is the Montgomery form of
+    # R^e, and leaving Montgomery form gives R^e mod m. The exponent is
+    # public. *scratch* holds `public_exponentiation_scratch_word_count`
+    # words.
+    def self.compute_public_exponent_correction(result : Slice(UInt64), exponent : UInt64, modulus : Slice(UInt64),
+                                                r_squared : Slice(UInt64), negated_inverse : UInt64,
+                                                scratch : Slice(UInt64)) : Nil
+      word_count = modulus.size
+      multiplication_scratch = scratch[word_count, multiplication_scratch_word_count(word_count)]
+      r_squared.copy_to(result)
+      highest_bit = 63 - exponent.leading_zeros_count
+      (highest_bit - 1).downto(0) do |bit_position|
+        square(result, result, modulus, negated_inverse, multiplication_scratch)
+        if (exponent >> bit_position) & 1_u64 == 1_u64
+          multiply(result, result, r_squared, modulus, negated_inverse, multiplication_scratch)
+        end
+      end
+      leave_montgomery_form(result, modulus, negated_inverse, scratch)
+    end
+
+    # The number of words of scratch `exponentiate_by_public_exponent` and
+    # `leave_montgomery_form` need.
+    def self.public_exponentiation_scratch_word_count(word_count : Int32) : Int32
+      word_count + multiplication_scratch_word_count(word_count)
+    end
+
     # Sets *value* (in Montgomery form) to its plain form: a Montgomery
-    # multiplication by 1. *scratch* holds `2 * modulus.size + 2` words.
+    # multiplication by 1. *scratch* holds
+    # `public_exponentiation_scratch_word_count` words.
     def self.leave_montgomery_form(value : Slice(UInt64), modulus : Slice(UInt64), negated_inverse : UInt64,
                                    scratch : Slice(UInt64)) : Nil
       word_count = modulus.size
       one = scratch[0, word_count]
       one.fill(0_u64)
       one[0] = 1_u64
-      multiply(value, value, one, modulus, negated_inverse, scratch[word_count, word_count + 2])
+      multiply(value, value, one, modulus, negated_inverse, scratch[word_count, multiplication_scratch_word_count(word_count)])
     end
 
     # Sets *result* (`a.size + b.size` words) to the full product a·b.

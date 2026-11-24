@@ -127,31 +127,35 @@ end
 
 if RequestedSpecTag.includes?("constant_time") || RequestedSpecTag.includes?("rsa_constant_time")
   describe "RSA timing", tags: ["constant_time", "rsa_constant_time"] do
-    it "the private operation takes the same time for a fixed input and for random inputs (2,048 bits)" do
-      test_file = Wycheproof::TestFile(Wycheproof::RsaOaepTestGroup).from_json(
-        VectorFile.read("wycheproof/rsa_oaep_2048_sha256_mgf1sha256_test.json")
-      )
-      private_key = RsaKeyComponents.from_wycheproof(test_file.list_of_test_groups.first.private_key).private_key
-      modulus_bytesize = private_key.modulus_bytesize
-      measurement, generator = RsaTimingCheck.new_measurement(31_u64)
-      fixed_input = RsaTimingCheck.random_input_below_modulus(modulus_bytesize, generator)
-      list_of_inputs = Bytes.new(RsaTimingCheck::BATCH_SIZE * modulus_bytesize)
-      random_source = Bytes.new(list_of_inputs.size)
-      output = Bytes.new(modulus_bytesize)
-
-      fill_batch = ->(list_of_classes : Array(Bool)) do
-        CipherTimingCheck.fill_fixed_value_against_random(list_of_inputs, fixed_input, random_source, list_of_classes, generator)
-        RsaTimingCheck::BATCH_SIZE.times { |slot| list_of_inputs[slot * modulus_bytesize] = 0_u8 }
-        nil
+    # 2,048 bits runs the 16-word register kernel; 3,072 and 4,096 run the
+    # strip kernels of 24 and 32 words.
+    {% for bits in [2048, 3072, 4096] %}
+      it "the private operation takes the same time for a fixed input and for random inputs ({{ bits }} bits)" do
+        test_file = Wycheproof::TestFile(Wycheproof::RsaOaepTestGroup).from_json(
+          VectorFile.read("wycheproof/rsa_oaep_{{ bits }}_sha256_mgf1sha256_test.json")
+        )
+        private_key = RsaKeyComponents.from_wycheproof(test_file.list_of_test_groups.first.private_key).private_key
+        modulus_bytesize = private_key.modulus_bytesize
+        measurement, generator = RsaTimingCheck.new_measurement(31_u64)
+        fixed_input = RsaTimingCheck.random_input_below_modulus(modulus_bytesize, generator)
+        list_of_inputs = Bytes.new(RsaTimingCheck::BATCH_SIZE * modulus_bytesize)
+        random_source = Bytes.new(list_of_inputs.size)
+        output = Bytes.new(modulus_bytesize)
+  
+        fill_batch = ->(list_of_classes : Array(Bool)) do
+          CipherTimingCheck.fill_fixed_value_against_random(list_of_inputs, fixed_input, random_source, list_of_classes, generator)
+          RsaTimingCheck::BATCH_SIZE.times { |slot| list_of_inputs[slot * modulus_bytesize] = 0_u8 }
+          nil
+        end
+        prepare = ->(slot : Int32) { nil }
+        measurement.run(fill_batch, prepare) do |slot|
+          private_key.compute_private_operation(HmacTimingCheck.slot_of(list_of_inputs, slot, modulus_bytesize), output)
+        end
+  
+        HmacTimingCheck.report("RSA-{{ bits }} private operation, fixed input against random inputs", measurement)
+        measurement.shows_no_leak?.should be_true
       end
-      prepare = ->(slot : Int32) { nil }
-      measurement.run(fill_batch, prepare) do |slot|
-        private_key.compute_private_operation(HmacTimingCheck.slot_of(list_of_inputs, slot, modulus_bytesize), output)
-      end
-
-      HmacTimingCheck.report("RSA-2048 private operation, fixed input against random inputs", measurement)
-      measurement.shows_no_leak?.should be_true
-    end
+    {% end %}
 
     it "OAEP decoding takes the same time for well-formed encodings and for encodings broken at any place" do
       generator = Random::PCG32.new(Random::Secure.rand(UInt64), 32_u64)

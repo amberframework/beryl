@@ -213,33 +213,35 @@ The Wycheproof files that carry private keys (`rsa_oaep_*`, `rsa_pkcs1_*_sig_gen
 
 #### Constant time, three methods
 
-- Timing (`spec/constant_time/rsa_timing_spec.cr`, dudect's method): the private operation on a fixed input against random inputs, OAEP decoding of well-formed encodings against encodings broken at any place, and of encodings broken at the first byte against ones broken before the separator; |t| < 4.5. A planted early exit in OAEP decoding is reported. 200,000 measurements per class on the build Mac for each pull request, 50,000 in CI.
+- Timing (`spec/constant_time/rsa_timing_spec.cr`, dudect's method): the private operation at 2,048, 3,072 and 4,096 bits on a fixed input against random inputs, OAEP decoding of well-formed encodings against encodings broken at any place, and of encodings broken at the first byte against ones broken before the separator; |t| < 4.5. A planted early exit in OAEP decoding is reported. 200,000 measurements per class on the build Mac for each pull request, 50,000 in CI.
 - Memory checker (`spec/probes/secret_taint.cr`, Linux CI): the Chinese remainder exponentiation with primes, exponents, coefficient, modulus and input all undefined to Memcheck at 2,048, 3,072 and 4,096 bits, the component check, and OAEP decoding under SHA-1 and SHA-256.
 - Compiled code (`spec/probes/secret_flow.cr`, `scripts/check_secret_flow.rb`): key construction, PKCS #1 v1.5 and PSS signing, and OAEP decryption. `MontgomeryArithmetic` is a secret-buffer module and the RSA key types are cipher objects to the checker. A planted table lookup indexed by an exponent byte (`leaky_table_selection`) is reported.
 
 ### Speed
 
-`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL (version 4.0.1 as the bench prints it), in the same way as the cipher bench. On m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run, milestone F3 commit b3c72ee, ten rounds of 2 s per arm:
+`bench/rsa_against_libcrypto.cr` measures operations per second for PKCS #1 v1.5 and PSS signing and verification and OAEP encryption and decryption at 2,048, 3,072 and 4,096 bits, against OpenSSL (version 4.0.1 as the bench prints it), in the same way as the cipher bench. On m4-mini-01 (Apple M4, 4 performance and 6 efficiency cores) with all ten cores reserved for the run, milestone F3b commit 05d1481, ten rounds of 2 s per arm:
 
 | Key | Operation | Beryl operations/s (median) | libcrypto operations/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |
 |---|---|---|---|---|---|---|
-| RSA-2048 | PKCS#1 v1.5 sign | 3240.4 | 3032.4 | 1.069× as fast | 1.068× as fast to 1.069× as fast | yes |
-| RSA-2048 | PSS sign | 3239.6 | 3018.9 | 1.073× as fast | 1.073× as fast to 1.074× as fast | yes |
-| RSA-2048 | PKCS#1 v1.5 verify | 77418.2 | 116139.2 | 1.5× slower | 1.5× slower to 1.5× slower | no |
-| RSA-2048 | PSS verify | 74343.5 | 110651.5 | 1.49× slower | 1.49× slower to 1.49× slower | no |
-| RSA-2048 | OAEP encrypt | 73874.6 | 109943.9 | 1.49× slower | 1.49× slower to 1.49× slower | no |
-| RSA-2048 | OAEP decrypt | 3239.4 | 3005.5 | 1.078× as fast | 1.077× as fast to 1.078× as fast | yes |
-| RSA-3072 | PKCS#1 v1.5 sign | 686.5 | 1039.5 | 1.51× slower | 1.51× slower to 1.51× slower | no |
-| RSA-3072 | PSS sign | 686.4 | 1039.1 | 1.51× slower | 1.51× slower to 1.51× slower | no |
-| RSA-3072 | PKCS#1 v1.5 verify | 35212.5 | 55510.9 | 1.58× slower | 1.58× slower to 1.57× slower | no |
-| RSA-3072 | PSS verify | 34326.9 | 53836.7 | 1.57× slower | 1.57× slower to 1.57× slower | no |
-| RSA-3072 | OAEP encrypt | 34123.9 | 53587.1 | 1.57× slower | 1.57× slower to 1.57× slower | no |
-| RSA-3072 | OAEP decrypt | 686.2 | 1037.2 | 1.51× slower | 1.51× slower to 1.51× slower | no |
-| RSA-4096 | PKCS#1 v1.5 sign | 294.5 | 477.5 | 1.62× slower | 1.62× slower to 1.62× slower | no |
-| RSA-4096 | PSS sign | 294.4 | 477.2 | 1.62× slower | 1.62× slower to 1.62× slower | no |
-| RSA-4096 | PKCS#1 v1.5 verify | 20005.5 | 32529.6 | 1.63× slower | 1.63× slower to 1.63× slower | no |
-| RSA-4096 | PSS verify | 19645.8 | 31611.8 | 1.61× slower | 1.61× slower to 1.61× slower | no |
-| RSA-4096 | OAEP encrypt | 19578.3 | 31562.1 | 1.61× slower | 1.61× slower to 1.61× slower | no |
-| RSA-4096 | OAEP decrypt | 294.4 | 476.5 | 1.62× slower | 1.62× slower to 1.62× slower | no |
+| RSA-2048 | PKCS#1 v1.5 sign | 3369.2 | 3027.3 | 1.11× as fast | 1.11× as fast to 1.11× as fast | yes |
+| RSA-2048 | PSS sign | 3362.7 | 3013.2 | 1.12× as fast | 1.12× as fast to 1.12× as fast | yes |
+| RSA-2048 | PKCS#1 v1.5 verify | 137130.7 | 117021.5 | 1.17× as fast | 1.17× as fast to 1.17× as fast | yes |
+| RSA-2048 | PSS verify | 128121.5 | 110980.8 | 1.15× as fast | 1.15× as fast to 1.16× as fast | yes |
+| RSA-2048 | OAEP encrypt | 125550.1 | 110344.9 | 1.14× as fast | 1.14× as fast to 1.14× as fast | yes |
+| RSA-2048 | OAEP decrypt | 3350.0 | 2996.9 | 1.12× as fast | 1.12× as fast to 1.12× as fast | yes |
+| RSA-3072 | PKCS#1 v1.5 sign | 1138.2 | 1042.4 | 1.092× as fast | 1.092× as fast to 1.093× as fast | yes |
+| RSA-3072 | PSS sign | 1136.6 | 1040.9 | 1.091× as fast | 1.09× as fast to 1.092× as fast | yes |
+| RSA-3072 | PKCS#1 v1.5 verify | 67290.0 | 56031.8 | 1.2× as fast | 1.2× as fast to 1.2× as fast | yes |
+| RSA-3072 | PSS verify | 63889.4 | 53915.1 | 1.19× as fast | 1.18× as fast to 1.19× as fast | yes |
+| RSA-3072 | OAEP encrypt | 63485.6 | 53797.6 | 1.18× as fast | 1.18× as fast to 1.18× as fast | yes |
+| RSA-3072 | OAEP decrypt | 1135.9 | 1039.4 | 1.093× as fast | 1.093× as fast to 1.093× as fast | yes |
+| RSA-4096 | PKCS#1 v1.5 sign | 519.4 | 477.5 | 1.087× as fast | 1.087× as fast to 1.088× as fast | yes |
+| RSA-4096 | PSS sign | 518.9 | 477.3 | 1.087× as fast | 1.087× as fast to 1.088× as fast | yes |
+| RSA-4096 | PKCS#1 v1.5 verify | 39669.6 | 32827.3 | 1.21× as fast | 1.21× as fast to 1.21× as fast | yes |
+| RSA-4096 | PSS verify | 37927.3 | 31871.7 | 1.19× as fast | 1.19× as fast to 1.19× as fast | yes |
+| RSA-4096 | OAEP encrypt | 37622.4 | 31769.9 | 1.18× as fast | 1.18× as fast to 1.19× as fast | yes |
+| RSA-4096 | OAEP decrypt | 518.8 | 476.9 | 1.088× as fast | 1.087× as fast to 1.088× as fast | yes |
 
 Milestone F3 moved RSA's Montgomery multiplication, squaring and table selection into AArch64 assembly. RSA-2048 private operations (signing, OAEP decryption) are now 1.07 to 1.08 times as fast as OpenSSL, up from 1.7 times slower. Public operations at 2,048 bits are 1.5 times slower (from 1.95), and every operation at 3,072 and 4,096 bits is 1.5 to 1.63 times slower (from 2.0 to 2.2). The private operation runs under Data Independent Timing and checks its result with the public exponent before releasing it.
+
+Milestone F3b replaced the 24- to 64-word Montgomery kernels with register strips (eight words of one factor held in registers against a streamed word of the other, two carry chains per row), added a squaring that forms each cross product once, widened the exponent window to five bits, and starts the public operation from R^e mod n so it saves the conversion product. Every RSA operation is now at least as fast as OpenSSL 4.0.1: private operations 1.087 to 1.12 times as fast, public operations 1.14 to 1.21 times as fast. `RSA::PublicKey` builds its Montgomery constants (R² mod n from the public modulus alone) on its first operation, so reading a key costs only decoding.

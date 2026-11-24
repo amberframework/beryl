@@ -15,19 +15,40 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     SMALLEST_PUBLIC_EXPONENT   =           3_u64
     LARGEST_PUBLIC_EXPONENT    = 0xffff_ffff_u64
 
-    # :nodoc:
-    getter modulus : OddModulus
-
     # The public exponent.
     getter public_exponent : UInt64
+
+    # The modulus as words, read and checked when the key is built; the
+    # Montgomery constants (`OddModulus`) are computed on the first
+    # operation, so a key read and never used (a certificate's, passed
+    # along) costs only the reading.
+    @modulus_words : Slice(UInt64)
+    @modulus_bit_count : Int32
+    @modulus : OddModulus?
+
+    # R^e mod n, computed on the second operation: it costs about one
+    # operation and saves a multiplication in each one after.
+    @public_exponent_correction : Slice(UInt64)?
+    @has_operated = false
 
     # Takes the big-endian *modulus* (leading zero bytes allowed) and the
     # public exponent, as big-endian bytes or as an integer. Raises
     # `KeySizeNotSupported` or `PublicExponentNotSupported` when either is
     # outside the ranges above, or when the modulus is even.
     def initialize(modulus : Bytes, public_exponent : Bytes | Int)
-      @modulus = PublicKey.read_modulus(modulus, SMALLEST_MODULUS_BIT_COUNT, LARGEST_MODULUS_BIT_COUNT)
+      @modulus_words, @modulus_bit_count = PublicKey.read_modulus_words(modulus, SMALLEST_MODULUS_BIT_COUNT, LARGEST_MODULUS_BIT_COUNT)
       @public_exponent = PublicKey.read_public_exponent(public_exponent)
+    end
+
+    # :nodoc:
+    #
+    # The modulus with its Montgomery constants, built on first use. Two
+    # fibers building it at once each build the same value.
+    def modulus : OddModulus
+      if built = @modulus
+        return built
+      end
+      @modulus = OddModulus.new(@modulus_words, @modulus_bit_count)
     end
 
     # :nodoc:
@@ -36,17 +57,26 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     # pass through `Declassification.reveal` so the constant-time checks
     # know it.
     def self.read_modulus(bytes : Bytes, smallest_bit_count : Int32, largest_bit_count : Int32) : OddModulus
+      words, bit_count = read_modulus_words(bytes, smallest_bit_count, largest_bit_count)
+      OddModulus.new(words, bit_count)
+    end
+
+    # :nodoc:
+    #
+    # `read_modulus` without the Montgomery constants: the modulus's words
+    # and bit length, checked.
+    def self.read_modulus_words(bytes : Bytes, smallest_bit_count : Int32, largest_bit_count : Int32) : {Slice(UInt64), Int32}
       if bytes.size > largest_bit_count // 8 + 1
         raise KeySizeNotSupported.new("the modulus takes #{bytes.size} bytes; the largest Beryl accepts here is #{largest_bit_count} bits")
       end
-      modulus = OddModulus.from_bytes(bytes)
-      unless smallest_bit_count <= modulus.bit_count <= largest_bit_count
-        raise KeySizeNotSupported.new("the modulus has #{modulus.bit_count} bits; Beryl accepts #{smallest_bit_count} to #{largest_bit_count} here")
+      words, bit_count = OddModulus.words_from_bytes(bytes)
+      unless smallest_bit_count <= bit_count <= largest_bit_count
+        raise KeySizeNotSupported.new("the modulus has #{bit_count} bits; Beryl accepts #{smallest_bit_count} to #{largest_bit_count} here")
       end
-      unless Declassification.reveal(modulus.words[0] & 1_u64) == 1_u64
+      unless Declassification.reveal(words[0] & 1_u64) == 1_u64
         raise KeySizeNotSupported.new("the modulus is even, so it is not an RSA modulus")
       end
-      modulus
+      {words, bit_count}
     end
 
     # :nodoc:
@@ -67,12 +97,12 @@ module Beryl::Crypto::V1::RivestShamirAdleman
 
     # The size of the modulus in bits.
     def modulus_bit_count : Int32
-      @modulus.bit_count
+      @modulus_bit_count
     end
 
     # The size of a signature or a ciphertext under this key, in bytes.
     def modulus_bytesize : Int32
-      @modulus.bytesize
+      (@modulus_bit_count + 7) // 8
     end
 
     # Returns whether *signature* is a PKCS #1 v1.5 signature (RFC 8017
@@ -140,12 +170,21 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     def apply_public_exponent(input : Bytes) : Bytes?
       return nil unless input.size == modulus_bytesize
 
-      input_words = Slice(UInt64).new(@modulus.word_count)
+      input_words = Slice(UInt64).new(@modulus_words.size)
       MontgomeryArithmetic.decode_big_endian(input, input_words)
-      return nil unless MontgomeryArithmetic.less_than_bit(input_words, @modulus.words) == 1_u64
+      return nil unless MontgomeryArithmetic.less_than_bit(input_words, @modulus_words) == 1_u64
 
-      result_words = Slice(UInt64).new(@modulus.word_count)
-      @modulus.exponentiate_by_public_exponent(result_words, input_words, @public_exponent)
+      result_words = Slice(UInt64).new(@modulus_words.size)
+      if correction = @public_exponent_correction
+        modulus.exponentiate_by_public_exponent(result_words, input_words, @public_exponent, correction)
+      elsif @has_operated
+        correction = modulus.public_exponent_correction(@public_exponent)
+        @public_exponent_correction = correction
+        modulus.exponentiate_by_public_exponent(result_words, input_words, @public_exponent, correction)
+      else
+        @has_operated = true
+        modulus.exponentiate_by_public_exponent(result_words, input_words, @public_exponent)
+      end
       result = Bytes.new(modulus_bytesize)
       MontgomeryArithmetic.encode_big_endian(result_words, result)
       result
