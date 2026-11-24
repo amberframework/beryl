@@ -16,7 +16,7 @@ require "../../src/beryl"
 # that asks for something Beryl does not do (TLS 1.2, DTLS, QUIC, 0-RTT,
 # client certificates), exits 89, which the runner counts as
 # unimplemented. `spec/bogo/config.json` lists every disabled test with
-# its reason; `spec/bogo/README.md` describes a run.
+# its reason; `docs/tls.md` describes a run.
 module BerylBogoShim
   UNIMPLEMENTED_EXIT_STATUS =     89
   TLS13_VERSION             = 0x0304

@@ -45,9 +45,10 @@ jobs:
         run: |
           crystal build --no-codegen spec/differential/libcrypto_certificate_differential.cr
           crystal build --no-codegen spec/fuzz/der_parser_fuzz.cr
-      - name: Type-check the TLS examples and the handshake fuzzer
+      - name: Type-check the TLS examples, the handshake fuzzer and the BoGo shim
         run: |
           crystal build --no-codegen spec/fuzz/tls_handshake_fuzz.cr
+          crystal build --no-codegen spec/bogo/beryl_bogo_shim.cr
           crystal build --no-codegen -Dwithout_openssl examples/https_server.cr
           crystal build --no-codegen -Dwithout_openssl examples/https_client.cr
       - name: Run the quick suite (unit specs and every published vector)
@@ -383,6 +384,34 @@ jobs:
         run: ruby scripts/interop/install_tools.rb "$RUNNER_TEMP/interop-tools"
       - name: "Interop: every cell of the matrix completes its handshake and exchange"
         run: ruby scripts/interop/run_matrix.rb "$RUNNER_TEMP/interop-tools" --crystal crystal
+
+  tls-bogo:
+    name: TLS against BoringSSL's test suite, BoGo (pinned commit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: "BoGo: every enabled test passes; each disabled one has its reason in spec/bogo/config.json"
+        run: ruby scripts/bogo/run_bogo.rb "$RUNNER_TEMP/bogo" --crystal crystal
+
+  tls-tlsfuzzer:
+    name: TLS against tlsfuzzer's TLS 1.3 scripts (pinned commits)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
+        with:
+          crystal: 1.21.0
+      - name: Install dependencies
+        run: shards install --frozen --skip-postinstall --skip-executables
+      - name: "tlsfuzzer: every failure is one scripts/tlsfuzzer/config.json expects, with its reason"
+        run: ruby scripts/tlsfuzzer/run_tlsfuzzer.rb "$RUNNER_TEMP/tlsfuzzer" --crystal crystal --python python3
 
   differential:
     name: Differential against libcrypto, hashes and MACs (${{ matrix.code }} on ${{ matrix.runner }})

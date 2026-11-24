@@ -64,3 +64,19 @@ The classes are shaped like `OpenSSL::SSL`, so the crystal-alpha fork can alias 
 
 - RFC 8448: every secret, key, IV and Finished value of §3 to §5 (`spec/beryl/tls/key_schedule_spec.cr`); every protected record of §3 and §5 (`record_layer_spec.cr`); the client engine reproduces §3's Finished, application data and close_notify records byte for byte from the trace's server flight, the server engine reproduces §3's ServerHello and handshake secrets, and every handshake message of §3 to §7 decodes and re-encodes byte for byte (`rfc8448_handshake_spec.cr`). The trace server key is RSA-1024, which Beryl refuses by design; the specs check its signatures with a spec-only verifier.
 - Loopback handshakes for every suite, group and key type, HelloRetryRequest, resumption, ALPN, KeyUpdate, close_notify and each refusal (`handshake_spec.cr`).
+- Interop: 39 cells against OpenSSL 4.1.0 (`s_client`, `s_server`), curl 8.23.0 and Go 1.27.4's crypto/tls, in both roles, each tool pinned and checked by sha256 (`scripts/interop/`, `TOOLS.md` there; CI job `tls-interop`).
+- Fuzzing: `spec/fuzz/tls_handshake_fuzz.cr` mutates recorded handshakes through every decoder and both state machines; 200,000 iterations in CI (`tls-fuzz`).
+- BoGo, BoringSSL's TLS test suite at a pinned commit, through `spec/bogo/beryl_bogo_shim.cr` (CI job `tls-bogo`). Every enabled test passes. `spec/bogo/config.json` gives a reason for each disabled test: the test needs TLS 1.2 (B6), a group or feature Beryl does not have, or a behavior where Beryl follows RFC 9846 and BoringSSL is stricter or picks another alert. The shim declines a test (exit 89) that asks for something Beryl does not do and logs the flag that declined it.
+- tlsfuzzer's TLS 1.3 scripts at pinned commits against the example server (CI job `tls-tlsfuzzer`). `scripts/tlsfuzzer/config.json` lists each script's expected failures and each script not run, with a reason for every one.
+
+## Running the gates
+
+```sh
+/usr/bin/ruby scripts/interop/install_tools.rb /tmp/interop-tools
+/usr/bin/ruby scripts/interop/run_matrix.rb /tmp/interop-tools --report interop-report.md
+crystal-alpha build --release spec/fuzz/tls_handshake_fuzz.cr -o tls_handshake_fuzz && ./tls_handshake_fuzz 1000000 SEED
+/usr/bin/ruby scripts/bogo/run_bogo.rb /tmp/bogo --report bogo-report.md
+/usr/bin/ruby scripts/tlsfuzzer/run_tlsfuzzer.rb /tmp/tlsfuzzer --report tlsfuzzer-report.md
+```
+
+Each script fetches its peers at pinned versions and checks them (sha256 for downloads, the commit hash for git checkouts) before it builds anything, and exits 1 on any failure the configs do not explain.
