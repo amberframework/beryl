@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   before-and-after:
-    name: One random value per batch, on AMD runners ${{ matrix.run }}
+    name: Main against the odd-digit fix on AMD runners ${{ matrix.run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -40,19 +40,29 @@ jobs:
             cp spec/support/timing_leak_measurement.cr "../$side/spec/support/"
             (cd "../$side" && shards install --frozen --skip-postinstall --skip-executables && crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o "$GITHUB_WORKSPACE/probe_$side")
           done
-      - name: Each case with a fresh random second class per measurement and with one random value per batch
+      - name: Main against the odd-digit fix, at 1,000,000 measurements per class
         if: steps.processor.outputs.measure == 'yes'
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for case_name in p256-generator-one p256-ecdh-one; do
-            for per_batch in 0 1; do
-              line=$(BERYL_SECOND_CLASS_PER_BATCH=$per_batch taskset -c 1 ./probe_main $case_name 1000000)
-              echo "RESULT | $model | main-per-batch-$per_batch | round 1 | $line"
+          for round in 1 2; do
+            for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one; do
+              for side in main x86-timing-gate; do
+                line=$(taskset -c 1 ./probe_$side $case_name 1000000)
+                echo "RESULT | $model | $side | round $round | $line"
+              done
+            done
+            for case_name in x25519-zero chacha-zero; do
+              line=$(taskset -c 1 ./probe_x86-timing-gate $case_name 1000000)
+              echo "RESULT | $model | x86-timing-gate | round $round | $line"
             done
           done
-          for case_name in chacha-zero chacha-fixed x25519-zero x25519-fixed p256-generator-one p256-ecdh-one p256-ecdh-fixed; do
-            for per_batch in 0 1; do
-              line=$(BERYL_SECOND_CLASS_PER_BATCH=$per_batch taskset -c 1 ./probe_x86-timing-gate $case_name 1000000)
-              echo "RESULT | $model | fix-per-batch-$per_batch | round 1 | $line"
-            done
-          done
+      - name: The fix's own constant-time CI step
+        if: steps.processor.outputs.measure == 'yes'
+        env:
+          BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
+          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
+        run: |
+          cd ../x86-timing-gate
+          git checkout -- .
+          crystal build --release spec/constant_time/hmac_timing_spec.cr spec/constant_time/cipher_timing_spec.cr spec/constant_time/public_key_timing_spec.cr -o constant_time_specs
+          taskset -c 1 ./constant_time_specs --tag constant_time || true
