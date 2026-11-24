@@ -1,4 +1,6 @@
 require "../../spec_helper"
+require "http/server"
+require "http/client/response"
 
 private alias TLS = Beryl::TLS
 private alias KeyKind = TestCertificateAuthority::KeyKind
@@ -557,6 +559,49 @@ describe "Beryl::TLS handshakes over a socket pair" do
       client.gets.should eq("echo")
       client.close
       server.close
+    end
+
+    it "raises a failed handshake from an accepted socket's read as ConnectionFailed, an IO::Error" do
+      tcp_server = TCPServer.new("127.0.0.1", 0)
+      server = TLS::Server.new(tcp_server, TlsHarness.server_context)
+      port = server.local_address.as(Socket::IPAddress).port
+      plain_client = TCPSocket.new("127.0.0.1", port)
+      plain_client << "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+      plain_client.flush
+      connection = server.accept
+      error = expect_raises(TLS::ConnectionFailed) { connection.gets }
+      error.should be_a(IO::Error)
+      error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
+      connection.close
+      plain_client.close
+      server.close
+    end
+
+    it "serves HTTP::Server over TLS with ALPN http/1.1, and keeps serving after a client whose handshake fails" do
+      server_context = TlsHarness.server_context
+      server_context.alpn_protocols = ["http/1.1"]
+      tcp_server = TCPServer.new("127.0.0.1", 0)
+      port = tcp_server.local_address.port
+      http_server = HTTP::Server.new { |context| context.response.print "over beryl" }
+      http_server.bind(TLS::Server.new(tcp_server, server_context))
+      spawn { http_server.listen }
+
+      bad_client = TCPSocket.new("127.0.0.1", port)
+      bad_client << "GET / HTTP/1.1\r\n\r\n"
+      bad_client.flush
+      bad_client.close
+
+      client_context = TlsHarness.client_context
+      client_context.alpn_protocols = ["http/1.1"]
+      client = TLS::Socket::Client.new(TCPSocket.new("127.0.0.1", port), client_context, sync_close: true, hostname: "localhost")
+      client.alpn_protocol.should eq("http/1.1")
+      client << "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+      client.flush
+      response = HTTP::Client::Response.from_io(client)
+      response.status_code.should eq(200)
+      response.body.should eq("over beryl")
+      client.close
+      http_server.close
     end
   end
 end

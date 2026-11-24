@@ -23,6 +23,12 @@ module Beryl::TLS
 
     # Whether closing this socket closes the IO under it.
     property? sync_close : Bool
+    # Whether reads and writes raise a TLS failure as `ConnectionFailed`
+    # (an `IO::Error`) instead of the `TLS::Error` itself. A server that
+    # treats `IO::Error` as the end of a connection, as `HTTP::Server`
+    # does, then ends a failed handshake quietly; `Server` turns it on for
+    # the sockets it accepts.
+    property? is_raising_io_errors : Bool = false
 
     @outcome : HandshakeOutcome? = nil
     @read_buffer = Bytes.empty
@@ -116,6 +122,14 @@ module Beryl::TLS
     end
 
     def unbuffered_read(slice : Bytes) : Int32
+      with_io_errors { read_application_data(slice) }
+    end
+
+    def unbuffered_write(slice : Bytes) : Nil
+      with_io_errors { write_application_data(slice) }
+    end
+
+    private def read_application_data(slice : Bytes) : Int32
       handshake_outcome
       raise ConnectionClosed.new("the connection failed earlier", AlertDescription::InternalError) if @has_failed
       return 0 if slice.empty?
@@ -135,7 +149,7 @@ module Beryl::TLS
       count
     end
 
-    def unbuffered_write(slice : Bytes) : Nil
+    private def write_application_data(slice : Bytes) : Nil
       outcome = handshake_outcome
       # After a fatal alert either way, nothing more is sent (§6.2).
       raise ConnectionClosed.new("the connection failed earlier", AlertDescription::InternalError) if @has_failed
@@ -284,6 +298,15 @@ module Beryl::TLS
     # alert a TLS error names and wipes the connection's secrets, all under
     # the write lock: the read path sends alerts too, and two records
     # sealed at once could share a nonce.
+    # Raises a TLS failure from the block as `ConnectionFailed` when
+    # `is_raising_io_errors?`.
+    private def with_io_errors(&)
+      yield
+    rescue error : TLS::Error
+      raise error unless @is_raising_io_errors
+      raise ConnectionFailed.new(error)
+    end
+
     private def with_alert_on_failure(&)
       yield
     rescue error : TLS::Error | IO::Error
@@ -518,13 +541,23 @@ module Beryl::TLS
     end
 
     def accept : Socket::Server
-      Socket::Server.new(@wrapped.accept, @context, sync_close: @sync_close, accept: @start_immediately)
+      wrap(@wrapped.accept)
     end
 
     def accept? : Socket::Server?
       if io = @wrapped.accept?
-        Socket::Server.new(io, @context, sync_close: @sync_close, accept: @start_immediately)
+        wrap(io)
       end
+    end
+
+    # Sockets accepted here raise TLS failures as `ConnectionFailed` from
+    # their reads and writes, so `HTTP::Server` (which ends a connection
+    # quietly on an `IO::Error`) never sees an unhandled exception from a
+    # client whose handshake fails.
+    private def wrap(io : IO) : Socket::Server
+      socket = Socket::Server.new(io, @context, sync_close: @sync_close, accept: @start_immediately)
+      socket.is_raising_io_errors = true
+      socket
     end
 
     def close : Nil
