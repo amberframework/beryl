@@ -67,7 +67,7 @@ The classes are shaped like `OpenSSL::SSL`, so the crystal-alpha fork can alias 
 - Interop: 39 cells against OpenSSL 4.1.0 (`s_client`, `s_server`), curl 8.23.0 and Go 1.27.4's crypto/tls, in both roles, each tool pinned and checked by sha256 (`scripts/interop/`, `TOOLS.md` there; CI job `tls-interop`).
 - Fuzzing: `spec/fuzz/tls_handshake_fuzz.cr` mutates recorded handshakes through every decoder and both state machines; 200,000 iterations in CI (`tls-fuzz`).
 - BoGo, BoringSSL's TLS test suite at a pinned commit, through `spec/bogo/beryl_bogo_shim.cr` (CI job `tls-bogo`). Every enabled test passes. `spec/bogo/config.json` gives a reason for each disabled test: the test needs TLS 1.2 (B6), a group or feature Beryl does not have, or a behavior where Beryl follows RFC 9846 and BoringSSL is stricter or picks another alert. The shim declines a test (exit 89) that asks for something Beryl does not do and logs the flag that declined it.
-- tlsfuzzer's TLS 1.3 scripts at pinned commits against the example server (CI job `tls-tlsfuzzer`). `scripts/tlsfuzzer/config.json` lists each script's expected failures and each script not run, with a reason for every one.
+- tlsfuzzer's TLS 1.3 scripts at pinned commits against the example server (CI job `tls-tlsfuzzer`), every probe of each script (`-n 0` where a script samples). `scripts/tlsfuzzer/config.json` lists each script's expected failures and each script not run, with a reason for every one.
 
 ## Running the gates
 
