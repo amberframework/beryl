@@ -51,6 +51,9 @@ module Beryl::TLS
     @consecutive_empty_record_count = 0
     @consecutive_warning_alert_count = 0
     @handshake_buffer = Bytes.empty
+    # Spare room the handshake buffer grows into, doubling, so a message
+    # sent in many small records costs linear time to reassemble.
+    @handshake_storage = Bytes.empty
     @record_header = Bytes.new(RecordProtection::HEADER_BYTESIZE)
 
     def initialize(@io : IO, @limits : Limits = Limits.new)
@@ -273,10 +276,16 @@ module Beryl::TLS
       if @handshake_buffer.empty?
         @handshake_buffer = content
       else
-        combined = Bytes.new(@handshake_buffer.size + content.size)
-        @handshake_buffer.copy_to(combined)
-        content.copy_to(combined + @handshake_buffer.size)
-        @handshake_buffer = combined
+        size = @handshake_buffer.size
+        needed = size + content.size
+        is_in_storage = !@handshake_storage.empty? && @handshake_buffer.to_unsafe == @handshake_storage.to_unsafe
+        unless is_in_storage && @handshake_storage.size >= needed
+          storage = Bytes.new(Math.max(needed, size * 2))
+          @handshake_buffer.copy_to(storage)
+          @handshake_storage = storage
+        end
+        content.copy_to(@handshake_storage + size)
+        @handshake_buffer = @handshake_storage[0, needed]
       end
       # Refuse as soon as a declared length is over the limit, before the
       # rest of the message is read.

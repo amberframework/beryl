@@ -356,11 +356,12 @@ module BerylBogoShim
     socket = if context.is_a?(Beryl::TLS::Context::Server)
                configure_server(context, settings)
                Beryl::TLS::Socket::Server.new(tcp, context, sync_close: false)
-             else
-               client_context = context.as(Beryl::TLS::Context::Client)
-               configure_client(client_context, settings)
-               Beryl::TLS::Socket::Client.new(tcp, client_context, sync_close: false,
+             elsif context.is_a?(Beryl::TLS::Context::Client)
+               configure_client(context, settings)
+               Beryl::TLS::Socket::Client.new(tcp, context, sync_close: false,
                  hostname: settings.host_name || "127.0.0.1")
+             else
+               raise ArgumentError.new("a context that is neither a client nor a server")
              end
     socket.sync = true
     session_count_after_handshake = context.is_a?(Beryl::TLS::Context::Client) ? context.session_cache.size : 0

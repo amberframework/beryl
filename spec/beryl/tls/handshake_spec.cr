@@ -378,6 +378,26 @@ describe "Beryl::TLS handshakes over a socket pair" do
       error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
     end
 
+    it "ends a handshake at its deadline even when the client trickles bytes" do
+      client_io, server_io = UNIXSocket.pair
+      server_context = TlsHarness.server_context
+      server_context.limits = TLS::Limits.new(handshake_timeout: 300.milliseconds)
+      spawn do
+        20.times do
+          client_io.write(Bytes[22])
+          client_io.flush
+          sleep 100.milliseconds
+        end
+      rescue IO::Error
+      end
+      started = Time.instant
+      expect_raises(TLS::HandshakeTimeout) do
+        TLS::Socket::Server.new(server_io, server_context, sync_close: true)
+      end
+      (Time.instant - started).should be < 1.5.seconds
+      client_io.close
+    end
+
     it "refuses a ClientHello whose legacy_version is SSL 3.0 or older (protocol_version)" do
       client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
       expect_raises(IO::EOFError) do

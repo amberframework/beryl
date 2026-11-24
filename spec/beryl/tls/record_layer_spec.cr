@@ -219,6 +219,19 @@ describe Beryl::TLS::RecordLayer do
       expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer_reading(Bytes[0x80, 0x2e, 1, 3, 4]).read_handshake_message }
     end
 
+    it "reassembles a large handshake message sent one byte per record in linear time" do
+      message = Bytes.new(4 + 60_000, 7_u8)
+      message[0] = 1_u8
+      message[1] = 0_u8
+      message[2] = (60_000 >> 8).to_u8
+      message[3] = (60_000 & 0xFF).to_u8
+      input = IO::Memory.new
+      message.each { |byte| input.write(plaintext_record(TLS::ContentType::Handshake, Bytes[byte])) }
+      started = Time.instant
+      layer_reading(input.to_slice).read_handshake_message.should eq(message)
+      (Time.instant - started).should be < 2.seconds
+    end
+
     it "refuses an empty alert record (unexpected_message)" do
       expect_alert(TLS::AlertDescription::UnexpectedMessage) do
         layer_reading(plaintext_record(TLS::ContentType::Alert, Bytes.empty)).read_handshake_message
