@@ -30,4 +30,46 @@ describe Beryl::Certificates::TrustStore do
       Beryl::Certificates::TrustStore.system.size.should be > 50
     end
   end
+
+  describe ".system_bundle_path" do
+    it "reads the file SSL_CERT_FILE names, as OpenSSL and Go do" do
+      bundle = File.tempname("beryl-ssl-cert-file", ".pem")
+      File.write(bundle, Beryl::Certificates::TrustStore.mozilla.list_of_certificates.first.to_pem)
+      with_ssl_cert_file(bundle) do
+        Beryl::Certificates::TrustStore.system_bundle_path.should eq(bundle)
+        Beryl::Certificates::TrustStore.system.size.should eq(1)
+      end
+    ensure
+      File.delete(bundle) if bundle && File.exists?(bundle)
+    end
+
+    it "raises when SSL_CERT_FILE names a file that does not exist" do
+      with_ssl_cert_file("/nonexistent/beryl-bundle.pem") do
+        expect_raises(Beryl::Certificates::Error, /SSL_CERT_FILE/) do
+          Beryl::Certificates::TrustStore.system_bundle_path
+        end
+      end
+    end
+
+    it "ignores an empty SSL_CERT_FILE" do
+      operating_system_bundle = Beryl::Certificates::TrustStore::LIST_OF_SYSTEM_BUNDLE_PATHS.find { |candidate| File.exists?(candidate) }
+      with_ssl_cert_file("") do
+        if operating_system_bundle
+          Beryl::Certificates::TrustStore.system_bundle_path.should eq(operating_system_bundle)
+        else
+          expect_raises(Beryl::Certificates::Error, /no system certificate bundle/) do
+            Beryl::Certificates::TrustStore.system_bundle_path
+          end
+        end
+      end
+    end
+  end
+end
+
+private def with_ssl_cert_file(value : String, &)
+  previous = ENV["SSL_CERT_FILE"]?
+  ENV["SSL_CERT_FILE"] = value
+  yield
+ensure
+  ENV["SSL_CERT_FILE"] = previous
 end

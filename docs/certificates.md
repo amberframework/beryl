@@ -46,7 +46,7 @@ verification.verify(leaf, intermediates,
 ## Trust stores
 
 - `TrustStore.mozilla` (the default): the Mozilla root set with the Websites trust bit, from the CCADB report `IncludedRootsPEMTxt?TrustBitsInclude=Websites`, compiled into Beryl and pinned by sha256 (`MOZILLA_ROOTS_SHA256`, retrieved 2026-11-23, 112 roots). Verdicts are the same on every machine and change only with a Beryl release. 111 of the 112 roots are usable: e-Szigno TLS Root CA 2023 has a P-521 key. Mozilla's per-root "distrust for TLS after" dates are not applied.
-- `TrustStore.system`: the first bundle found of `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu), `/etc/pki/tls/certs/ca-bundle.crt` (Fedora, RHEL), `/etc/ssl/ca-bundle.pem` (openSUSE) and `/etc/ssl/cert.pem` (Alpine, and macOS, where Apple ships and updates the system roots). Certificates Beryl cannot read are skipped.
+- `TrustStore.system`: the first bundle found of `/etc/ssl/certs/ca-certificates.crt` (Debian, Ubuntu), `/etc/pki/tls/certs/ca-bundle.crt` (Fedora, RHEL), `/etc/ssl/ca-bundle.pem` (openSUSE) and `/etc/ssl/cert.pem` (Alpine, and macOS, where Apple ships and updates the system roots), or the file `SSL_CERT_FILE` names when that variable is set, as OpenSSL and Go read it. Certificates Beryl cannot read are skipped.
 - `TrustStore.from_pem`: an application's own CA.
 
 `scripts/update_certificate_data.rb PSL_COMMIT` refreshes the root set and the Public Suffix List and prints the new pins.
