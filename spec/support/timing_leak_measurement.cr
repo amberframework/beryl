@@ -15,12 +15,11 @@
 # A check is decided by two runs out of three, each a fresh measurement with
 # its own classes and inputs: it passes when two runs stay under the bound
 # and reports a leak when two reach it. A leak in the code shows in every
-# run (the planted early-exit comparison gives |t| near 200 each time),
-# while a shared CI runner can disturb one run: on GitHub's x86-64 runners,
-# P-256 multiplication by 1 gave |t| = 15.28 in one CI run, and 1.4 to 3.2
-# in 72 later runs at up to 1,000,000 measurements per class
-# (docs/crypto/public-key.md, "Timing on x86-64"). The bound itself is
-# never raised.
+# run (the planted early-exit comparison gives |t| of 120 to 450 each
+# time), while a shared CI runner can disturb a single run: on GitHub's
+# AMD EPYC runners, cases that stay near 2 in most runs reach 4.5 to 7 in
+# an occasional one (docs/crypto/public-key.md, "Timing on x86-64").
+# The bound itself is never raised.
 class TimingLeakMeasurement
   # dudect's bound: |t| under this shows no leak at this sample size.
   LEAK_THRESHOLD = 4.5

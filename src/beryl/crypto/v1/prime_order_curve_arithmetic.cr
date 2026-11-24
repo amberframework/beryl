@@ -317,16 +317,18 @@ module Beryl::Crypto::V1
     # because every input is public.
     #
     # The constant-time scalar multiplications never compute on the point
-    # at infinity either: while their running sum is still infinity they
-    # keep a stand-in point in its place and a bit that says so, and the
+    # at infinity either. The generator multiplication writes its scalar in
+    # odd digits, so every window adds a point and its sum is never
+    # infinity. The variable-point one keeps a stand-in point in place of a
+    # running sum that is still infinity, with a bit that says so, and its
     # digit 0 reads a real multiple whose sum is then dropped by mask. With
     # Z = 0 or a zero table entry as an operand, a scalar with zero windows
     # (the scalar 1 has 51 of 52) ran measurably faster than a random one on
     # AMD EPYC 7763 and 9V74 (Zen 3 and Zen 4) and on Apple M4 with Data
     # Independent Timing off, though no branch or address depended on it
-    # (docs/crypto/public-key.md, "Timing on x86-64"). Each stand-in changes
-    # every window, because operands that came back unchanged window after
-    # window still ran faster there.
+    # (docs/crypto/public-key.md, "Timing on x86-64"). The operands also
+    # change every window, because operands that came back unchanged window
+    # after window still ran faster there.
     #
     # The prime-order curves of BoringSSL and OpenSSL (`p256.c`,
     # `ecp_nistz256.c`) use the same coordinates and the same argument.
@@ -598,7 +600,7 @@ module Beryl::Crypto::V1
     # Returns [scalar]point for a big-endian *scalar* of BYTESIZE bytes
     # below the group order n, in constant time, with *multiples* =
     # `multiples_of(point)`. The scalar is written in signed 5-bit windows
-    # (Booth's recoding, as for `multiply_generator`); from the most
+    # (Booth's recoding, as OpenSSL's `ecp_nistz256` does); from the most
     # significant window down, five doublings and then the addition of
     # [d]P, picked by reading all 16 multiples and negated by mask when
     # d < 0. Before window i is added the sum is [32·H]P, where
@@ -620,9 +622,9 @@ module Beryl::Crypto::V1
     # different multiple from one window to the next, and drops the sum:
     # then H_i = 32·H with H >= 1, so 32·H - j lies strictly between 0 and
     # n, and [32·H]P is not [j]P; it is -[j]P only if H_i = n - j, a sum
-    # that is dropped all the same. The
-    # top window starts the sum directly: doubling infinity five times and
-    # adding [d]P to it would give [d]P all the same.
+    # that is dropped all the same. The top window starts the sum directly:
+    # doubling infinity five times and adding [d]P to it would give [d]P all
+    # the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
       multiples_pointer = pointerof(multiples).as(Point*)
       result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)

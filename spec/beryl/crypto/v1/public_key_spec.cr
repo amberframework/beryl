@@ -150,8 +150,9 @@ describe Beryl::Crypto::V1::P384 do
   end
 end
 
-# The constant-time multiplications keep a stand-in point while the sum is
-# still infinity and read a real multiple for each digit 0, so scalars with
+# The generator multiplication writes its scalar in odd digits, and the
+# variable-point one keeps a stand-in point while its sum is still infinity
+# and reads a real multiple for each digit 0, so scalars with
 # long runs of zero windows, at the bottom, in the middle or at the top,
 # are where they could go wrong. Each is checked against the variable-time
 # multiplication of signature verification.
