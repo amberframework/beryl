@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **HTTP::Server seam:** sockets accepted by `Beryl::TLS::Server` raise TLS
+  failures from reads and writes as `ConnectionFailed < IO::Error`, so
+  `HTTP::Server` ends a client whose handshake fails without an unhandled
+  exception (`Socket#is_raising_io_errors=`).
 - **TLS security review follow-ups** (review of fa2cd41, items M4, L1, L2,
   L3, L5, L6, L8):
   - Handshakes wipe every secret they derive in an `ensure`, including on
