@@ -83,7 +83,14 @@ class TimingLeakMeasurement
                              timed : Int32 -> Nil, & : Int32, Float64 -> Nil) : Nil
     BATCH_SIZE.times { |slot| list_of_classes[slot] = @generator.next_bool }
     fill_batch.call(list_of_classes)
+    list_of_random_slots = (0...BATCH_SIZE).select { |slot| list_of_classes[slot] }
+    with_prelude = ENV["BERYL_UNTIMED_PRELUDE"]? == "1"
     BATCH_SIZE.times do |slot|
+      if with_prelude && !list_of_random_slots.empty?
+        prelude_slot = list_of_random_slots[@generator.rand(list_of_random_slots.size)]
+        prepare.call(prelude_slot)
+        timed.call(prelude_slot)
+      end
       prepare.call(slot)
       started_at = Time.instant
       timed.call(slot)

@@ -163,6 +163,16 @@ module CurveTimingProbe
         nil
       end
       measurement.run(fill_batch, prepare) { |slot| sink &+= timed_mixed_additions(running, list_of_entries[slot], list_of_is_zero[slot]).x[0] }
+    when "chacha-zero", "chacha-fixed"
+      fixed = case_name == "chacha-zero" ? zero : Random::Secure.random_bytes(SCALAR_BYTESIZE)
+      nonce = Random::Secure.random_bytes(12)
+      message = Random::Secure.random_bytes(64)
+      output = Bytes.new(64)
+      fill_batch = ->(list_of_classes : Array(Bool)) { fill(storage, list_of_classes, generator, fixed, false) }
+      measurement.run(fill_batch, prepare) do |slot|
+        Beryl::Crypto::V1::ChaCha20StreamCipher.xor_keystream(slot_of(storage, slot), nonce, 1_u32, message, output)
+        sink &+= output[0]
+      end
     else
       abort "unknown case #{case_name}"
     end

@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   before-and-after:
-    name: Main, the third fix and X25519 blinding on AMD runners ${{ matrix.run }}
+    name: Untimed prelude experiment on AMD runners ${{ matrix.run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -34,37 +34,27 @@ jobs:
       - name: Build the probe from main and from the fix
         if: steps.processor.outputs.measure == 'yes'
         run: |
-          for side in main x86-timing-gate x86-timing-x25519-blinding; do
+          for side in main x86-timing-gate; do
             git worktree add "../$side" "origin/$side"
             cp spec/probes/curve_timing_probe.cr "../$side/spec/probes/"
             cp spec/support/timing_leak_measurement.cr "../$side/spec/support/"
             (cd "../$side" && shards install --frozen --skip-postinstall --skip-executables && crystal build --release -Dwithout_openssl spec/probes/curve_timing_probe.cr -o "$GITHUB_WORKSPACE/probe_$side")
           done
-      - name: Time main and the fix in turn, pinned to one processor
+      - name: Each case with and without an untimed call on a random input before every timed call
         if: steps.processor.outputs.measure == 'yes'
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for round in 1 2; do
+          for round in 1; do
             for case_name in p256-generator-one p256-ecdh-one; do
-              for side in main x86-timing-gate; do
-                line=$(taskset -c 1 ./probe_$side $case_name 1000000)
-                echo "RESULT | $model | $side | round $round | $line"
+              for prelude in 0 1; do
+                line=$(BERYL_UNTIMED_PRELUDE=$prelude taskset -c 1 ./probe_main $case_name 1000000)
+                echo "RESULT | $model | main-prelude-$prelude | round $round | $line"
               done
             done
-            for case_name in x25519-zero x25519-fixed; do
-              for side in x86-timing-gate x86-timing-x25519-blinding; do
-                line=$(taskset -c 1 ./probe_$side $case_name 1000000)
-                echo "RESULT | $model | $side | round $round | $line"
+            for case_name in x25519-zero x25519-fixed chacha-zero chacha-fixed p256-ecdh-fixed; do
+              for prelude in 0 1; do
+                line=$(BERYL_UNTIMED_PRELUDE=$prelude taskset -c 1 ./probe_x86-timing-gate $case_name 1000000)
+                echo "RESULT | $model | fix-prelude-$prelude | round $round | $line"
               done
             done
           done
-      - name: The fix's CI timing step (two runs of three per check)
-        if: steps.processor.outputs.measure == 'yes'
-        env:
-          BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
-          BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
-        run: |
-          cd ../x86-timing-x25519-blinding
-          git checkout -- spec/support/timing_leak_measurement.cr
-          crystal build --release spec/constant_time/hmac_timing_spec.cr spec/constant_time/cipher_timing_spec.cr spec/constant_time/public_key_timing_spec.cr -o constant_time_specs
-          taskset -c 1 ./constant_time_specs --tag constant_time | grep -E "constant time|examples"
