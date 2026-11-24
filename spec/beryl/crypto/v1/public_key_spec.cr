@@ -148,3 +148,81 @@ describe Beryl::Crypto::V1::P384 do
     public_key.verify("message", Bytes.new(96), format: SignatureFormat::FixedWidth).should be_false
   end
 end
+
+# The constant-time multiplications keep a stand-in point while the sum is
+# still infinity and read a real multiple for each digit 0, so scalars with
+# long runs of zero windows, at the bottom, in the middle or at the top,
+# are where they could go wrong. Each is checked against the variable-time
+# multiplication of signature verification.
+module SparseScalarCheck
+  def self.list_of_scalars(bytesize : Int32, group_order : Bytes) : Array(Bytes)
+    list_of_scalars = [] of Bytes
+    [1, 2, 3, 15, 16, 17, 31, 32, 33, 1023, 1024, 1025].each do |small|
+      scalar = Bytes.new(bytesize)
+      scalar[bytesize - 1] = (small & 0xff).to_u8
+      scalar[bytesize - 2] = (small >> 8).to_u8
+      list_of_scalars << scalar
+    end
+    (0...bytesize * 8 - 1).step(7) do |bit|
+      scalar = Bytes.new(bytesize)
+      scalar[bytesize - 1 - bit // 8] = (1 << (bit % 8)).to_u8
+      list_of_scalars << scalar
+      both_ends = scalar.dup
+      both_ends[bytesize - 1] |= 1_u8
+      list_of_scalars << both_ends
+    end
+    order_minus_one = group_order.dup
+    order_minus_one[bytesize - 1] &-= 1
+    list_of_scalars << order_minus_one
+    order_minus_two = group_order.dup
+    order_minus_two[bytesize - 1] &-= 2
+    list_of_scalars << order_minus_two
+    list_of_scalars
+  end
+end
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} constant-time multiplication by sparse scalars" do
+    it "matches the variable-time multiplication of the generator" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER).each do |scalar|
+        expected = {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_and_add_public(scalar, {{ curve[1].id }}::Arithmetic.generator, zero))
+        {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_generator(scalar)).should eq(expected)
+      end
+    end
+
+    it "matches the variable-time multiplication of another point" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      point_scalar = Random::Secure.random_bytes({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      point_scalar[0] = 0_u8
+      point = {{ curve[1].id }}::Arithmetic.multiply_and_add_public(point_scalar, {{ curve[1].id }}::Arithmetic.generator, zero)
+      multiples = {{ curve[1].id }}::Arithmetic.multiples_of(point)
+      SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER).each do |scalar|
+        expected = {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_and_add_public(zero, point, scalar))
+        {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_constant_time(scalar, multiples)).should eq(expected)
+      end
+    end
+
+    it "gives infinity for the scalar 0" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      multiples = {{ curve[1].id }}::Arithmetic.multiples_of({{ curve[1].id }}::Arithmetic.generator)
+      {{ curve[1].id }}::Arithmetic.neutral_bit({{ curve[1].id }}::Arithmetic.multiply_generator(zero)).should eq(1_u64)
+      {{ curve[1].id }}::Arithmetic.neutral_bit({{ curve[1].id }}::Arithmetic.multiply_constant_time(zero, multiples)).should eq(1_u64)
+    end
+  end
+{% end %}
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} stand-in of the generator multiplication" do
+    it "is [17]G, and neither equal nor opposite to any table entry" do
+      stand_in = {{ curve[1].id }}::Arithmetic.generator_stand_in
+      seventeen = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      seventeen[-1] = 17_u8
+      expected = {{ curve[1].id }}::Arithmetic.multiply_and_add_public(seventeen, {{ curve[1].id }}::Arithmetic.generator, Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE))
+      {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)).should eq({{ curve[1].id }}::Arithmetic.encode_uncompressed(expected))
+      {{ curve[1].id }}::Arithmetic.generator_window_tables.each do |table|
+        table.each { |entry| (entry.x == stand_in.x).should be_false }
+      end
+    end
+  end
+{% end %}

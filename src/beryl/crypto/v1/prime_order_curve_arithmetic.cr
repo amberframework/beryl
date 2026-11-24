@@ -92,6 +92,21 @@ module Beryl::Crypto::V1
       end
     end
 
+    # [17]G in affine coordinates: the stand-in `multiply_generator` keeps
+    # in place of its sum while that sum is infinity. It is not ±[j * 32^i]G
+    # for any table entry (j from 1 to 16, every window i): below the top
+    # windows j * 32^i lies between 32 and n - 32, and the spec
+    # "stand-in of the generator multiplication" checks every entry.
+    GENERATOR_STAND_IN = begin
+      point = generator
+      16.times { point = point.add_public(generator) }
+      to_affine_together([point]).first
+    end
+
+    def self.generator_stand_in : AffinePoint
+      GENERATOR_STAND_IN
+    end
+
     def self.generator_window_tables : Array(StaticArray(AffinePoint, 16))
       GENERATOR_WINDOW_TABLES
     end
@@ -314,6 +329,16 @@ module Beryl::Crypto::V1
     # for verification, branch to a doubling instead, which is allowed there
     # because every input is public.
     #
+    # The constant-time scalar multiplications never compute on the point
+    # at infinity either: while their running sum is still infinity they
+    # keep a stand-in point in its place and a bit that says so, and the
+    # digit 0 reads a real multiple whose sum is then dropped by mask. With
+    # Z = 0 or a zero table entry as an operand, a scalar with zero windows
+    # (the scalar 1 has 51 of 52) ran measurably faster than a random one on
+    # AMD EPYC 9V74 (Zen 4) and on Apple M4 with Data Independent Timing
+    # off, though no branch or address depended on it (docs/crypto/public-key.md,
+    # "Timing on x86-64").
+    #
     # The prime-order curves of BoringSSL and OpenSSL (`p256.c`,
     # `ecp_nistz256.c`) use the same coordinates and the same argument.
     struct Point
@@ -378,18 +403,17 @@ module Beryl::Crypto::V1
         sum.replace_if(other_is_neutral, self)
       end
 
-      # `add_affine`, for any pair at all: when the two are equal, the
-      # doubling (computed every time) is kept by mask.
-      def add_affine_or_double(other : AffinePoint, other_is_neutral : UInt64) : Point
+      # The sum with the affine *other*, neither of them infinity, for any
+      # pair at all: when the two are equal, the doubling (computed every
+      # time) is kept by mask.
+      def add_affine_or_double_unchecked(other : AffinePoint) : Point
         z1_squared = Field.square(@z)
         u2 = Field.mul(other.x, z1_squared)
         s2 = Field.mul(other.y, Field.mul(@z, z1_squared))
         h = Field.sub(u2, @x)
         r = Field.sub(s2, @y)
         are_equal = ConstantTimeSelection.equal_bit(Field.nonzero(h) | Field.nonzero(r), 0_u64)
-        sum = finish_addition(@x, @y, h, r, @z).replace_if(are_equal, double)
-        sum = sum.replace_if(neutral_bit, Point.from_affine(other))
-        sum.replace_if(other_is_neutral, self)
+        finish_addition(@x, @y, h, r, @z).replace_if(are_equal, double)
       end
 
       # The sum with *other* for public points: branches on infinity and on
@@ -425,7 +449,9 @@ module Beryl::Crypto::V1
         finish_addition(@x, @y, Field.sub(u2, @x), Field.sub(s2, @y), @z)
       end
 
-      private def add_unchecked(other : Point) : Point
+      # The sum with *other* by the formula alone: right when neither is
+      # infinity and the two are neither equal nor opposite.
+      def add_unchecked(other : Point) : Point
         z1_squared = Field.square(@z)
         z2_squared = Field.square(other.z)
         u1 = Field.mul(@x, z2_squared)
@@ -435,7 +461,9 @@ module Beryl::Crypto::V1
         finish_addition(u1, s1, Field.sub(u2, u1), Field.sub(s2, s1), Field.mul(@z, other.z))
       end
 
-      private def add_affine_unchecked(other : AffinePoint) : Point
+      # The sum with the affine *other* by the formula alone, under the same
+      # conditions as `add_unchecked`.
+      def add_affine_unchecked(other : AffinePoint) : Point
         z1_squared = Field.square(@z)
         u2 = Field.mul(other.x, z1_squared)
         s2 = Field.mul(other.y, Field.mul(@z, z1_squared))
@@ -591,27 +619,42 @@ module Beryl::Crypto::V1
     # 32·H - d_i = H_i - 2·d_i lies strictly between 0 and n, so the two
     # operands are never equal.
     #
-    # The top window starts the sum directly: doubling infinity five times
-    # and adding [d]P to it would give [d]P all the same.
+    # No step computes on infinity. While H = 0 the sum is marked by
+    # *is_infinity* and holds the stand-in [32]P, which is never ±[d]P for
+    # d from 1 to 16 (n is prime and far above 48); its doublings and sums
+    # are computed and dropped by mask. A digit d = 0 reads [1]P and drops
+    # the sum: then H_i = 32·H with H >= 1, and 32·H - 1 and 32·H + 1 lie
+    # strictly between 0 and n + 1, so [32·H]P is not ±P either (32·H + 1
+    # = n would need H_i = n - 1, whose sum is dropped all the same). The
+    # top window starts the sum directly: doubling infinity five times and
+    # adding [d]P to it would give [d]P all the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
       multiples_pointer = pointerof(multiples).as(Point*)
-      result = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
+      stand_in = multiples[15].double
+      result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
+      result = result.replace_if(is_infinity, stand_in)
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         5.times { result = result.double }
-        result = result.add(signed_multiple(scalar, window_index, multiples_pointer))
+        result = result.replace_if(is_infinity, stand_in)
+        selected, is_zero = signed_multiple(scalar, window_index, multiples_pointer)
+        sum = result.add_unchecked(selected)
+        sum = sum.replace_if(is_infinity, selected)
+        result = sum.replace_if(is_zero, result)
+        is_infinity &= is_zero
       end
-      result
+      result.replace_if(is_infinity, Point.neutral)
     end
 
     # Returns [d]P for the signed digit d of *scalar* at *window_index*,
-    # from the 16 points at *multiples*: the multiple picked by reading all 16, negated by mask when d < 0,
-    # and infinity (by mask) when d = 0.
+    # from the 16 points at *multiples* (the multiple picked by reading all
+    # 16, negated by mask when d < 0), and 1 when d = 0, else 0. For d = 0
+    # the point is P, a real point for the caller to compute on and drop.
     @[AlwaysInline]
-    def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : Point
+    def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : {Point, UInt64}
       digit, is_negative = booth_digit(scalar, window_index)
-      selected = select_multiple(multiples, digit &- 1_u64)
-      selected = Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z)
-      selected.replace_if(ConstantTimeSelection.equal_bit(digit, 0_u64), Point.neutral)
+      is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
+      selected = select_multiple(multiples, digit &- 1_u64 &+ is_zero)
+      {Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z), is_zero}
     end
 
     # Returns the magnitude (0 to 16) and the sign (1 when negative) of the
@@ -654,21 +697,31 @@ module Beryl::Crypto::V1
     # |S - d_i·32^i| < 17·32^i < n. At the top window that bound passes n,
     # so that one addition also computes the doubling and keeps it by mask
     # when the operands are equal.
+    #
+    # No step computes on infinity. A digit 0 reads the entry [32^i]G and
+    # drops the sum, and the bound above holds for it (|S| < 32^i). While
+    # the sum so far is infinity it is marked by *is_infinity* and holds
+    # the stand-in [17]G (`GENERATOR_STAND_IN`), which is no table entry
+    # and no negated one; its sums are computed and dropped by mask.
     def self.multiply_generator(scalar : Bytes) : Point
       list_of_tables = generator_window_tables
-      result = Point.neutral
+      is_infinity = 1_u64
+      result = Point.from_affine(generator_stand_in)
       GENERATOR_WINDOW_COUNT.times do |window_index|
         digit, is_negative = booth_digit(scalar, window_index)
-        entry = select_affine((list_of_tables.to_unsafe + window_index).as(AffinePoint*), digit &- 1_u64)
-        entry = AffinePoint.new(entry.x, Field.selectznz(is_negative, entry.y, Field.opp(entry.y)))
         is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
-        if window_index == GENERATOR_WINDOW_COUNT - 1
-          result = result.add_affine_or_double(entry, is_zero)
-        else
-          result = result.add_affine(entry, is_zero)
-        end
+        entry = select_affine((list_of_tables.to_unsafe + window_index).as(AffinePoint*), digit &- 1_u64 &+ is_zero)
+        entry = AffinePoint.new(entry.x, Field.selectznz(is_negative, entry.y, Field.opp(entry.y)))
+        sum = if window_index == GENERATOR_WINDOW_COUNT - 1
+                result.add_affine_or_double_unchecked(entry)
+              else
+                result.add_affine_unchecked(entry)
+              end
+        sum = sum.replace_if(is_infinity, Point.from_affine(entry))
+        result = sum.replace_if(is_zero, result)
+        is_infinity &= is_zero
       end
-      result
+      result.replace_if(is_infinity, Point.neutral)
     end
 
     # The width-*width* signed digits of a public big-endian *scalar*
