@@ -20,7 +20,7 @@ list_of_cipher_suites = [] of Beryl::TLS::CipherSuite
 OptionParser.parse do |parser|
   parser.banner = "Usage: https_server [options]"
   parser.on("--host HOST", "Address to listen on (127.0.0.1)") { |value| host = value }
-  parser.on("--port PORT", "Port to listen on (8443)") { |value| port = value.to_i }
+  parser.on("--port PORT", "Port to listen on (8443; 0 picks a free port)") { |value| port = value.to_i }
   parser.on("--certificate-chain PATH", "PEM chain, leaf first") { |value| certificate_chain_path = value }
   parser.on("--private-key PATH", "PEM private key") { |value| private_key_path = value }
   parser.on("--alpn LIST", "Comma-separated ALPN protocols, in preference order") { |value| list_of_alpn_protocols = value.split(',') }
@@ -47,7 +47,8 @@ server = HTTP::Server.new do |http_context|
   http_context.response.content_type = "text/plain"
   http_context.response.print "hello from beryl\n"
 end
-server.bind(Beryl::TLS::Server.new(TCPServer.new(host, port), context))
-STDOUT.puts "listening on https://#{host}:#{port}"
+tcp_server = TCPServer.new(host, port)
+server.bind(Beryl::TLS::Server.new(tcp_server, context))
+STDOUT.puts "listening on https://#{host}:#{tcp_server.local_address.port}"
 STDOUT.flush
 server.listen
