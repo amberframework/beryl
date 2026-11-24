@@ -173,9 +173,15 @@ jobs:
           ruby scripts/check_secret_flow.rb secret_flow_without_eor3.ll
 
   rsa-constant-time:
-    name: Constant-time timing check, RSA
+    name: Constant-time timing check, RSA (${{ matrix.examples }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    # One job per key size: the 4,096-bit private operation alone takes about
+    # 20 minutes at 50,000 measurements per class on an x86-64 runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        examples: ["(2048 bits)", "(3072 bits)", "(4096 bits)", "OAEP"]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
@@ -189,7 +195,7 @@ jobs:
       # smaller count than the other timing checks (200,000 per class is the
       # count recorded for each pull request on the build Mac).
       - name: "Timing: the RSA private operation and OAEP decoding take the same time whatever the secret"
-        run: crystal spec --release --tag rsa_constant_time spec/constant_time/rsa_timing_spec.cr
+        run: crystal spec --release --tag rsa_constant_time --example "${{ matrix.examples }}" spec/constant_time/rsa_timing_spec.cr
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "50000"
 
