@@ -111,8 +111,12 @@ module CurveTimingProbe
       multiples = P256::Arithmetic.multiples_of(P256::PrivateKey.generate.public_key.point)
       fill_batch = ->(list_of_classes : Array(Bool)) { fill(storage, list_of_classes, generator, fixed, true) }
       measurement.run(fill_batch, prepare) { |slot| sink &+= timed_multiply_constant_time(slot_of(storage, slot), multiples).x[0] }
-    when "x25519-zero", "x25519-fixed"
-      fixed = case_name.ends_with?("zero") ? zero : Random::Secure.random_bytes(SCALAR_BYTESIZE)
+    when "x25519-zero", "x25519-fixed", "x25519-ones"
+      fixed = case case_name
+              when "x25519-zero" then zero
+              when "x25519-ones" then Bytes.new(SCALAR_BYTESIZE, 0xff_u8)
+              else                    Random::Secure.random_bytes(SCALAR_BYTESIZE)
+              end
       peer_u = X25519::PrivateKey.generate.public_key.to_slice
       fill_batch = ->(list_of_classes : Array(Bool)) { fill(storage, list_of_classes, generator, fixed, false) }
       measurement.run(fill_batch, prepare) { |slot| sink &+= timed_x25519(slot_of(storage, slot), peer_u)[0] }

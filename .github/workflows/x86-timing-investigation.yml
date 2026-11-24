@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   before-and-after:
-    name: Main against the fix, on the runner's processor ${{ matrix.run }}
+    name: X25519 cases and the CI step on AMD runners ${{ matrix.run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -44,9 +44,9 @@ jobs:
         if: steps.processor.outputs.measure == 'yes'
         run: |
           model=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
-          for round in 1 2; do
-            for case_name in p256-generator-one p256-generator-fixed p256-ecdh-one p256-ecdh-fixed; do
-              for side in main x86-timing-gate; do
+          for round in 1 2 3; do
+            for case_name in x25519-zero x25519-fixed x25519-ones; do
+              for side in x86-timing-gate; do
                 line=$(taskset -c 1 ./probe_$side $case_name 1000000)
                 echo "RESULT | $model | $side | round $round | $line"
               done
