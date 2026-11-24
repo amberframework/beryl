@@ -25,7 +25,7 @@
 dependencies:
   beryl:
     github: amberframework/beryl
-    commit: a91a7e9a7ecc22db9d6f2267bb16f609daa3b419
+    commit: 7da77333daba62126b69eb26b74c1a656dbf6721
 ```
 
 ```crystal
