@@ -8,6 +8,18 @@ require "./tls/key_schedule"
 require "./tls/limits"
 require "./tls/record_protection"
 require "./tls/record_layer"
+require "./tls/messages/message_reader"
+require "./tls/messages/handshake_messages"
+require "./tls/messages/extension_codec"
+require "./tls/handshake_randomness"
+require "./tls/certified_key"
+require "./tls/certificate_verifier"
+require "./tls/session_ticket"
+require "./tls/context"
+require "./tls/handshake_outcome"
+require "./tls/client_handshake"
+require "./tls/server_handshake"
+require "./tls/socket"
 
 # TLS 1.3 (RFC 9846) written in Crystal, on Beryl's own cryptography.
 #
