@@ -47,6 +47,8 @@ Beryl speaks.
   HTTPS (wrk, 32 connections, M1 Max) this took requests per second from
   about 65,000 to 79,000 on a small page, ahead of the same app on OpenSSL
   (71,000).
+- **System trust store** (#28): `TrustStore.system` reads `SSL_CERT_FILE`,
+  as OpenSSL and Go do.
 - `Beryl::VERSION` reads 0.2.0.
   - Handshakes wipe every secret they derive in an `ensure`, including on
     failure; connections wipe the traffic, exporter and resumption master
