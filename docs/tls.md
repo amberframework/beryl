@@ -34,7 +34,7 @@ server.listen
 | Groups | `x25519`, `secp256r1` (the client sends an `x25519` share; a server that wants `secp256r1` asks with HelloRetryRequest) |
 | CertificateVerify | `ecdsa_secp256r1_sha256`, `rsa_pss_rsae_sha256/384/512`, `ed25519`, `ecdsa_secp384r1_sha384` |
 | Certificates | the above plus `rsa_pkcs1_sha256/384/512` signatures inside the chain (B4) |
-| Extensions | SNI, ALPN, supported groups and versions, key share, signature algorithms (and `_cert`), PSK modes (`psk_dhe_ke` only), pre-shared key, cookie, record size limit (answered), GREASE (sent by the client, ignored by the server) |
+| Extensions | SNI, ALPN, supported groups and versions, key share, signature algorithms (and `_cert`), PSK modes (`psk_dhe_ke` only), pre-shared key, cookie, record size limit (sent by the client with its own limit, answered by the server with its own), GREASE (sent by the client, ignored by the server) |
 | Resumption | session tickets sealed with XChaCha20-Poly1305 under the server's ticket key; every resumption runs a fresh ECDHE exchange; the client uses each ticket once |
 | Never | 0-RTT data (a server skips refused early data within a budget), renegotiation, compression, TLS 1.2 or older, RSA key exchange, SHA-1 or MD5 signatures, `psk_ke` |
 
@@ -54,7 +54,29 @@ Set through `Context#limits = Beryl::TLS::Limits.new(...)`; the defaults are the
 | Warning alerts in a row | 1 (closes CVE-2016-8610's class) |
 | Empty records in a row | 32 |
 | Refused 0-RTT bytes skipped | 16,384 |
-| Client ticket cache | 256 server names, 4 tickets each |
+| Client ticket cache | 256 server names, 4 tickets each; a ticket is offered only by a context with the same certificate verifier as the connection that received it |
+| Records under one sending key | 16,777,216, then an automatic KeyUpdate (`largest_record_count_per_key`; RFC 9846 §5.5) |
+| record_size_limit announced | 16,385 (`record_size_limit`, 64 to 16,385); once both ends sent one, a larger record is refused before it is opened (`record_overflow`) |
+| Tickets per handshake | 0 to 16 (`Context::Server#session_ticket_count=`) |
+
+## Secrets
+
+Each handshake wipes the secrets it derives when it ends, finished or not:
+the (EC)DHE shared secret, the key schedule's stage secrets and the
+handshake traffic secrets always, and the application traffic, exporter and
+resumption master secrets too when the handshake failed. A connection wipes
+its traffic secrets, its exporter and resumption master secrets and its
+record IVs when it closes and after any failure; `export_keying_material`
+then raises `ConnectionClosed`. Each KeyUpdate wipes the secret and the
+record protection it replaces.
+
+An alert that arrives in plaintext while keys are installed (a server
+waiting for the client's flight accepts one, since a client that refused
+the ServerHello has no keys) is raised as `UnauthenticatedAlert`, a
+`PeerAlert` whose message says it may not come from the peer. A
+change_cipher_spec record is accepted only after the first ClientHello and
+only between handshake messages; a ticket whose issue time lies in the
+future is never resumed.
 
 ## Seam for the standard library and Amber
 

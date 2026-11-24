@@ -435,6 +435,111 @@ describe "Beryl::TLS handshakes over a socket pair" do
     end
   end
 
+  context "record_size_limit (RFC 8449)" do
+    it "sends this end's own limit both ways and keeps every record within the peer's" do
+      server_context = TlsHarness.server_context
+      server_context.limits = TLS::Limits.new(record_size_limit: 256)
+      client_context = TlsHarness.client_context
+      client_context.limits = TLS::Limits.new(record_size_limit: 512)
+      TlsHarness.connect(server_context, client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        payload = "x" * 5_000
+        client.print payload
+        client.flush
+        server.read_string(payload.bytesize).should eq(payload)
+        server.print payload
+        server.flush
+        client.read_string(payload.bytesize).should eq(payload)
+      end
+    end
+
+    it "refuses a limit outside 64 to 16,385" do
+      expect_raises(ArgumentError) { TLS::Limits.new(record_size_limit: 63) }
+      expect_raises(ArgumentError) { TLS::Limits.new(record_size_limit: 16_386) }
+    end
+  end
+
+  context "key and secret lifetime" do
+    it "moves to a new sending key on its own before the per-key record limit" do
+      client_context = TlsHarness.client_context
+      client_context.limits = TLS::Limits.new(largest_record_count_per_key: 4_u64)
+      TlsHarness.connect(TlsHarness.server_context, client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        10.times { exchange_data(client, server) }
+        client.sent_key_update_count.should be > 0
+        server.sent_key_update_count.should eq(0)
+      end
+    end
+
+    it "wipes the exporter secret at close, so nothing more is exported" do
+      TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        client.export_keying_material("EXPORTER-spec", Bytes.empty, 32).size.should eq(32)
+        client.close
+        expect_raises(TLS::ConnectionClosed) { client.export_keying_material("EXPORTER-spec", Bytes.empty, 32) }
+        server.close
+      end
+    end
+  end
+
+  context "session tickets after the security review" do
+    it "never resumes a ticket whose issue time is in the future" do
+      server_context = TlsHarness.server_context
+      client_context = TlsHarness.client_context
+      suite = TLS::CipherSuite::TLS_AES_128_GCM_SHA256
+      pre_shared_key = Bytes.new(32, 9)
+      issued_at = Time.utc.to_unix_ms + 3_600_000
+      state = TLS::SealedSessionState.new(suite, pre_shared_key, issued_at, 7_200_u32, 0_u32, nil, "localhost")
+      ticket = state.seal(server_context.ticket_key)
+      client_context.session_cache.store(TLS::SessionTicket.new("localhost", suite, pre_shared_key, ticket, 0_u32,
+        Time.instant, 2.hours, nil, client_context.certificate_verifier))
+      TlsHarness.connect(server_context, client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        client.resumed?.should be_false
+        server.resumed?.should be_false
+      end
+    end
+
+    it "never offers a ticket from an unverified connection to a context that verifies" do
+      server_context = TlsHarness.server_context
+      shared_cache = TLS::SessionCache.new
+      insecure_context = TLS::Context::Client.insecure
+      insecure_context.session_cache = shared_cache
+      TlsHarness.connect(server_context, insecure_context) do |client_result, server_result|
+        exchange_data(*expect_connected(client_result, server_result))
+      end
+      shared_cache.size.should eq(1)
+
+      verifying_context = TlsHarness.client_context
+      verifying_context.session_cache = shared_cache
+      TlsHarness.connect(server_context, verifying_context) do |client_result, server_result|
+        client, _ = expect_connected(client_result, server_result)
+        client.resumed?.should be_false
+        client.peer_certificate.should_not be_nil
+      end
+    end
+
+    it "refuses a ticket count over the most a server sends" do
+      context = TLS::Context::Server.new
+      expect_raises(ArgumentError) { context.session_ticket_count = TLS::Context::Server::LARGEST_SESSION_TICKET_COUNT + 1 }
+      expect_raises(ArgumentError) { context.session_ticket_count = -1 }
+      context.session_ticket_count = 0
+      context.session_tickets_enabled?.should be_false
+    end
+  end
+
+  context "change_cipher_spec placement" do
+    it "refuses a change_cipher_spec before the first ClientHello (unexpected_message)" do
+      client_output = TlsHarness::ScriptedIO.new(Bytes.empty)
+      expect_raises(IO::EOFError) do
+        TLS::Socket::Client.new(client_output, TlsHarness.client_context, hostname: "localhost")
+      end
+      bytes = Bytes[20, 3, 3, 0, 1, 1] + client_output.output.to_slice
+      error = expect_raises(TLS::Error) { TLS::Socket::Server.new(TlsHarness::ScriptedIO.new(bytes), TlsHarness.server_context) }
+      error.alert_description.should eq(TLS::AlertDescription::UnexpectedMessage)
+    end
+  end
+
   describe Beryl::TLS::Server do
     it "accepts TLS connections from a TCP server" do
       tcp_server = TCPServer.new("127.0.0.1", 0)

@@ -117,12 +117,26 @@ describe Beryl::TLS::RecordLayer do
       layer.handshake_buffer_empty?.should be_true
     end
 
-    it "reassembles a message split over records and skips one compatibility change_cipher_spec" do
+    it "reassembles a message split over records and skips one compatibility change_cipher_spec before it" do
+      message = Bytes[1, 0, 0, 5, 1, 2, 3, 4, 5]
+      bytes = plaintext_record(TLS::ContentType::ChangeCipherSpec, Bytes[1]) +
+              plaintext_record(TLS::ContentType::Handshake, message[0, 3]) +
+              plaintext_record(TLS::ContentType::Handshake, message[3..])
+      layer_reading(bytes).read_handshake_message.should eq(message)
+    end
+
+    it "refuses a change_cipher_spec between the fragments of a handshake message (unexpected_message)" do
       message = Bytes[1, 0, 0, 5, 1, 2, 3, 4, 5]
       bytes = plaintext_record(TLS::ContentType::Handshake, message[0, 3]) +
               plaintext_record(TLS::ContentType::ChangeCipherSpec, Bytes[1]) +
               plaintext_record(TLS::ContentType::Handshake, message[3..])
-      layer_reading(bytes).read_handshake_message.should eq(message)
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer_reading(bytes).read_handshake_message }
+    end
+
+    it "refuses a change_cipher_spec while they are turned off (unexpected_message)" do
+      layer = layer_reading(plaintext_record(TLS::ContentType::ChangeCipherSpec, Bytes[1]))
+      layer.is_change_cipher_spec_allowed = false
+      expect_alert(TLS::AlertDescription::UnexpectedMessage) { layer.read_handshake_message }
     end
 
     it "refuses a second change_cipher_spec, or one that is not the single byte 1" do
@@ -254,8 +268,22 @@ describe Beryl::TLS::RecordLayer do
       layer = layer_reading(record)
       layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
       layer.is_accepting_plaintext_alerts = true
-      error = expect_raises(TLS::PeerAlert) { layer.read_handshake_message }
+      error = expect_raises(TLS::UnauthenticatedAlert) { layer.read_handshake_message }
       error.alert_description.should eq(TLS::AlertDescription::BadCertificate)
+    end
+
+    it "refuses a protected record over its own record_size_limit before opening it (record_overflow)" do
+      traffic_secret = Bytes.new(32, 7)
+      record = TLS::RecordProtection.new(SUITE, traffic_secret).seal(TLS::ContentType::ApplicationData, Bytes.new(200, 1))
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, traffic_secret)
+      layer.largest_incoming_inner_plaintext_bytesize = 200
+      expect_alert(TLS::AlertDescription::RecordOverflow) { layer.read_after_handshake }
+
+      layer = layer_reading(record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, traffic_secret)
+      layer.largest_incoming_inner_plaintext_bytesize = 201
+      layer.read_after_handshake.should eq({TLS::ContentType::ApplicationData, Bytes.new(200, 1)})
     end
 
     it "raises PeerAlert with the peer's description" do
