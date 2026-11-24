@@ -1,4 +1,5 @@
 require "../../../spec_helper"
+require "big"
 
 private alias X25519 = Beryl::Crypto::V1::X25519
 private alias Ed25519 = Beryl::Crypto::V1::Ed25519
@@ -148,3 +149,109 @@ describe Beryl::Crypto::V1::P384 do
     public_key.verify("message", Bytes.new(96), format: SignatureFormat::FixedWidth).should be_false
   end
 end
+
+# The generator multiplication writes its scalar in odd digits, and the
+# variable-point one keeps a stand-in point while its sum is still infinity
+# and reads a real multiple for each digit 0, so scalars with
+# long runs of zero windows, at the bottom, in the middle or at the top,
+# are where they could go wrong. Each is checked against the variable-time
+# multiplication of signature verification.
+module SparseScalarCheck
+  def self.list_of_scalars(bytesize : Int32, group_order : Bytes) : Array(Bytes)
+    list_of_scalars = [] of Bytes
+    [1, 2, 3, 15, 16, 17, 31, 32, 33, 1023, 1024, 1025].each do |small|
+      scalar = Bytes.new(bytesize)
+      scalar[bytesize - 1] = (small & 0xff).to_u8
+      scalar[bytesize - 2] = (small >> 8).to_u8
+      list_of_scalars << scalar
+    end
+    (0...bytesize * 8 - 1).step(7) do |bit|
+      scalar = Bytes.new(bytesize)
+      scalar[bytesize - 1 - bit // 8] = (1 << (bit % 8)).to_u8
+      list_of_scalars << scalar
+      both_ends = scalar.dup
+      both_ends[bytesize - 1] |= 1_u8
+      list_of_scalars << both_ends
+    end
+    order_minus_one = group_order.dup
+    order_minus_one[bytesize - 1] &-= 1
+    list_of_scalars << order_minus_one
+    order_minus_two = group_order.dup
+    order_minus_two[bytesize - 1] &-= 2
+    list_of_scalars << order_minus_two
+    list_of_scalars
+  end
+end
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} constant-time multiplication by sparse scalars" do
+    it "matches the variable-time multiplication of the generator" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER).each do |scalar|
+        expected = {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_and_add_public(scalar, {{ curve[1].id }}::Arithmetic.generator, zero))
+        {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_generator(scalar)).should eq(expected)
+      end
+    end
+
+    it "matches the variable-time multiplication of another point" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      point_scalar = Random::Secure.random_bytes({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      point_scalar[0] = 0_u8
+      point = {{ curve[1].id }}::Arithmetic.multiply_and_add_public(point_scalar, {{ curve[1].id }}::Arithmetic.generator, zero)
+      multiples = {{ curve[1].id }}::Arithmetic.multiples_of(point)
+      SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER).each do |scalar|
+        expected = {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_and_add_public(zero, point, scalar))
+        {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic.multiply_constant_time(scalar, multiples)).should eq(expected)
+      end
+    end
+
+    it "gives infinity for the scalar 0" do
+      zero = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+      multiples = {{ curve[1].id }}::Arithmetic.multiples_of({{ curve[1].id }}::Arithmetic.generator)
+      {{ curve[1].id }}::Arithmetic.neutral_bit({{ curve[1].id }}::Arithmetic.multiply_generator(zero)).should eq(1_u64)
+      {{ curve[1].id }}::Arithmetic.neutral_bit({{ curve[1].id }}::Arithmetic.multiply_constant_time(zero, multiples)).should eq(1_u64)
+    end
+  end
+{% end %}
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} odd digits of the generator multiplication" do
+    it "sum to the scalar made odd, every one of them odd and from -31 to 31" do
+      order = BigInt.new({{ curve[1].id }}::Arithmetic::GROUP_ORDER.hexstring, 16)
+      list_of_scalars = SparseScalarCheck.list_of_scalars({{ curve[1].id }}::Arithmetic::BYTESIZE, {{ curve[1].id }}::Arithmetic::GROUP_ORDER) + [Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE), Random::Secure.random_bytes({{ curve[1].id }}::Arithmetic::BYTESIZE)]
+      list_of_scalars.each do |scalar|
+        value = BigInt.new(scalar.hexstring, 16) % order
+        scalar_bytes = value.to_s(16).rjust({{ curve[1].id }}::Arithmetic::BYTESIZE * 2, '0').hexbytes
+        odd_scalar = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
+        is_even = {{ curve[1].id }}::Arithmetic.odd_scalar_of(scalar_bytes, odd_scalar)
+        expected = value.even? ? order - value : value
+        is_even.should eq(value.even? ? 1_u64 : 0_u64)
+        BigInt.new(odd_scalar.hexstring, 16).should eq(expected)
+        total = BigInt.new(0)
+        {{ curve[1].id }}::Arithmetic::GENERATOR_WINDOW_COUNT.times do |window_index|
+          index, is_negative = {{ curve[1].id }}::Arithmetic.odd_digit(odd_scalar, window_index)
+          (index <= 15).should be_true
+          digit = BigInt.new(2 * index + 1)
+          total += (is_negative == 1 ? -digit : digit) * BigInt.new(32) ** window_index
+        end
+        total.should eq(expected)
+      end
+    end
+  end
+{% end %}
+
+{% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
+  describe "{{ curve[0].id }} stand-in of the variable-point multiplication" do
+    it "is [2^e]P, never ±[d]P for a digit d from 1 to 16, at every window" do
+      group_order = {{ curve[1].id }}::Arithmetic::GROUP_ORDER.hexstring.to_big_i(16)
+      last_exponent = 5 + 5 * ({{ curve[1].id }}::Arithmetic::GENERATOR_WINDOW_COUNT - 1)
+      residue = BigInt.new(16)
+      (5..last_exponent).each do
+        residue = (residue * 2) % group_order
+        (1..16).each do |digit|
+          (residue == digit || residue == group_order - digit).should be_false
+        end
+      end
+    end
+  end
+{% end %}

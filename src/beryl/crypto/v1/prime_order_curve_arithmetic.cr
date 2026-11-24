@@ -71,18 +71,20 @@ module Beryl::Crypto::V1
     # BYTESIZE * 8 bits and the sign of the top window.
     GENERATOR_WINDOW_COUNT = (BYTESIZE * 8 + 5) // 5
 
-    # For each signed 5-bit window of a scalar, counted from the least
+    # For each signed 5-bit window of an odd scalar, counted from the least
     # significant, the multiples of G that window can add, in affine
-    # coordinates: entry j - 1 of table i is [j * 32^i]G, for j = 1 to 16.
-    # Built once, when first used, with a single inversion.
+    # coordinates: entry j of table i is [(2j + 1) * 32^i]G, for j = 0 to
+    # 15, the odd multiples 1 to 31 (`odd_digit`). Built once, when first
+    # used, with a single inversion.
     GENERATOR_WINDOW_TABLES = begin
       list_of_points = [] of Point
       base = generator
       GENERATOR_WINDOW_COUNT.times do
+        twice_base = base.double
         multiple = base
         16.times do
           list_of_points << multiple
-          multiple = multiple.add_public(base)
+          multiple = multiple.add_public(twice_base)
         end
         5.times { base = base.double }
       end
@@ -314,6 +316,20 @@ module Beryl::Crypto::V1
     # for verification, branch to a doubling instead, which is allowed there
     # because every input is public.
     #
+    # The constant-time scalar multiplications never compute on the point
+    # at infinity either. The generator multiplication writes its scalar in
+    # odd digits, so every window adds a point and its sum is never
+    # infinity. The variable-point one keeps a stand-in point in place of a
+    # running sum that is still infinity, with a bit that says so, and its
+    # digit 0 reads a real multiple whose sum is then dropped by mask. With
+    # Z = 0 or a zero table entry as an operand, a scalar with zero windows
+    # (the scalar 1 has 51 of 52) ran measurably faster than a random one on
+    # AMD EPYC 7763 and 9V74 (Zen 3 and Zen 4) and on Apple M4 with Data
+    # Independent Timing off, though no branch or address depended on it
+    # (docs/crypto/public-key.md, "Timing on x86-64"). The operands also
+    # change every window, because operands that came back unchanged window
+    # after window still ran faster there.
+    #
     # The prime-order curves of BoringSSL and OpenSSL (`p256.c`,
     # `ecp_nistz256.c`) use the same coordinates and the same argument.
     struct Point
@@ -378,18 +394,17 @@ module Beryl::Crypto::V1
         sum.replace_if(other_is_neutral, self)
       end
 
-      # `add_affine`, for any pair at all: when the two are equal, the
-      # doubling (computed every time) is kept by mask.
-      def add_affine_or_double(other : AffinePoint, other_is_neutral : UInt64) : Point
+      # The sum with the affine *other*, neither of them infinity, for any
+      # pair at all: when the two are equal, the doubling (computed every
+      # time) is kept by mask.
+      def add_affine_or_double_unchecked(other : AffinePoint) : Point
         z1_squared = Field.square(@z)
         u2 = Field.mul(other.x, z1_squared)
         s2 = Field.mul(other.y, Field.mul(@z, z1_squared))
         h = Field.sub(u2, @x)
         r = Field.sub(s2, @y)
         are_equal = ConstantTimeSelection.equal_bit(Field.nonzero(h) | Field.nonzero(r), 0_u64)
-        sum = finish_addition(@x, @y, h, r, @z).replace_if(are_equal, double)
-        sum = sum.replace_if(neutral_bit, Point.from_affine(other))
-        sum.replace_if(other_is_neutral, self)
+        finish_addition(@x, @y, h, r, @z).replace_if(are_equal, double)
       end
 
       # The sum with *other* for public points: branches on infinity and on
@@ -425,7 +440,9 @@ module Beryl::Crypto::V1
         finish_addition(@x, @y, Field.sub(u2, @x), Field.sub(s2, @y), @z)
       end
 
-      private def add_unchecked(other : Point) : Point
+      # The sum with *other* by the formula alone: right when neither is
+      # infinity and the two are neither equal nor opposite.
+      def add_unchecked(other : Point) : Point
         z1_squared = Field.square(@z)
         z2_squared = Field.square(other.z)
         u1 = Field.mul(@x, z2_squared)
@@ -435,7 +452,9 @@ module Beryl::Crypto::V1
         finish_addition(u1, s1, Field.sub(u2, u1), Field.sub(s2, s1), Field.mul(@z, other.z))
       end
 
-      private def add_affine_unchecked(other : AffinePoint) : Point
+      # The sum with the affine *other* by the formula alone, under the same
+      # conditions as `add_unchecked`.
+      def add_affine_unchecked(other : AffinePoint) : Point
         z1_squared = Field.square(@z)
         u2 = Field.mul(other.x, z1_squared)
         s2 = Field.mul(other.y, Field.mul(@z, z1_squared))
@@ -581,7 +600,7 @@ module Beryl::Crypto::V1
     # Returns [scalar]point for a big-endian *scalar* of BYTESIZE bytes
     # below the group order n, in constant time, with *multiples* =
     # `multiples_of(point)`. The scalar is written in signed 5-bit windows
-    # (Booth's recoding, as for `multiply_generator`); from the most
+    # (Booth's recoding, as OpenSSL's `ecp_nistz256` does); from the most
     # significant window down, five doublings and then the addition of
     # [d]P, picked by reading all 16 multiples and negated by mask when
     # d < 0. Before window i is added the sum is [32·H]P, where
@@ -591,27 +610,48 @@ module Beryl::Crypto::V1
     # 32·H - d_i = H_i - 2·d_i lies strictly between 0 and n, so the two
     # operands are never equal.
     #
-    # The top window starts the sum directly: doubling infinity five times
-    # and adding [d]P to it would give [d]P all the same.
+    # No step computes on infinity. While H = 0 the sum is marked by
+    # *is_infinity* and holds a stand-in that starts at [32]P and is doubled
+    # with the real sum, five times a window, so it is [2^e]P with e from 5
+    # to 5 + 5·(windows - 1); its sums are computed and dropped by mask.
+    # [2^e]P is never ±[d]P for d from 1 to 16: 2^e mod n is not ±d for any
+    # of those e, which a spec checks for both curves. The stand-in changes
+    # every window, because the same operands window after window (a
+    # stand-in chosen afresh each time) still ran faster on AMD EPYC 9V74
+    # for the key 1. A digit d = 0 reads [j]P, j = 1 + (i mod 16), a
+    # different multiple from one window to the next, and drops the sum:
+    # then H_i = 32·H with H >= 1, so 32·H - j lies strictly between 0 and
+    # n, and [32·H]P is not [j]P; it is -[j]P only if H_i = n - j, a sum
+    # that is dropped all the same. The top window starts the sum directly:
+    # doubling infinity five times and adding [d]P to it would give [d]P all
+    # the same.
     def self.multiply_constant_time(scalar : Bytes, multiples : StaticArray(Point, 16)) : Point
       multiples_pointer = pointerof(multiples).as(Point*)
-      result = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
+      result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
+      result = result.replace_if(is_infinity, multiples[15].double)
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         5.times { result = result.double }
-        result = result.add(signed_multiple(scalar, window_index, multiples_pointer))
+        selected, is_zero = signed_multiple(scalar, window_index, multiples_pointer)
+        sum = result.add_unchecked(selected)
+        sum = sum.replace_if(is_infinity, selected)
+        result = sum.replace_if(is_zero, result)
+        is_infinity &= is_zero
       end
-      result
+      result.replace_if(is_infinity, Point.neutral)
     end
 
     # Returns [d]P for the signed digit d of *scalar* at *window_index*,
-    # from the 16 points at *multiples*: the multiple picked by reading all 16, negated by mask when d < 0,
-    # and infinity (by mask) when d = 0.
+    # from the 16 points at *multiples* (the multiple picked by reading all
+    # 16, negated by mask when d < 0), and 1 when d = 0, else 0. For d = 0
+    # the point is [1 + (window_index mod 16)]P, a real point for the caller
+    # to compute on and drop.
     @[AlwaysInline]
-    def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : Point
+    def self.signed_multiple(scalar : Bytes, window_index : Int32, multiples : Point*) : {Point, UInt64}
       digit, is_negative = booth_digit(scalar, window_index)
-      selected = select_multiple(multiples, digit &- 1_u64)
-      selected = Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z)
-      selected.replace_if(ConstantTimeSelection.equal_bit(digit, 0_u64), Point.neutral)
+      is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
+      stand_in_index = (window_index & 15).to_u64
+      selected = select_multiple(multiples, (digit &- 1_u64) &+ (ConstantTimeSelection.mask_of(is_zero) & (stand_in_index &+ 1_u64)))
+      {Point.new(selected.x, Field.selectznz(is_negative, selected.y, Field.opp(selected.y)), selected.z), is_zero}
     end
 
     # Returns the magnitude (0 to 16) and the sign (1 when negative) of the
@@ -641,34 +681,84 @@ module Beryl::Crypto::V1
     end
 
     # Returns [scalar]G for a big-endian *scalar* of BYTESIZE bytes below
-    # the group order n, in constant time and with no doubling. The scalar
-    # is written in signed 5-bit windows (Booth's recoding, as OpenSSL's
-    # `ecp_nistz256` does): digit d_i in -16..16 weighs 32^i, and the digits
-    # sum to the scalar. From the least significant window up, [|d_i|·32^i]G
-    # is picked from the precomputed table by reading all 16 entries,
-    # negated by mask when d_i < 0, and added in affine form; a zero digit
-    # adds nothing, by mask.
+    # the group order n, in constant time, with no doubling and no zero
+    # digit. The scalar is first made odd: an even k becomes n - k, and the
+    # result is negated by mask at the end. The odd value m is written in
+    # signed 5-bit windows whose digits are all odd, from -31 to 31
+    # (`odd_digit`), so every window adds a point: [|d_i|·32^i]G, picked
+    # from the precomputed table by reading all 16 entries, negated by mask
+    # when d_i < 0, and added in affine form. No sum is dropped and no
+    # operand stays the same from one window to the next.
     #
-    # The two operands of an addition are never equal below the top window:
-    # the sum so far is [S]G with |S| < 32^i <= |d_i|·32^i, and
-    # |S - d_i·32^i| < 17·32^i < n. At the top window that bound passes n,
-    # so that one addition also computes the doubling and keeps it by mask
-    # when the operands are equal.
+    # The two operands of an addition are never equal or opposite below the
+    # top window: the sum so far is [S]G with S odd and |S| <= 31·(32^i -
+    # 1)/31 < 32^i <= |d_i|·32^i, and |S ± d_i·32^i| < 32^(i + 1) <= n. At
+    # the top window that bound passes n, so that one addition also computes
+    # the doubling and keeps it by mask when the operands are equal; when
+    # they are opposite (m = n, the scalar 0) its Z is 0, which is the
+    # neutral element.
+    #
+    # Odd digits replaced the zero digit of Booth's recoding, which added
+    # nothing: for a scalar such as 1 (51 zero digits of 52) the sum then
+    # stayed the same point window after window, and on AMD EPYC 7763
+    # (Zen 3) runners that ran measurably faster than a random scalar,
+    # though no branch or address depended on it (docs/crypto/public-key.md,
+    # "Timing on x86-64").
     def self.multiply_generator(scalar : Bytes) : Point
       list_of_tables = generator_window_tables
-      result = Point.neutral
-      GENERATOR_WINDOW_COUNT.times do |window_index|
-        digit, is_negative = booth_digit(scalar, window_index)
-        entry = select_affine((list_of_tables.to_unsafe + window_index).as(AffinePoint*), digit &- 1_u64)
+      odd_scalar = StaticArray(UInt8, BYTESIZE).new(0_u8)
+      is_even = odd_scalar_of(scalar, odd_scalar.to_slice)
+      digit_index, is_negative = odd_digit(odd_scalar.to_slice, 0)
+      entry = select_affine(list_of_tables.to_unsafe.as(AffinePoint*), digit_index)
+      result = Point.new(entry.x, Field.selectznz(is_negative, entry.y, Field.opp(entry.y)), Field.set_one)
+      (1...GENERATOR_WINDOW_COUNT).each do |window_index|
+        digit_index, is_negative = odd_digit(odd_scalar.to_slice, window_index)
+        entry = select_affine((list_of_tables.to_unsafe + window_index).as(AffinePoint*), digit_index)
         entry = AffinePoint.new(entry.x, Field.selectznz(is_negative, entry.y, Field.opp(entry.y)))
-        is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
-        if window_index == GENERATOR_WINDOW_COUNT - 1
-          result = result.add_affine_or_double(entry, is_zero)
-        else
-          result = result.add_affine(entry, is_zero)
-        end
+        result = if window_index == GENERATOR_WINDOW_COUNT - 1
+                   result.add_affine_or_double_unchecked(entry)
+                 else
+                   result.add_affine_unchecked(entry)
+                 end
       end
-      result
+      SecretWiping.wipe(odd_scalar.to_slice)
+      result = Point.new(result.x, Field.selectznz(is_even, result.y, Field.opp(result.y)), result.z)
+      result.replace_if(neutral_bit(result), Point.neutral)
+    end
+
+    # Writes into *odd_scalar* the big-endian *scalar* when it is odd and
+    # n - *scalar* when it is even (n is odd, so either way the value is
+    # odd), and returns 1 when *scalar* was even, else 0. In constant time:
+    # the subtraction is always computed and kept by mask.
+    @[AlwaysInline]
+    def self.odd_scalar_of(scalar : Bytes, odd_scalar : Bytes) : UInt64
+      is_even = (scalar.unsafe_fetch(BYTESIZE - 1).to_u64 & 1_u64) ^ 1_u64
+      mask = ConstantTimeSelection.mask_of(is_even).to_u8!
+      borrow = 0_u32
+      (BYTESIZE - 1).downto(0) do |index|
+        difference = GROUP_ORDER.unsafe_fetch(index).to_u32 &- scalar.unsafe_fetch(index).to_u32 &- borrow
+        borrow = (difference >> 8) & 1_u32
+        odd_scalar[index] = (difference.to_u8! & mask) | (scalar.unsafe_fetch(index) & ~mask)
+      end
+      is_even
+    end
+
+    # Returns the table index (0 to 15) and the sign (1 when negative) of
+    # the odd signed digit of the odd big-endian *odd_scalar* at window
+    # *window_index*, in constant time. Writing m_i = (m >> 5i) | 1, digit
+    # d_i = (m_i mod 64) - 32 for every window but the top one, and the top
+    # digit is m_i itself, below 32 for both curves: an odd number from -31
+    # to 31 each time, |d_i| = 2·index + 1. The digits sum to m, because
+    # m_(i + 1) = (m_i - d_i) / 32 (the regular recoding of Joye and
+    # Tunstall).
+    @[AlwaysInline]
+    def self.odd_digit(odd_scalar : Bytes, window_index : Int32) : {UInt64, UInt64}
+      window = scalar_bits(odd_scalar, window_index * 5) | 1_u64
+      return {window >> 1, 0_u64} if window_index == GENERATOR_WINDOW_COUNT - 1
+      is_negative = ((window >> 5) & 1_u64) ^ 1_u64
+      mask = ConstantTimeSelection.mask_of(is_negative)
+      magnitude = ((32_u64 &- window) & mask) | ((window &- 32_u64) & ~mask)
+      {magnitude >> 1, is_negative}
     end
 
     # The width-*width* signed digits of a public big-endian *scalar*

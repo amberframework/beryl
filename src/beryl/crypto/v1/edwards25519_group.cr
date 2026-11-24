@@ -1,3 +1,4 @@
+require "random/secure"
 require "../field_arithmetic"
 require "../constant_time_selection"
 require "../secret_wiping"
@@ -192,9 +193,23 @@ module Beryl::Crypto::V1
     # time: one addition per 4-bit window from that window's table in
     # `base_point_window_tables`, picked by scanning all 16 entries, and no
     # doubling.
+    #
+    # The sum starts as the neutral element written (0 : λ : λ : 0) for a
+    # random λ (odd and below 2^255, so 0 modulo p only if it equals p, a
+    # chance of 2^-254) rather than (0 : 1 : 1 : 0): the same point, so the
+    # same result, but a zero nibble no longer adds (0 : 1 : 1 : 0) to the
+    # same coordinates window after window. With the all-zero X25519 key
+    # (clamped to 2^254, 63 zero nibbles of 64) that ran measurably faster
+    # than random keys on an AMD EPYC 9V74 (Zen 4) runner
+    # (docs/crypto/public-key.md, "Timing on x86-64").
     def self.multiply_base(scalar : Bytes) : Point
       list_of_tables = base_point_window_tables
-      result = Point.neutral
+      random_bytes = Random::Secure.random_bytes(32)
+      random_bytes[0] |= 1_u8
+      random_bytes[31] &= 0x7f_u8
+      factor = FieldElement.from_bytes(random_bytes)
+      SecretWiping.wipe(random_bytes)
+      result = Point.new(FieldElement.zero, factor, factor, FieldElement.zero)
       64.times do |window_index|
         nibble = (scalar.unsafe_fetch(window_index >> 1).to_u64 >> ((window_index & 1) * 4)) & 0xf_u64
         table = list_of_tables.unsafe_fetch(window_index)

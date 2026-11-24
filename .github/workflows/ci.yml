@@ -75,6 +75,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
+      - name: State the processor the timing runs on
+        run: |
+          lscpu
+          grep -m1 microcode /proc/cpuinfo
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
@@ -112,8 +116,13 @@ jobs:
         run: |
           crystal build --release --emit llvm-ir -Dwithout_openssl -Dberyl_portable_ciphers spec/probes/secret_flow.cr -o secret_flow_portable_ciphers
           ruby scripts/check_secret_flow.rb secret_flow_portable_ciphers.ll
+      # Built first, then run pinned to one processor so the measurements are
+      # not moved between cores. Each check is decided by two runs out of
+      # three (spec/support/timing_leak_measurement.cr).
       - name: "Timing: HMAC, the ciphers and the curve operations take the same time whatever the secret"
-        run: crystal spec --release --tag constant_time --tag "~rsa_constant_time"
+        run: |
+          crystal build --release spec/constant_time/hmac_timing_spec.cr spec/constant_time/cipher_timing_spec.cr spec/constant_time/public_key_timing_spec.cr -o constant_time_specs
+          taskset -c 1 ./constant_time_specs --tag constant_time
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "1000000"
           BERYL_PUBLIC_KEY_CONSTANT_TIME_MEASUREMENTS: "100000"
@@ -175,14 +184,19 @@ jobs:
   rsa-constant-time:
     name: Constant-time timing check, RSA (${{ matrix.examples }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    # One job per key size: the 4,096-bit private operation alone takes about
-    # 20 minutes at 50,000 measurements per class on an x86-64 runner.
+    timeout-minutes: 60
+    # One job per key size: the 4,096-bit private operation alone took about
+    # 13 minutes per run at 50,000 measurements per class on an x86-64
+    # runner, and a check takes two runs (three when they disagree).
     strategy:
       fail-fast: false
       matrix:
         examples: ["(2048 bits)", "(3072 bits)", "(4096 bits)", "OAEP"]
     steps:
+      - name: State the processor the timing runs on
+        run: |
+          lscpu
+          grep -m1 microcode /proc/cpuinfo
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: crystal-lang/install-crystal@d8ef131ecec0352ce0e39b81b0a6d95def58fe2f # v1
         with:
@@ -195,7 +209,9 @@ jobs:
       # smaller count than the other timing checks (200,000 per class is the
       # count recorded for each pull request on the build Mac).
       - name: "Timing: the RSA private operation and OAEP decoding take the same time whatever the secret"
-        run: crystal spec --release --tag rsa_constant_time --example "${{ matrix.examples }}" spec/constant_time/rsa_timing_spec.cr
+        run: |
+          crystal build --release spec/constant_time/rsa_timing_spec.cr -o rsa_timing_specs
+          taskset -c 1 ./rsa_timing_specs --tag rsa_constant_time --example "${{ matrix.examples }}"
         env:
           BERYL_CONSTANT_TIME_MEASUREMENTS: "50000"
 

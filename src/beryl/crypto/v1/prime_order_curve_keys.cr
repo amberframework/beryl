@@ -162,7 +162,16 @@ module Beryl::Crypto::V1
             digest_integer = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order({{ arithmetic }}.digest_to_integer(digest)))
             private_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(@scalar))
             nonce_scalar = scalar_field.to_montgomery({{ arithmetic }}.limbs_from_big_endian(nonce))
-            inverse_nonce = {{ arithmetic }}.scalar_invert(nonce_scalar)
+            # k^-1 = b·(k·b)^-1 for a random b: the inversion runs on a
+            # fresh value each time, never on k itself. Inverting the nonce
+            # 1 directly took a measurably different time on AMD EPYC 7763
+            # (Zen 3) runners (docs/crypto/public-key.md, "Timing on x86-64").
+            # A b of 0 (chance about 2^-256) makes s zero, which is refused
+            # below.
+            blinding_bytes = Random::Secure.random_bytes({{ arithmetic }}::BYTESIZE)
+            blinding = scalar_field.to_montgomery({{ arithmetic }}.reduce_once_modulo_order(blinding_bytes))
+            SecretWiping.wipe(blinding_bytes)
+            inverse_nonce = scalar_field.mul(blinding, {{ arithmetic }}.scalar_invert(scalar_field.mul(nonce_scalar, blinding)))
             s = scalar_field.mul(inverse_nonce, scalar_field.add(digest_integer, scalar_field.mul(r, private_scalar)))
             encoded_s = {{ arithmetic }}.limbs_to_big_endian(scalar_field.from_montgomery(s))
             has_zero_component = ConstantTimeSelection.all_zero_bit(encoded_r) | ConstantTimeSelection.all_zero_bit(encoded_s)

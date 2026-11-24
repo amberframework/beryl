@@ -110,7 +110,7 @@ module Beryl::Crypto::V1
         u_bytes = StaticArray(UInt8, 32).new { |index| u_coordinate.unsafe_fetch(index) }
         u_bytes[31] &= 0x7f_u8
 
-        result = ladder(clamped, Field.from_bytes(u_bytes))
+        result = ladder(clamped, Field.from_bytes(u_bytes), random_coordinate_factor)
         SecretWiping.wipe(clamped.to_slice)
         Bytes.new(KEY_BYTESIZE) { |index| result[index] }
       end
@@ -137,19 +137,40 @@ module Beryl::Crypto::V1
       end
     end
 
+    # A random nonzero field element for `ladder`'s projective coordinates:
+    # 255 random bits with the lowest set, so it is odd and below 2^255; it
+    # is 0 modulo p only if it equals p, a chance of 2^-254.
+    private def self.random_coordinate_factor : Field::Limbs
+      random_bytes = StaticArray(UInt8, 32).new(0_u8)
+      Random::Secure.random_bytes(random_bytes.to_slice)
+      random_bytes[0] |= 1_u8
+      random_bytes[31] &= 0x7f_u8
+      factor = Field.from_bytes(random_bytes)
+      SecretWiping.wipe(random_bytes.to_slice)
+      factor
+    end
+
     # The Montgomery ladder of RFC 7748 §5. Field bounds: sums and
     # differences of tight elements are loose, `carry_mul`, `carry_square`
     # and `carry_scmul_121666` take loose elements and return tight ones.
     # `a24` enters as z_2 = E * (BB + 121666 * E), which equals RFC 7748's
     # E * (AA + 121665 * E) because AA = BB + E.
+    #
+    # The ladder starts from (x_2 : z_2) = (λ : 0) and (x_3 : z_3) =
+    # (λ·u : λ) for a random nonzero *factor* λ rather than (1 : 0) and
+    # (u : 1): the same points, so the same result, but every intermediate
+    # value is new on each call. On AMD EPYC 9V74 (Zen 4) runners a fixed
+    # scalar (all zero, all ones, or one random scalar) took a measurably
+    # different time from fresh random scalars (|t| up to 17 at 1,000,000
+    # measurements per class), though no branch or address depends on the
+    # scalar; with the random start, every case stayed under 2.6
+    # (docs/crypto/public-key.md, "Timing on x86-64").
     @[NoInline]
-    private def self.ladder(clamped : StaticArray(UInt8, 32), x1 : Field::Limbs) : StaticArray(UInt8, 32)
-      one = Field::Limbs.new(0_u64)
-      one[0] = 1_u64
-      x2 = one
+    private def self.ladder(clamped : StaticArray(UInt8, 32), x1 : Field::Limbs, factor : Field::Limbs) : StaticArray(UInt8, 32)
+      x2 = factor
       z2 = Field::Limbs.new(0_u64)
-      x3 = x1
-      z3 = one
+      x3 = Field.carry_mul(x1, factor)
+      z3 = factor
       swap = 0_u64
 
       254.downto(0) do |bit_index|
