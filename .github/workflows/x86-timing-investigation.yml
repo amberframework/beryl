@@ -29,7 +29,7 @@ jobs:
       - run: ruby scripts/fetch_vectors.rb --missing
       - name: Build the suite once, as crystal spec builds it
         run: |
-          echo 'require "./spec/**"' > all_specs.cr
+          find spec -name '*_spec.cr' | sort | sed 's|^\(.*\)\.cr$|require "./"|' > all_specs.cr
           crystal build --release all_specs.cr -o all_specs
       - name: Run CI's timing step six times
         env:
