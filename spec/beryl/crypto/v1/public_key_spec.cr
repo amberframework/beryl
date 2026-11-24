@@ -215,14 +215,17 @@ end
 
 {% for curve in [{"P-256", "P256"}, {"P-384", "P384"}] %}
   describe "{{ curve[0].id }} stand-in of the generator multiplication" do
-    it "is [17]G, and neither equal nor opposite to any table entry" do
+    it "starts at [17]G and is neither equal nor opposite to any entry of the window it meets" do
       stand_in = {{ curve[1].id }}::Arithmetic.generator_stand_in
       seventeen = Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE)
       seventeen[-1] = 17_u8
       expected = {{ curve[1].id }}::Arithmetic.multiply_and_add_public(seventeen, {{ curve[1].id }}::Arithmetic.generator, Bytes.new({{ curve[1].id }}::Arithmetic::BYTESIZE))
       {{ curve[1].id }}::Arithmetic.encode_uncompressed({{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)).should eq({{ curve[1].id }}::Arithmetic.encode_uncompressed(expected))
+      moving_stand_in = {{ curve[1].id }}::Arithmetic::Point.from_affine(stand_in)
       {{ curve[1].id }}::Arithmetic.generator_window_tables.each do |table|
-        table.each { |entry| (entry.x == stand_in.x).should be_false }
+        stand_in_x, _ = {{ curve[1].id }}::Arithmetic.to_affine(moving_stand_in)
+        table.each { |entry| (entry.x == stand_in_x).should be_false }
+        moving_stand_in = moving_stand_in.add_affine_public(table[0])
       end
     end
   end

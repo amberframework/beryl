@@ -92,11 +92,8 @@ module Beryl::Crypto::V1
       end
     end
 
-    # [17]G in affine coordinates: the stand-in `multiply_generator` keeps
-    # in place of its sum while that sum is infinity. It is not ±[j * 32^i]G
-    # for any table entry (j from 1 to 16, every window i): below the top
-    # windows j * 32^i lies between 32 and n - 32, and the spec
-    # "stand-in of the generator multiplication" checks every entry.
+    # [17]G in affine coordinates: where the stand-in that
+    # `multiply_generator` keeps in place of an infinite sum starts.
     GENERATOR_STAND_IN = begin
       point = generator
       16.times { point = point.add_public(generator) }
@@ -335,9 +332,11 @@ module Beryl::Crypto::V1
     # digit 0 reads a real multiple whose sum is then dropped by mask. With
     # Z = 0 or a zero table entry as an operand, a scalar with zero windows
     # (the scalar 1 has 51 of 52) ran measurably faster than a random one on
-    # AMD EPYC 9V74 (Zen 4) and on Apple M4 with Data Independent Timing
-    # off, though no branch or address depended on it (docs/crypto/public-key.md,
-    # "Timing on x86-64").
+    # AMD EPYC 7763 and 9V74 (Zen 3 and Zen 4) and on Apple M4 with Data
+    # Independent Timing off, though no branch or address depended on it
+    # (docs/crypto/public-key.md, "Timing on x86-64"). Each stand-in changes
+    # every window, because operands that came back unchanged window after
+    # window still ran faster there.
     #
     # The prime-order curves of BoringSSL and OpenSSL (`p256.c`,
     # `ecp_nistz256.c`) use the same coordinates and the same argument.
@@ -703,9 +702,13 @@ module Beryl::Crypto::V1
     #
     # No step computes on infinity. A digit 0 reads the entry [32^i]G and
     # drops the sum, and the bound above holds for it (|S| < 32^i). While
-    # the sum so far is infinity it is marked by *is_infinity* and holds
-    # the stand-in [17]G (`GENERATOR_STAND_IN`), which is no table entry
-    # and no negated one; its sums are computed and dropped by mask.
+    # the sum so far is infinity it is marked by *is_infinity* and holds a
+    # stand-in that starts at [17]G (`GENERATOR_STAND_IN`) and takes each
+    # window's sum while the digits stay 0, so before window i it is
+    # [17 + (32^i - 1)/31]G and changes every window. It is never ±[j·32^i]G:
+    # below the top windows 17 + (32^i - 1)/31 lies strictly between 0 and
+    # 32^i, away from j·32^i and n - j·32^i, and the spec "stand-in of the
+    # generator multiplication" checks every window of both curves.
     def self.multiply_generator(scalar : Bytes) : Point
       list_of_tables = generator_window_tables
       is_infinity = 1_u64
@@ -720,8 +723,8 @@ module Beryl::Crypto::V1
               else
                 result.add_affine_unchecked(entry)
               end
-        sum = sum.replace_if(is_infinity, Point.from_affine(entry))
-        result = sum.replace_if(is_zero, result)
+        sum = sum.replace_if(is_infinity & (is_zero ^ 1_u64), Point.from_affine(entry))
+        result = sum.replace_if((is_infinity ^ 1_u64) & is_zero, result)
         is_infinity &= is_zero
       end
       result.replace_if(is_infinity, Point.neutral)
