@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Record layer speed (F4, first step):** each connection reuses its record
+  buffers (grown to the largest record seen) instead of allocating two per
+  record read and two per record written. On an Amber app over HTTPS
+  (wrk, 32 connections, M1 Max) this took requests per second from about
+  65,000 to 79,000 on a small page, ahead of the same app on OpenSSL
+  (71,000).
 - **HTTP::Server seam:** sockets accepted by `Beryl::TLS::Server` raise TLS
   failures from reads and writes as `ConnectionFailed < IO::Error`, so
   `HTTP::Server` ends a client whose handshake fails without an unhandled
