@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Certificate verification accepts a leaf or intermediate without an
+  authority key identifier: the issuer is found by name and tried by
+  signature, as Go's crypto/x509 and OpenSSL do, so private CAs for
+  PostgreSQL and MySQL that omit the extension verify. The path-building
+  limits still apply. x509-limbo: `rfc5280::aki::leaf-missing-aki` and
+  `rfc5280::aki::intermediate-missing-aki` are now listed as departures,
+  with the reason; every other case still matches.
 - `TLS::Socket#closed?` answers whether `close` was called, as
   `OpenSSL::SSL::Socket#closed?` does, and `close` is idempotent. Reads and
   writes after `close` raise `IO::Error` ("Closed stream"), so database pools

@@ -12,7 +12,8 @@ LIMBO_SKIPPED_FEATURES = {
   "has-mldsa" => "ML-DSA (RFC 9881) keys and signatures: Beryl has no ML-DSA",
 }
 
-# One side of each `conflicts_with` pair: Beryl follows the other side.
+# Cases whose expected result Beryl departs from: one side of a
+# `conflicts_with` pair, or a rule where Beryl follows Go and OpenSSL.
 LIMBO_SKIPPED_CONFLICTS = {
   "webpki::eku::ee-without-eku"                  => "conflicts with rfc5280::eku::ee-without-eku, which Beryl follows: a leaf without extended key usage is accepted, as Go and OpenSSL accept it, so private CAs for PostgreSQL and MySQL keep working",
   "webpki::ca-as-leaf"                           => "conflicts with rfc5280::ca-as-leaf and pathlen::validation-ignores-pathlen-in-leaf, which Beryl follows: a CA certificate may stand as leaf when its cA and keyCertSign agree",
@@ -20,6 +21,8 @@ LIMBO_SKIPPED_CONFLICTS = {
   "webpki::cn::not-in-san"                       => "contradicted by 99 other cases (rfc5280::nc::permitted-dns-match-more, webpki::san, the BetterTLS suites) that expect a leaf whose common name is not among its dNSName entries to verify; every harness on x509-limbo.com accepts it",
   "rfc5280::ski::root-missing-ski"               => "contradicted by Mozilla's root set: TWCA Global Root CA has no subject key identifier, and Beryl accepts the roots Mozilla trusts (an intermediate still needs one)",
   "rfc5280::aki::cross-signed-root-missing-aki"  => "marked pedantic, and contradicted by cve::cve-2024-0567, whose trust anchor is cross-signed and has no authority key identifier yet must verify",
+  "rfc5280::aki::leaf-missing-aki"               => "Beryl follows Go crypto/x509 and OpenSSL, which find the issuer of a leaf without an authority key identifier by name and verify its signature; private CAs for PostgreSQL and MySQL often omit the extension",
+  "rfc5280::aki::intermediate-missing-aki"       => "Beryl follows Go crypto/x509 and OpenSSL, which find the issuer of an intermediate without an authority key identifier by name and verify its signature; private CAs for PostgreSQL and MySQL often omit the extension",
 }
 
 # The skip reason for *testcase*, or `nil` when it runs.

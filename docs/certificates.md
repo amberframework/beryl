@@ -42,6 +42,7 @@ verification.verify(leaf, intermediates,
 - Wildcards (RFC 9525): one `*` as the whole leftmost label, never over a public suffix (the Public Suffix List, pinned) or a single label.
 - Serial numbers (positive, at most 20 bytes) are checked below the anchor only, and an anchor needs no subject key identifier: some Mozilla roots have a serial number of 0 (Starfield Services Root CA G2) or no subject key identifier (TWCA Global Root CA).
 - A CA certificate may be a leaf when its cA bit and keyCertSign agree.
+- A leaf or intermediate needs no authority key identifier (RFC 5280 §4.2.1.1 says a conforming CA includes one). Without it, Beryl finds the issuer by name and tries each certificate of that name by signature, as Go's crypto/x509 and OpenSSL do, so private CAs for PostgreSQL and MySQL that omit the extension verify. The limits below bound that search like any other.
 
 ## Trust stores
 
@@ -72,7 +73,7 @@ The presented-certificate default is 64 because x509-limbo's BetterTLS path-buil
 
 `spec/certificates/x509_limbo_spec.cr` runs every case of x509-limbo (pinned at commit b12423782a88abead01141fa6582254e3eb49e74, `limbo.json` sha256 `56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca`), which includes BetterTLS's path-building and name-constraint suites, the RFC 5280 and web PKI cases and the CVE regressions. `limbo.json` holds private keys that match the commit secret scan, so it stays out of git and `scripts/fetch_vectors.rb --missing` installs it, checked by sha256.
 
-Of 9,807 cases, 9,795 run and every one matches its expected result (932 that must verify, 8,863 that must fail). Twelve are skipped and the spec prints each: six need ML-DSA, and six expect a result that a stronger source contradicts:
+Of 9,807 cases, 9,793 run and every one matches its expected result (932 that must verify, 8,861 that must fail). Fourteen are skipped and the spec prints each: six need ML-DSA, and eight expect a result that a stronger source contradicts or that Beryl departs from to follow Go and OpenSSL:
 
 | Case | Why Beryl differs |
 |---|---|
@@ -82,6 +83,8 @@ Of 9,807 cases, 9,795 run and every one matches its expected result (932 that mu
 | `webpki::cn::not-in-san` | contradicted by 99 other cases (`rfc5280::nc::permitted-dns-match-more`, `webpki::san`, the BetterTLS suites) that expect a leaf whose common name is not among its dNSName entries to verify; every harness on x509-limbo.com accepts it. |
 | `rfc5280::ski::root-missing-ski` | expects a root without a subject key identifier to fail; Mozilla's TWCA Global Root CA has none. |
 | `rfc5280::aki::cross-signed-root-missing-aki` | marked pedantic, and contradicted by `cve::cve-2024-0567`, whose cross-signed trust anchor has no authority key identifier yet must verify. |
+| `rfc5280::aki::leaf-missing-aki` | Beryl follows Go crypto/x509 and OpenSSL: a leaf without an authority key identifier is matched to its issuer by name and signature. Private CAs for PostgreSQL and MySQL often omit the extension. |
+| `rfc5280::aki::intermediate-missing-aki` | the same, for an intermediate. |
 
 ### Wycheproof keys from DER
 
