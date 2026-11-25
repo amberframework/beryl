@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- A TLS server can ask for client certificates (mutual TLS), off by default.
+  `Context::Server#client_verify_mode=` takes `ClientVerifyMode::None`,
+  `Optional` (request; verify a chain when one is sent) or `Required` (an
+  empty Certificate fails with `certificate_required`); `verify_mode =
+  VerifyMode::Peer` maps to `Required`, as OpenSSL's server context takes it.
+  Client chains are verified to `client_ca_certificates=` (PEM) or
+  `client_trust_store=` by the new `ClientCertificateVerifier` (B4's
+  `ChainVerification` with purpose `clientAuth`, digitalSignature key usage,
+  no name check); `client_certificate_verifier=` replaces it. The
+  CertificateRequest lists the schemes Beryl verifies and the trust store's
+  root names (`largest_certificate_authorities_bytesize`, 16 KiB). The
+  client's CertificateVerify is checked with the client context string over
+  the transcript, and a bad signature ends the handshake with
+  `decrypt_error`.
+- `Socket::Server#peer_certificate` returns the client's leaf (nil when none
+  was asked for or sent), and `#list_of_peer_certificates` (alias
+  `#peer_certificate_chain`) the chain.
+- Session tickets record the client's chain (ticket format 2; a format 1
+  ticket gets a full handshake), so a resumed connection keeps its client
+  identity. A server that asks for certificates verifies the chain again on
+  resumption, and one that requires a certificate resumes only a session
+  that had one.
+- BoGo: the shim runs server `-verify-peer`, `-require-any-client-certificate`,
+  `-verify-fail`, `-expect-peer-cert-file`, `-expect-verify-result` and an
+  empty `-use-client-ca-list`; the TLS 1.3 server client-certificate tests
+  run and pass. tlsfuzzer runs `test-tls13-certificate-request.py`,
+  `test-tls13-certificate-verify.py`,
+  `test-tls13-ecdsa-in-certificate-verify.py` and
+  `test-tls13-eddsa-in-certificate-verify.py`. The interop matrix adds
+  OpenSSL s_client and the Go client presenting client certificates to the
+  example server, which now takes `--client-verify`, `--client-ca` and
+  `--any-client-chain`.
+
 ## 0.2.2 (2026-11-25)
 
 Memory and polish for HTTPS servers: a `--tls` Amber app under 32 keep-alive

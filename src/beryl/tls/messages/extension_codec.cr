@@ -246,5 +246,13 @@ module Beryl::TLS::Messages
     def self.encode_selected_identity(index : Int) : Bytes
       Bytes[(index >> 8).to_u8, (index & 0xFF).to_u8]
     end
+
+    # certificate_authorities (§4.2.4): DER distinguished names, each in a
+    # two-byte vector, in a two-byte vector.
+    def self.encode_certificate_authorities(list_of_names : Array(Bytes)) : Bytes
+      writer = MessageWriter.new
+      writer.write_vector16 { |list| list_of_names.each { |name| list.write_vector16(name) } }
+      writer.to_slice
+    end
   end
 end

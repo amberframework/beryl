@@ -48,27 +48,48 @@ module TestCertificateAuthority
     # Issues a server certificate for *list_of_dns_names* and
     # *list_of_ip_addresses* with a new key of *key_kind*; returns the
     # certified key (leaf then this authority's certificate).
+    # *list_of_extended_key_usages* holds the purposes' object identifiers
+    # (serverAuth unless given). With no name and no address the leaf has
+    # no subject alternative name, and *subject_name* is its common name.
     def issue(key_kind : KeyKind = KeyKind::P256, *, list_of_dns_names : Array(String) = ["localhost"],
               list_of_ip_addresses : Array(Bytes) = [Bytes[127, 0, 0, 1]], not_before : Time = Time.utc - 1.day,
-              not_after : Time = Time.utc + 30.days, key_usage : Bytes = Bytes[7, 0x80]) : Beryl::TLS::CertifiedKey
+              not_after : Time = Time.utc + 30.days, key_usage : Bytes = Bytes[7, 0x80],
+              list_of_extended_key_usages : Array(String) = [SERVER_AUTHENTICATION],
+              subject_name : String? = nil) : Beryl::TLS::CertifiedKey
       private_key, public_key_info = TestCertificateAuthority.generate_key(key_kind)
       list_of_names = list_of_dns_names.map { |name| DerWriter.element(0x82_u8, name.to_slice) } +
                       list_of_ip_addresses.map { |address| DerWriter.element(0x87_u8, address) }
       extensions = [
         TestCertificateAuthority.extension("2.5.29.19", true, DerWriter.element(0x30_u8, Bytes.empty)),
         TestCertificateAuthority.extension("2.5.29.15", true, DerWriter.element(0x03_u8, key_usage)),
-        TestCertificateAuthority.extension("2.5.29.37", false, DerWriter.sequence(DerWriter.object_identifier("1.3.6.1.5.5.7.3.1"))),
+        TestCertificateAuthority.extension("2.5.29.37", false,
+          DerWriter.element(0x30_u8, DerWriter.concat(list_of_extended_key_usages.map { |usage| DerWriter.object_identifier(usage) }))),
         TestCertificateAuthority.extension("2.5.29.35", false, DerWriter.sequence(DerWriter.element(0x80_u8,
           TestCertificateAuthority.key_identifier(@private_key.public_key.to_uncompressed)))),
-        TestCertificateAuthority.extension("2.5.29.17", false, DerWriter.element(0x30_u8, DerWriter.concat(list_of_names))),
       ]
+      unless list_of_names.empty?
+        extensions << TestCertificateAuthority.extension("2.5.29.17", false, DerWriter.element(0x30_u8, DerWriter.concat(list_of_names)))
+      end
       leaf = TestCertificateAuthority.build(
-        issuer_name: @common_name, subject_name: list_of_dns_names.first? || "server",
+        issuer_name: @common_name, subject_name: subject_name || list_of_dns_names.first? || "server",
         subject_public_key_info: public_key_info, extensions: extensions,
         not_before: not_before, not_after: not_after, signer: @private_key)
       Beryl::TLS::CertifiedKey.new([leaf, @certificate], private_key)
     end
+
+    # Issues a client certificate (extended key usage clientAuth, no
+    # subject alternative name) for *common_name*, with a new key of
+    # *key_kind*.
+    def issue_client(key_kind : KeyKind = KeyKind::P256, *, common_name : String = "client",
+                     list_of_extended_key_usages : Array(String) = [CLIENT_AUTHENTICATION]) : Beryl::TLS::CertifiedKey
+      issue(key_kind, list_of_dns_names: [] of String, list_of_ip_addresses: [] of Bytes,
+        list_of_extended_key_usages: list_of_extended_key_usages, subject_name: common_name)
+    end
   end
+
+  # The serverAuth and clientAuth purposes (RFC 5280 §4.2.1.12).
+  SERVER_AUTHENTICATION = "1.3.6.1.5.5.7.3.1"
+  CLIENT_AUTHENTICATION = "1.3.6.1.5.5.7.3.2"
 
   @@shared_rsa_key : V1::RSA::PrivateKey? = nil
 

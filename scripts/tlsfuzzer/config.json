@@ -220,6 +220,76 @@
       "expected_failures": {
         "^ed448 only$": "The script expects an Ed448 key too; Ed448 is not implemented, and with only ed448 offered Beryl refuses with handshake_failure."
       }
+    },
+    {
+      "script": "test-tls13-certificate-request.py",
+      "certificate": "rsa",
+      "server_arguments": [
+        "--client-verify",
+        "optional",
+        "--any-client-chain"
+      ],
+      "arguments": [
+        "-E",
+        "signature_algorithms_cert:CR key_share:SH supported_versions:SH",
+        "-s",
+        "ecdsa_secp256r1_sha256 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 ed25519 ecdsa_secp384r1_sha384"
+      ],
+      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order. -E names the extensions Beryl sends: signature_algorithms_cert in the CertificateRequest (RFC 9846 §4.2.3 allows it there), key_share and supported_versions in the ServerHello."
+    },
+    {
+      "script": "test-tls13-certificate-verify.py",
+      "certificate": "rsa",
+      "server_arguments": [
+        "--client-verify",
+        "optional",
+        "--any-client-chain"
+      ],
+      "arguments": [
+        "-k",
+        "tests/clientX509Key.pem",
+        "-c",
+        "tests/clientX509Cert.pem",
+        "-s",
+        "ecdsa_secp256r1_sha256 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 ed25519 ecdsa_secp384r1_sha384"
+      ],
+      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order."
+    },
+    {
+      "script": "test-tls13-ecdsa-in-certificate-verify.py",
+      "certificate": "rsa",
+      "server_arguments": [
+        "--client-verify",
+        "optional",
+        "--any-client-chain"
+      ],
+      "arguments": [
+        "-k",
+        "tests/serverECKey.pem",
+        "-c",
+        "tests/serverECCert.pem",
+        "-s",
+        "ecdsa_secp256r1_sha256 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 ed25519 ecdsa_secp384r1_sha384"
+      ],
+      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order."
+    },
+    {
+      "script": "test-tls13-eddsa-in-certificate-verify.py",
+      "certificate": "rsa",
+      "server_arguments": [
+        "--client-verify",
+        "optional",
+        "--any-client-chain"
+      ],
+      "arguments": [
+        "-k",
+        "tests/serverEd25519Key.pem",
+        "-c",
+        "tests/serverEd25519Cert.pem",
+        "-s",
+        "ecdsa_secp256r1_sha256 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 ed25519 ecdsa_secp384r1_sha384"
+      ],
+      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order."
     }
   ],
   "not_run": {
@@ -228,11 +298,7 @@
     "test-tls13-keyupdate-from-server.py": "Needs a server that starts its own KeyUpdate; the example server answers requested KeyUpdates, and the matrix covers both directions.",
     "test-tls13-psk_ke.py": "Beryl refuses psk_ke by design (plan §2).",
     "test-tls13-psk_dhe_ke.py": "Needs an external PSK; Beryl resumes from its own tickets only.",
-    "test-tls13-certificate-request.py": "Client certificates are outside B5: Beryl's server sends no CertificateRequest.",
-    "test-tls13-certificate-verify.py": "Client certificates are outside B5.",
     "test-tls13-post-handshake-auth.py": "Post-handshake client authentication is outside B5.",
-    "test-tls13-ecdsa-in-certificate-verify.py": "Tests client certificates, outside B5.",
-    "test-tls13-eddsa-in-certificate-verify.py": "Tests client certificates, outside B5.",
     "test-tls13-ecdsa-brainpool-in-certificate-verify.py": "Brainpool curves are not implemented.",
     "test-tls13-ecdhe-brainpool-curves.py": "Brainpool curves are not implemented.",
     "test-tls13-certificate-compression.py": "Certificate compression (RFC 8879) is not implemented.",

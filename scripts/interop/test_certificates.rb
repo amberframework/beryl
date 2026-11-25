@@ -39,6 +39,30 @@ module TestCertificates
     end
   end
 
+  CLIENT_EXTENSIONS = <<~EXT
+    basicConstraints=critical,CA:FALSE
+    keyUsage=critical,digitalSignature
+    extendedKeyUsage=clientAuth
+    authorityKeyIdentifier=keyid
+    subjectKeyIdentifier=hash
+  EXT
+
+  # The client subject the interop cells look for in the server's answer.
+  CLIENT_SUBJECT = "CN=Beryl Interop Client"
+
+  # Makes a P-256 client certificate (extended key usage clientAuth, no
+  # subject alternative name) from the root `generate` made in *directory*:
+  # client.key, client.pem and client-chain.pem (leaf, then root).
+  def self.generate_client(openssl, environment, directory)
+    File.write(File.join(directory, "client.ext"), CLIENT_EXTENSIONS)
+    run(environment, openssl, "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "client.key",
+        "-out", "client.csr", "-subj", "/#{CLIENT_SUBJECT}", chdir: directory)
+    run(environment, openssl, "x509", "-req", "-in", "client.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+        "-out", "client.pem", "-days", "20", "-extfile", "client.ext", chdir: directory)
+    File.write(File.join(directory, "client-chain.pem"),
+               File.read(File.join(directory, "client.pem")) + File.read(File.join(directory, "ca.pem")))
+  end
+
   def self.run(environment, *command, chdir:)
     output, status = Open3.capture2e(environment, *command, chdir: chdir)
     raise "failed (#{status.exitstatus}): #{command.join(" ")}\n#{output}" unless status.success?

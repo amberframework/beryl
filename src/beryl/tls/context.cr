@@ -2,6 +2,7 @@ require "./certified_key"
 require "./certificate_verifier"
 require "./session_ticket"
 require "./limits"
+require "./client_verify_mode"
 
 module Beryl::TLS
   # Whether a client checks the server's certificate chain.
@@ -189,6 +190,72 @@ module Beryl::TLS
       # Whether the server sends session tickets.
       def session_tickets_enabled? : Bool
         @session_ticket_count > 0
+      end
+
+      # Whether the server asks for a client certificate, and whether one is
+      # required. `ClientVerifyMode::None` (the default) sends no
+      # CertificateRequest.
+      #
+      # ```
+      # context.client_verify_mode = Beryl::TLS::ClientVerifyMode::Required
+      # context.client_ca_certificates = "clients-ca.pem"
+      # ```
+      property client_verify_mode : ClientVerifyMode = ClientVerifyMode::None
+      # The most bytes of distinguished names a CertificateRequest lists in
+      # certificate_authorities (RFC 9846 §4.2.4). A client trust store whose
+      # subject names take more is not listed, and the client picks its
+      # certificate without the hint.
+      property largest_certificate_authorities_bytesize : Int32 = 16_384
+      @client_trust_store : Certificates::TrustStore? = nil
+      @client_certificate_verifier : CertificateVerifier? = nil
+
+      # Sets the client certificate mode as `OpenSSL::SSL::Context::Server`
+      # takes it: `VerifyMode::Peer` requires a client certificate
+      # (`ClientVerifyMode::Required`) and `VerifyMode::None` asks for none.
+      def verify_mode=(mode : VerifyMode) : VerifyMode
+        @client_verify_mode = mode.peer? ? ClientVerifyMode::Required : ClientVerifyMode::None
+        mode
+      end
+
+      # `VerifyMode::Peer` when the server asks for a client certificate,
+      # else `VerifyMode::None`.
+      def verify_mode : VerifyMode
+        @client_verify_mode.requests_certificate? ? VerifyMode::Peer : VerifyMode::None
+      end
+
+      # The roots client chains are verified to. Never defaults to a public
+      # root set: a server that asks for client certificates names the
+      # authorities it trusts to issue them.
+      def client_trust_store : Certificates::TrustStore?
+        @client_trust_store
+      end
+
+      def client_trust_store=(trust_store : Certificates::TrustStore) : Certificates::TrustStore
+        @client_certificate_verifier = nil
+        @client_trust_store = trust_store
+      end
+
+      # Trusts the certificates in the PEM file at *path* to issue client
+      # certificates, as `OpenSSL::SSL::Context#ca_certificates=` does on a
+      # server.
+      def client_ca_certificates=(path : String) : String
+        self.client_trust_store = Certificates::TrustStore.from_pem(File.read(path))
+        path
+      end
+
+      # The verifier client chains go through: set explicitly, or a
+      # `ClientCertificateVerifier` over `client_trust_store`. Raises an
+      # `Error` when neither is set.
+      def client_certificate_verifier : CertificateVerifier
+        @client_certificate_verifier ||= begin
+          trust_store = @client_trust_store ||
+                        raise Error.new("the server context asks for client certificates but has no client trust store or verifier")
+          ClientCertificateVerifier.new(trust_store)
+        end
+      end
+
+      def client_certificate_verifier=(verifier : CertificateVerifier) : CertificateVerifier
+        @client_certificate_verifier = verifier
       end
     end
   end
