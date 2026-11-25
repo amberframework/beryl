@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `TLS::Socket#closed?` answers whether `close` was called, as
+  `OpenSSL::SSL::Socket#closed?` does, and `close` is idempotent. Reads and
+  writes after `close` raise `IO::Error` ("Closed stream"), so database pools
+  and `HTTP::Client` see a closed TLS connection the way they see any other.
+
 ## 0.2.0 (2026-11-24)
 
 TLS 1.3, client and server, in pure Crystal. A program that serves or
