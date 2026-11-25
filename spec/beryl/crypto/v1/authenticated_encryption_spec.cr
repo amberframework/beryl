@@ -174,6 +174,37 @@ describe Beryl::Crypto::V1::AuthenticatedEncryption do
     end
   end
 
+  describe "#wipe" do
+    it "zeroes every buffer derived from the key, for every cipher and AES key size" do
+      {% for cipher_class, list_of_key_bytesizes in {"ChaCha20Poly1305" => [32], "XChaCha20Poly1305" => [32], "AESGCM" => [16, 24, 32]} %}
+        {{ list_of_key_bytesizes }}.each do |key_bytesize|
+          cipher = Beryl::Crypto::V1::{{ cipher_class.id }}.new(Random::Secure.random_bytes(key_bytesize))
+          list_of_key_material = cipher.list_of_key_material_for_spec
+          list_of_key_material.any? { |buffer| buffer.any? { |byte| byte != 0 } }.should be_true
+    
+          cipher.wipe
+    
+          cipher.is_wiped?.should be_true
+          list_of_key_material.each { |buffer| buffer.all?(&.zero?).should be_true }
+        end
+      {% end %}
+    end
+
+    it "makes every later encryption, decryption and tag check raise KeyWiped" do
+      each_cipher do |name, cipher, nonce|
+        sealed = cipher.encrypt("message", nonce: nonce)
+        cipher.wipe
+
+        expect_raises(Beryl::Crypto::KeyWiped, "was wiped") { cipher.encrypt("message", nonce: nonce) }
+        expect_raises(Beryl::Crypto::KeyWiped) { cipher.encrypt("message".to_slice, into: Bytes.new(7 + cipher.tag_bytesize), nonce: nonce) }
+        expect_raises(Beryl::Crypto::KeyWiped) { cipher.decrypt(sealed, nonce: nonce) }
+        expect_raises(Beryl::Crypto::KeyWiped) { cipher.decrypt(sealed, into: Bytes.new(7), nonce: nonce) }
+        expect_raises(Beryl::Crypto::KeyWiped) { cipher.authentic?(sealed, nonce: nonce) }
+        cipher.is_wiped?.should be_true, failure_message: name
+      end
+    end
+  end
+
   describe "the AES-GCM counter" do
     it "wraps at 2^32 as SP 800-38D defines, matching a keystream computed block by block" do
       key = Bytes.new(32) { |index| index.to_u8 }

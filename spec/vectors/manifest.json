@@ -1496,6 +1496,20 @@
           "sha256": "56799cefd65fc9e0bdb9cb0f97fce6734533b45df3de4fc17fdc7b7b79654fca"
         }
       ]
+    },
+    {
+      "source": "beryl-generated",
+      "license": "MIT (this repository)",
+      "url": "scripts/generate_sha1_signed_chains.sh",
+      "pinned_at": "generated 2026-11-25 with OpenSSL 4.1.0 (binary sha256 7687ff498451e22381f19ad10576f43257cdf9e4de5b9d219cfba5d7c9461526)",
+      "kind": "generated",
+      "sha256": "afa3467e152b2f297b5eaaaf6e8fed224b68d0261ece087a57aee101112befb2",
+      "list_of_files": [
+        {
+          "stored_path": "beryl/sha1_signed_chains.pem",
+          "sha256": "afa3467e152b2f297b5eaaaf6e8fed224b68d0261ece087a57aee101112befb2"
+        }
+      ]
     }
   ]
 }

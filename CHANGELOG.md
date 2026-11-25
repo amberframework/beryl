@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- `TLS::RecordProtection#wipe` now also zeroes the AEAD's key material:
+  AES-GCM's expanded round keys and GHASH key state (H to H^8 on the
+  processor instructions), and the ChaCha20-Poly1305 key. Every
+  `AuthenticatedEncryption` gains `wipe` and `is_wiped?`; once wiped, every
+  encryption, decryption and tag check raises `Crypto::KeyWiped`. The check
+  is one branch on public state at each call, outside the per-block loops.
+- A certificate signed with SHA-1 (sha1WithRSAEncryption, ecdsa-with-SHA1,
+  dsa-with-SHA1) or MD5 is refused by its algorithm identifier, before any
+  signature check, with a message that names the hash: "the certificate for
+  CN=... is signed with SHA-1, which Beryl refuses (RFC 9155)". The new
+  `FailureReason::SignatureAlgorithmRefused` maps to the bad_certificate
+  alert in TLS. A SHA-1 CertificateVerify scheme, should one be configured,
+  raises with illegal_parameter and the same wording.
+- `scripts/fetch_vectors.rb` accepts manifest entries of kind `generated`:
+  fixtures made by a script in this repository, committed and pinned by
+  sha256 rather than downloaded. The first is
+  `spec/vectors/beryl/sha1_signed_chains.pem`, from
+  `scripts/generate_sha1_signed_chains.sh` (OpenSSL 4.1.0 pinned by version
+  and binary sha256).
+
 ## 0.2.1 (2026-11-25)
 
 For the Amber stack's Beryl adoption release: connection pools and private
