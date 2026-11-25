@@ -45,6 +45,7 @@ module Beryl::TLS
     # `@pending_plaintext_bytesize` bytes of the storage.
     @pending_plaintext_storage = Bytes.empty
     @pending_plaintext_bytesize = 0
+    @is_sealing_pending_plaintext = false
     @handshake_mutex = Mutex.new
     # Reentrant: a failed write sends its alert while holding the lock.
     @write_mutex = Mutex.new(:reentrant)
@@ -180,7 +181,14 @@ module Beryl::TLS
         return unbuffered_write(slice)
       end
       write_pending_plaintext if @pending_plaintext_bytesize + slice.size > largest_bytesize
-      @write_mutex.synchronize { append_pending_plaintext(slice, largest_bytesize) }
+      # Only while gathered plaintext is being sealed (by a writer that may
+      # have yielded inside the IO) does another fiber's write take the
+      # lock and wait; otherwise appending yields nowhere and needs none.
+      if @is_sealing_pending_plaintext
+        @write_mutex.synchronize { append_pending_plaintext(slice, largest_bytesize) }
+      else
+        append_pending_plaintext(slice, largest_bytesize)
+      end
       flush if flush_on_newline? && slice.includes?('\n'.ord.to_u8)
     end
 
@@ -260,19 +268,22 @@ module Beryl::TLS
       @pending_plaintext_bytesize = needed
     end
 
-    # Seals the gathered plaintext. The write lock is held until it is
-    # sealed, so a write from another fiber (a WebSocket pong, say) waits
-    # instead of overwriting it. The handshake runs first, outside the
-    # lock, as it does for every write.
+    # Seals the gathered plaintext. The write lock is held, and
+    # `@is_sealing_pending_plaintext` set, until it is sealed, so a write
+    # from another fiber (a WebSocket pong, say) waits instead of
+    # overwriting it. The handshake runs first, outside the lock, as it
+    # does for every write.
     private def write_pending_plaintext : Nil
       return if @pending_plaintext_bytesize == 0
       handshake_outcome
       @write_mutex.synchronize do
         return if @pending_plaintext_bytesize == 0
+        @is_sealing_pending_plaintext = true
         begin
           unbuffered_write(@pending_plaintext_storage[0, @pending_plaintext_bytesize])
         ensure
           @pending_plaintext_bytesize = 0
+          @is_sealing_pending_plaintext = false
         end
       end
     end
