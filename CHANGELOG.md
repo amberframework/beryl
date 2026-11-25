@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 (2026-11-25)
+
+For the Amber stack's Beryl adoption release: connection pools and private
+database CAs.
 
 - Certificate verification accepts a leaf or intermediate without an
   authority key identifier: the issuer is found by name and tried by
