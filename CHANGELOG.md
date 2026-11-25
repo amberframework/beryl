@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 (2026-11-25)
+
+Client certificates (mutual TLS) in both directions.
 
 - A TLS server can ask for client certificates (mutual TLS), off by default.
   `Context::Server#client_verify_mode=` takes `ClientVerifyMode::None`,
