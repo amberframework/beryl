@@ -1,7 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-11-25)
 
+Memory and polish for HTTPS servers: a `--tls` Amber app under 32 keep-alive
+connections peaks at 15.8 to 19.6 MiB, down from 17.6 to 25.2 MiB on 0.2.1.
+
+- A TLS socket keeps about 8 KiB per connection instead of about 103 KiB.
+  The record layer reads ahead into its own buffer, sized to the first record
+  and doubled only when a larger record arrives, up to the record limits; it
+  turns off read buffering on the `IO::Buffered` beneath it. `TLS::Socket`
+  reads straight from the opened record, so `IO::Buffered` allocates no read
+  buffer, and writes gather in a small growable buffer sealed at `flush`, when
+  a record fills, or at `close`. `flush_on_newline` is honored. Handshake
+  reassembly storage is released once no message is waiting, and a server
+  socket wipes its resumption master secret when the handshake ends (#34).
 - `TLS::RecordProtection#wipe` now also zeroes the AEAD's key material:
   AES-GCM's expanded round keys and GHASH key state (H to H^8 on the
   processor instructions), and the ChaCha20-Poly1305 key. Every
