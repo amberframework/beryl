@@ -23,8 +23,14 @@ module Beryl::TLS
 
     # Checks *signature* with *key* under one of the TLS 1.3
     # CertificateVerify schemes Beryl accepts (plan §2); every other
-    # scheme, or a key of the wrong type for it, does not verify.
+    # scheme, or a key of the wrong type for it, does not verify. A SHA-1
+    # scheme raises an `Error` with the illegal_parameter alert, naming
+    # SHA-1, before any signature check (RFC 9155 §2).
     def self.verify_with_key(key : Certificates::VerificationKey, scheme : SignatureScheme, content : Bytes, signature : Bytes) : Bool
+      if scheme.rsa_pkcs1_sha1? || scheme.ecdsa_sha1?
+        raise Error.new("the CertificateVerify is signed with SHA-1 (#{scheme}), which Beryl refuses (RFC 9155)", AlertDescription::IllegalParameter)
+      end
+
       case scheme
       when SignatureScheme::EcdsaSecp256r1Sha256
         key.is_a?(Crypto::V1::P256::PublicKey) && key.verify(content, signature)
