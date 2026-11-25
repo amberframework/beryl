@@ -31,6 +31,39 @@ describe Beryl::Certificates::TrustStore do
     end
   end
 
+  describe ".system on macOS" do
+    it "joins the pinned Mozilla roots to /etc/ssl/cert.pem, which trails the keychain" do
+      {% if flag?(:darwin) %}
+        with_ssl_cert_file("") do
+          Beryl::Certificates::TrustStore.joins_mozilla_roots_to_the_system_bundle?.should be_true
+          system = Beryl::Certificates::TrustStore.system
+          bundle = Beryl::Certificates::TrustStore.from_pem(File.read(Beryl::Certificates::TrustStore.system_bundle_path))
+          list_of_missing_mozilla_roots = Beryl::Certificates::TrustStore.mozilla.list_of_certificates.reject { |root| system.includes?(root) }
+          list_of_missing_bundle_certificates = bundle.list_of_certificates.reject { |root| system.includes?(root) }
+          list_of_missing_mozilla_roots.should be_empty
+          list_of_missing_bundle_certificates.should be_empty
+          # SSL.com TLS ECC Root CA 2022 ends the chain www.example.com
+          # served in November 2026, and macOS 27.2.1's /etc/ssl/cert.pem
+          # does not hold it.
+          system.list_of_certificates.any?(&.subject.to_s.includes?("SSL.com TLS ECC Root CA 2022")).should be_true
+        end
+      {% else %}
+        Beryl::Certificates::TrustStore.joins_mozilla_roots_to_the_system_bundle?.should be_false
+      {% end %}
+    end
+
+    it "reads only the file SSL_CERT_FILE names, on macOS too" do
+      bundle = File.tempname("beryl-ssl-cert-file", ".pem")
+      File.write(bundle, Beryl::Certificates::TrustStore.mozilla.list_of_certificates.first.to_pem)
+      with_ssl_cert_file(bundle) do
+        Beryl::Certificates::TrustStore.joins_mozilla_roots_to_the_system_bundle?.should be_false
+        Beryl::Certificates::TrustStore.system.size.should eq(1)
+      end
+    ensure
+      File.delete(bundle) if bundle && File.exists?(bundle)
+    end
+  end
+
   describe ".system_bundle_path" do
     it "reads the file SSL_CERT_FILE names, as OpenSSL and Go do" do
       bundle = File.tempname("beryl-ssl-cert-file", ".pem")

@@ -12,6 +12,12 @@ database CAs.
   limits still apply. x509-limbo: `rfc5280::aki::leaf-missing-aki` and
   `rfc5280::aki::intermediate-missing-aki` are now listed as departures,
   with the reason; every other case still matches.
+- On macOS, `TrustStore.system` joins the pinned Mozilla roots to
+  `/etc/ssl/cert.pem`, unless `SSL_CERT_FILE` is set. The file trails the
+  keychain the system actually trusts: macOS 27.2.1's copy lacks SSL.com TLS
+  ECC Root CA 2022 and AAA Certificate Services, so clients that use the
+  system store (HTTP::Client on Beryl, Grant's PostgreSQL driver,
+  crystal-mysql) refused www.example.com. Linux bundles are read as before.
 - `TLS::Socket#closed?` answers whether `close` was called, as
   `OpenSSL::SSL::Socket#closed?` does, and `close` is idempotent. Reads and
   writes after `close` raise `IO::Error` ("Closed stream"), so database pools
