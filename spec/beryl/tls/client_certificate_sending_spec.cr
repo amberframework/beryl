@@ -172,7 +172,7 @@ private def pem_block(label : String, der : Bytes) : String
   "-----BEGIN #{label}-----\n#{Base64.encode(der)}-----END #{label}-----\n"
 end
 
-describe "Beryl::TLS client certificates" do
+describe "Beryl::TLS client certificates, sent by the client" do
   all_schemes = [TLS::SignatureScheme::EcdsaSecp256r1Sha256, TLS::SignatureScheme::RsaPssRsaeSha256, TLS::SignatureScheme::Ed25519]
 
   {
@@ -288,6 +288,39 @@ describe "Beryl::TLS client certificates" do
         DerWriter.sequence(DerWriter.object_identifier("1.3.101.112")), DerWriter.octet_string(DerWriter.octet_string(seed)))))
       key_only_context.private_key = key_path
       expect_raises(TLS::Error, "the client context has a private key but no certificate chain") { key_only_context.certified_key? }
+    end
+  end
+end
+
+describe "Beryl::TLS client certificates between Beryl's client and server" do
+  {KeyKind::P256, KeyKind::Rsa2048, KeyKind::Ed25519}.each do |key_kind|
+    it "authenticates a #{key_kind} client to a server that requires a certificate" do
+      server_context = TlsHarness.server_context
+      server_context.client_verify_mode = TLS::ClientVerifyMode::Required
+      server_context.client_trust_store = TlsHarness.authority.trust_store
+      client_context = TlsHarness.client_context
+      client_context.certified_key = TlsHarness.authority.issue_client(key_kind, common_name: "alice-#{key_kind}")
+
+      TlsHarness.connect(server_context, client_context) do |client, server|
+        raise client if client.is_a?(Exception)
+        raise server if server.is_a?(Exception)
+        peer_certificate = server.peer_certificate.should_not be_nil
+        peer_certificate.subject.to_s.should eq("CN=alice-#{key_kind}")
+        client.print "ping\n"
+        client.flush
+        server.gets.should eq("ping")
+      end
+    end
+  end
+
+  it "is refused with certificate_required when it holds no certificate" do
+    server_context = TlsHarness.server_context
+    server_context.client_verify_mode = TLS::ClientVerifyMode::Required
+    server_context.client_trust_store = TlsHarness.authority.trust_store
+
+    TlsHarness.connect(server_context, TlsHarness.client_context) do |_, server|
+      error = server.should be_a(TLS::Error)
+      error.alert_description.should eq(TLS::AlertDescription::CertificateRequired)
     end
   end
 end

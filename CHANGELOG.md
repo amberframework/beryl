@@ -46,10 +46,14 @@
   `TLS::Error` naming the missing half. certificate_authorities is now
   parsed (an empty or malformed list is a decode_error) and otherwise read
   as information only.
-- BoGo: the shim configures the client certificate from `-cert-file` and
-  `-key-file` and treats `-use-old-client-cert-callback` as neutral. The
-  client-side TLS 1.3 ClientAuth, CertificateAuthorities and
-  SignatureAlgorithms tests now run and pass (603 passed, up from 552);
+- BoGo: as a client the shim configures its certificate from `-cert-file`
+  and `-key-file`, treats `-use-old-client-cert-callback` as neutral, and
+  runs `-verify-fail`, `-expect-verify-result`, `-expect-peer-cert-file`
+  and `-require-any-client-certificate` the way BoringSSL's shim does (its
+  verify callback accepts any chain unless `-verify-fail`; the
+  CertificateVerify signature is always checked). The client-side TLS 1.3
+  ClientAuth, CertificateAuthorities, SignatureAlgorithms and
+  CertificateVerification tests now run and pass (727 passed, up from 631);
   the TLS 1.2 variants they uncovered are disabled with the TLS 1.2 reason,
   and six TLS 1.3 SignDefault tests where BoringSSL aborts but Beryl sends
   an empty Certificate are disabled with that reason.

@@ -52,10 +52,13 @@ module BerylBogoShim
     property export_context = ""
     property? is_using_export_context = false
     property read_bytesize = 512
-    # The PEM chain the peer must have presented (server side).
+    # The PEM chain the peer must have presented.
     property expected_peer_certificate_path : String? = nil
-    # Whether the server refuses the client's chain (`-verify-fail`).
+    # Whether the verify callback refuses the peer's chain (`-verify-fail`).
     property? is_failing_verification = false
+    # Whether the client checks the verify callback's result
+    # (`-expect-verify-result`, copied from the configuration).
+    property? is_expecting_verify_result = false
 
     def copy : ConnectionSettings
       copy = dup
@@ -183,6 +186,9 @@ module BerylBogoShim
     end
     configuration.initial = merge(configuration, "-on-initial")
     configuration.resume = merge(configuration, "-on-resume")
+    {configuration.initial, configuration.resume}.each do |settings|
+      settings.is_expecting_verify_result = configuration.is_expecting_verify_result?
+    end
     check_supported(configuration)
     configuration
   end
@@ -237,12 +243,6 @@ module BerylBogoShim
     end
     if configuration.minimum_version > TLS13_VERSION
       raise Unimplemented.new("-min-version #{configuration.minimum_version}")
-    end
-    if !configuration.is_server? && (configuration.is_requiring_any_client_certificate? || configuration.is_expecting_verify_result?)
-      raise Unimplemented.new("-require-any-client-certificate or -expect-verify-result on a client")
-    end
-    if !configuration.is_server? && {configuration.initial, configuration.resume}.any? { |settings| settings.is_failing_verification? || settings.expected_peer_certificate_path }
-      raise Unimplemented.new("-verify-fail or -expect-peer-cert-file on a client")
     end
     if !configuration.is_server? && configuration.is_ticket_disabled?
       raise Unimplemented.new("-no-ticket on a client")
@@ -310,14 +310,35 @@ module BerylBogoShim
     end
   end
 
+  # The client's check of the runner's chain, shaped like BoringSSL's shim:
+  # its verify callback runs on every full handshake and records the
+  # result, `-verify-fail` makes it fail, and only a client in a verifying
+  # mode (`-verify-peer`, `-require-any-client-certificate`) ends the
+  # handshake on a failure. Like that callback it accepts any chain
+  # otherwise (the runner's test certificates are not meant to pass a Web
+  # PKI profile); the CertificateVerify signature is always checked.
+  class ServerChainVerifier < Beryl::TLS::CertificateVerifier
+    property? is_failing : Bool = false
+    # Whether the verify callback ran during the last handshake, and with
+    # which result.
+    property? has_run : Bool = false
+    property? has_passed : Bool = false
+
+    def initialize(@is_enforcing : Bool)
+    end
+
+    def verify_chain(chain : Array(Beryl::Certificates::Certificate), hostname : String?) : Nil
+      @has_run = true
+      @has_passed = !is_failing?
+      return unless @is_enforcing
+      raise Beryl::TLS::CertificateRejected.new("-verify-fail refuses every chain", Beryl::TLS::AlertDescription::HandshakeFailure) if is_failing?
+    end
+  end
+
   def self.build_client_context(configuration : Configuration) : Beryl::TLS::Context::Client
     context = Beryl::TLS::Context::Client.new
-    if configuration.is_verifying_peer?
-      path = configuration.trust_certificate_path || raise ArgumentError.new("-verify-peer needs -trust-cert")
-      context.ca_certificates = path
-    else
-      context.verify_mode = Beryl::TLS::VerifyMode::None
-    end
+    is_enforcing = configuration.is_verifying_peer? || configuration.is_requiring_any_client_certificate?
+    context.certificate_verifier = ServerChainVerifier.new(is_enforcing)
     configure_client_certificate(context, configuration)
     context
   end
@@ -354,6 +375,11 @@ module BerylBogoShim
   end
 
   def self.configure_client(context : Beryl::TLS::Context::Client, settings : ConnectionSettings) : Nil
+    verifier = context.certificate_verifier
+    if verifier.is_a?(ServerChainVerifier)
+      verifier.is_failing = settings.is_failing_verification?
+      verifier.has_run = false
+    end
     if groups = list_of_groups(settings)
       context.list_of_groups = groups
       context.list_of_key_share_groups = [groups.first]
@@ -394,6 +420,25 @@ module BerylBogoShim
       list_of_expected = Beryl::Certificates.read_pem_chain(File.read(path)).map(&.encoded)
       list_of_actual = socket.list_of_peer_certificates.map(&.encoded)
       raise ExpectationFailed.new("the client's chain differs from #{path}") unless list_of_actual == list_of_expected
+    end
+    check_client_expectations(socket, settings) if socket.is_a?(Beryl::TLS::Socket::Client)
+  end
+
+  # The client's view of the runner's chain: `-expect-peer-cert-file`
+  # compares the whole chain, and `-expect-verify-result` the verify
+  # callback's result on a full handshake (a resumed one keeps the result
+  # of the handshake that made its ticket).
+  private def self.check_client_expectations(socket : Beryl::TLS::Socket::Client, settings : ConnectionSettings) : Nil
+    if path = settings.expected_peer_certificate_path
+      list_of_expected = Beryl::Certificates.read_pem_chain(File.read(path)).map(&.encoded)
+      list_of_actual = socket.peer_certificate_chain.map(&.encoded)
+      raise ExpectationFailed.new("the server's chain differs from #{path}") unless list_of_actual == list_of_expected
+    end
+    verifier = socket.context.certificate_verifier
+    if settings.is_expecting_verify_result? && verifier.is_a?(ServerChainVerifier) && verifier.has_run?
+      unless verifier.has_passed? == !settings.is_failing_verification?
+        raise ExpectationFailed.new("Wrong certificate verification result")
+      end
     end
   end
 
