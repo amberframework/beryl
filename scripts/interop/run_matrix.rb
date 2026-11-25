@@ -4,7 +4,9 @@
 # Runs Beryl's TLS 1.3 interop matrix: the example server against OpenSSL
 # s_client, curl and Go's crypto/tls, and the example client against
 # OpenSSL s_server and Go, over every suite, both groups, HelloRetryRequest,
-# ALPN, resumption, KeyUpdate and the three key types.
+# ALPN, resumption, KeyUpdate and the three key types; and OpenSSL s_client
+# and the Go client presenting client certificates to the example server
+# in required mode, which answers with the client's subject.
 #
 #   /usr/bin/ruby scripts/interop/install_tools.rb TOOLS
 #   /usr/bin/ruby scripts/interop/run_matrix.rb TOOLS [--crystal crystal-alpha] [--report matrix.md]
@@ -121,8 +123,10 @@ rescue Timeout::Error
 end
 
 Dir.mktmpdir("beryl-interop") do |work|
-  # Certificates: one root, a leaf per key type for localhost and 127.0.0.1.
+  # Certificates: one root, a leaf per key type for localhost and 127.0.0.1,
+  # and a client certificate from the same root.
   TestCertificates.generate(OPENSSL, TOOL_ENVIRONMENT, work)
+  TestCertificates.generate_client(OPENSSL, TOOL_ENVIRONMENT, work)
 
   # The Beryl examples, linked without OpenSSL, and the Go peer.
   %w(https_server https_client).each do |name|
@@ -238,6 +242,26 @@ Dir.mktmpdir("beryl-interop") do |work|
   with_beryl_server.call("p256", ["--alpn", "http/1.1"]) do |port|
     output = client_output(go_client.(port, "-alpn", "http/1.1", "-connections", "2"))
     record.call("Go client -> Beryl server", "ALPN and resumption", output, [%r{alpn=http/1\.1 resumed=false}, %r{alpn=http/1\.1 resumed=true}])
+  end
+
+  # Beryl server requiring a client certificate: OpenSSL s_client and the
+  # Go client present one from the interop root, and Beryl answers with its
+  # subject.
+  client_subject = /client=#{Regexp.escape(TestCertificates::CLIENT_SUBJECT)}/
+  requiring_client_certificates = ["--client-verify", "required", "--client-ca", ca]
+  with_beryl_server.call("p256", requiring_client_certificates) do |port|
+    output = client_output(s_client.(port, "-cert", File.join(work, "client.pem"), "-key", key.("client"), "-ign_eof"), stdin_data: get)
+    record.call("openssl s_client -> Beryl server", "client certificate, required", output, [/hello from beryl/, client_subject])
+  end
+  with_beryl_server.call("p256", requiring_client_certificates) do |port|
+    output = client_output(s_client.(port, "-ign_eof"), stdin_data: get)
+    record.call("openssl s_client -> Beryl server", "no client certificate, required (certificate_required)", output,
+                [/certificate required/])
+  end
+  with_beryl_server.call("rsa", requiring_client_certificates) do |port|
+    output = client_output(go_client.(port, "-cert", chain.("client"), "-key", key.("client"), "-connections", "2"))
+    record.call("Go client -> Beryl server", "client certificate, required, then resumed", output,
+                [/resumed=false body=hello from beryl\s+#{client_subject.source}/, /resumed=true body=hello from beryl\s+#{client_subject.source}/])
   end
 
   # Beryl client, OpenSSL s_server.

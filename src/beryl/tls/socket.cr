@@ -636,9 +636,29 @@ module Beryl::TLS
         handshake_outcome.server_name
       end
 
-      # Beryl's server does not request client certificates.
+      # The client's leaf certificate, verified by the context's
+      # `Context::Server#client_certificate_verifier`; nil when the server
+      # asked for none (`ClientVerifyMode::None`) or the client sent none
+      # (`ClientVerifyMode::Optional`). A resumed connection has the
+      # certificate of the session it resumes.
+      #
+      # ```
+      # socket.peer_certificate.try(&.subject.to_s) # => "CN=alice"
+      # ```
       def peer_certificate : Certificates::Certificate?
-        nil
+        handshake_outcome.list_of_peer_certificates.first?
+      end
+
+      # The client's chain, leaf first, as it sent it; empty when it sent
+      # no certificate.
+      def list_of_peer_certificates : Array(Certificates::Certificate)
+        handshake_outcome.list_of_peer_certificates
+      end
+
+      # Alias of `list_of_peer_certificates`, named as
+      # `Socket::Client#peer_certificate_chain`.
+      def peer_certificate_chain : Array(Certificates::Certificate)
+        list_of_peer_certificates
       end
 
       private def run_handshake : HandshakeOutcome

@@ -1,11 +1,12 @@
 // Go crypto/tls peer for Beryl's interop matrix.
 //
 //	go_peer server -addr 127.0.0.1:0 -cert chain.pem -key server.key [-groups P256] [-alpn h2,http/1.1]
-//	go_peer client -addr 127.0.0.1:8443 -servername localhost -ca ca.pem [-groups P256] [-alpn http/1.1] [-connections 2]
+//	go_peer client -addr 127.0.0.1:8443 -servername localhost -ca ca.pem [-groups P256] [-alpn http/1.1] [-connections 2] [-cert client-chain.pem -key client.key]
 //
 // The server prints "listening on ADDRESS" once it accepts connections and
 // answers every HTTP request with "hello from go". The client sends one GET
-// per connection and prints one line per connection:
+// per connection and prints one line per connection (with -cert and -key it
+// presents that client certificate when the server asks for one):
 //
 //	negotiated: TLS_AES_128_GCM_SHA256 X25519 alpn=http/1.1 resumed=false body=hello from beryl
 //
@@ -93,6 +94,8 @@ func runClient(arguments []string) {
 	groups := flags.String("groups", "", "comma-separated groups: X25519, P256")
 	alpn := flags.String("alpn", "", "comma-separated ALPN protocols")
 	connections := flags.Int("connections", 1, "connections to make in a row")
+	clientCertificatePath := flags.String("cert", "", "PEM client chain, leaf first, presented when the server asks")
+	clientKeyPath := flags.String("key", "", "PEM private key of the client certificate")
 	flags.Parse(arguments)
 
 	roots := x509.NewCertPool()
@@ -108,6 +111,14 @@ func runClient(arguments []string) {
 		CurvePreferences:   curvePreferences(*groups),
 		NextProtos:         protocols(*alpn),
 		ClientSessionCache: tls.NewLRUClientSessionCache(8),
+	}
+	if *clientCertificatePath != "" {
+		clientCertificate, err := tls.LoadX509KeyPair(*clientCertificatePath, *clientKeyPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "client certificate:", err)
+			os.Exit(1)
+		}
+		config.Certificates = []tls.Certificate{clientCertificate}
 	}
 	for count := 0; count < *connections; count++ {
 		connection, err := tls.Dial("tcp", *address, config)

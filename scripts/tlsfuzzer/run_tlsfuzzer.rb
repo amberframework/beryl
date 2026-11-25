@@ -12,7 +12,10 @@
 #    checked) to make the test certificates, and the example server.
 # 3. Runs every script the config lists against a fresh server with the
 #    listed certificate, running every probe (a script that samples its
-#    probes gets -n 0), and reads the script's FAILED list. A failure passes
+#    probes gets -n 0), and reads the script's FAILED list. An entry's
+#    server_arguments start the server in another mode (such as asking for
+#    client certificates, for the CertificateRequest and CertificateVerify
+#    scripts). A failure passes
 #    the gate only when it matches one of the script's expected_failures
 #    patterns, each of which carries its reason; scripts
 #    under not_run are listed in the report with theirs.
@@ -76,10 +79,11 @@ server = File.join(work, "https_server")
 run_checked(options[:crystal], "build", "--release", "-Dwithout_openssl", File.join("examples", "https_server.cr"), "-o", server,
             chdir: REPOSITORY_ROOT)
 
-def start_server(server, certificates, kind)
+def start_server(server, certificates, kind, list_of_server_arguments)
   reader, writer = IO.pipe
   pid = Process.spawn(server, "--port", "0", "--certificate-chain", File.join(certificates, "#{kind}-chain.pem"),
-                      "--private-key", File.join(certificates, "#{kind}.key"), out: writer, err: writer, pgroup: true)
+                      "--private-key", File.join(certificates, "#{kind}.key"), *list_of_server_arguments,
+                      out: writer, err: writer, pgroup: true)
   writer.close
   port = Timeout.timeout(20) do
     loop do
@@ -104,11 +108,14 @@ FileUtils.mkdir_p(logs)
 results = []
 CONFIG.fetch("scripts").each do |entry|
   script = entry.fetch("script")
-  pid, port = start_server(server, certificates, entry.fetch("certificate"))
+  pid, port = start_server(server, certificates, entry.fetch("certificate"), entry.fetch("server_arguments", []))
   # A script that samples its probes (num_limit) runs every one with -n 0,
-  # so each run checks the same probes.
+  # so each run checks the same probes. Some scripts keep num_limit but do
+  # not take -n, so the option string is checked too.
   application = File.join(work, "tlsfuzzer", "tlsfuzzer", "_apps", script.tr("-", "_"))
-  sampling = File.exist?(application) && File.read(application).include?("num_limit") ? ["-n", "0"] : []
+  application_text = File.exist?(application) ? File.read(application) : ""
+  is_sampling = application_text.include?("num_limit") && application_text.match?(/getopt\.getopt\(argv, "[^"]*n:/)
+  sampling = is_sampling ? ["-n", "0"] : []
   command = [options[:python], File.join(work, "tlsfuzzer", "scripts", script), "-h", "127.0.0.1", "-p", port.to_s,
              *sampling, *entry.fetch("arguments", [])]
   started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -134,7 +141,7 @@ CONFIG.fetch("scripts").each do |entry|
   is_complete = !counts["TOTAL"].nil?
   results << { script: script, counts: counts, explained: list_of_explained, unexplained: list_of_unexplained,
                is_complete: is_complete, elapsed: elapsed, expected: expected, arguments: entry.fetch("arguments", []),
-               arguments_reason: entry["arguments_reason"] }
+               arguments_reason: entry["arguments_reason"], server_arguments: entry.fetch("server_arguments", []) }
   status = if !is_complete then "NO SUMMARY"
            elsif list_of_unexplained.empty? then "ok"
            else "FAILED (#{list_of_unexplained.size} unexplained)"
@@ -161,7 +168,8 @@ lines << ""
 lines << "| Script | Passed | Failed as expected | Unexplained | Seconds |"
 lines << "|---|---|---|---|---|"
 results.each do |result|
-  lines << "| #{result[:script]}#{result[:arguments].empty? ? "" : " `#{result[:arguments].join(" ")}`"} | #{result[:counts]["PASS"]} | " \
+  server_mode = result[:server_arguments].empty? ? "" : " (server `#{result[:server_arguments].join(" ")}`)"
+  lines << "| #{result[:script]}#{result[:arguments].empty? ? "" : " `#{result[:arguments].join(" ")}`"}#{server_mode} | #{result[:counts]["PASS"]} | " \
            "#{result[:explained].size} | #{result[:is_complete] ? result[:unexplained].size : "no summary"} | #{result[:elapsed].round} |"
 end
 lines << ""
