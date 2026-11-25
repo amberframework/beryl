@@ -140,6 +140,16 @@ describe Beryl::TLS::RecordLayer do
       layer_reading(bytes).read_handshake_message.should eq(message)
     end
 
+    it "lets the reassembly buffers go once no part of a message is waiting" do
+      message = Bytes[TLS::HandshakeType::Finished.value, 0, 0, 40] + Bytes.new(40, 9)
+      bytes = plaintext_record(TLS::ContentType::Handshake, message[0, 10]) + plaintext_record(TLS::ContentType::Handshake, message[10, 20]) +
+              plaintext_record(TLS::ContentType::Handshake, message[30..])
+      layer = layer_reading(bytes)
+      layer.read_handshake_message.should eq(message)
+      layer.handshake_buffer_empty?.should be_true
+      layer.buffer_bytesizes[:handshake].should eq(0)
+    end
+
     it "refuses a change_cipher_spec between the fragments of a handshake message (unexpected_message)" do
       message = Bytes[1, 0, 0, 5, 1, 2, 3, 4, 5]
       bytes = plaintext_record(TLS::ContentType::Handshake, message[0, 3]) +
@@ -343,6 +353,25 @@ describe Beryl::TLS::RecordLayer do
       end
     end
 
+    it "sizes its read buffers to the first record and grows them for a 16 KiB record after small ones" do
+      sealing = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+      small_record = sealing.seal(TLS::ContentType::ApplicationData, "small".to_slice)
+      second_small_record = sealing.seal(TLS::ContentType::ApplicationData, "small".to_slice)
+      large_content = Bytes.new(16_384) { |index| (index % 251).to_u8 }
+      large_record = sealing.seal(TLS::ContentType::ApplicationData, large_content)
+      layer = layer_reading(small_record + second_small_record + large_record)
+      layer.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
+
+      2.times { layer.read_after_handshake.should eq({TLS::ContentType::ApplicationData, "small".to_slice}) }
+      layer.buffer_bytesizes[:read].should eq(small_record.size)
+      layer.buffer_bytesizes[:read_plaintext].should eq(small_record.size - 5)
+
+      layer.read_after_handshake.should eq({TLS::ContentType::ApplicationData, large_content})
+      layer.buffer_bytesizes[:read].should eq(large_record.size)
+      layer.buffer_bytesizes[:read_plaintext].should eq(large_record.size - 5)
+      large_record.size.should be <= TLS::RecordLayer::LARGEST_RECORD_BYTESIZE
+    end
+
     it "refuses application data that interrupts a handshake message" do
       sealing = TLS::RecordProtection.new(SUITE, Bytes.new(32, 5))
       bytes = sealing.seal(TLS::ContentType::Handshake, Bytes[4, 0, 0, 10, 0]) + sealing.seal(TLS::ContentType::ApplicationData, "x".to_slice)
@@ -385,6 +414,25 @@ describe Beryl::TLS::RecordLayer do
       layer.write_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 4))
       layer.write_application_data(Bytes.new(100, 1))
       output.size.should eq(2 * 5 + 63 + 37 + 2 * 17)
+    end
+
+    it "sizes its write buffers to the first record and grows them for a 16 KiB record after small ones" do
+      output = IO::Memory.new
+      layer = TLS::RecordLayer.new(output)
+      layer.write_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 4))
+      2.times { layer.write_application_data("small".to_slice) }
+      # A header, the content and its type, and the tag.
+      layer.buffer_bytesizes[:write_record].should eq(5 + 6 + 16)
+      layer.buffer_bytesizes[:write_scratch].should eq(6)
+
+      layer.write_application_data(Bytes.new(16_384, 1))
+      layer.buffer_bytesizes[:write_record].should eq(TLS::RecordLayer::LARGEST_PROTECTED_RECORD_BYTESIZE)
+      layer.buffer_bytesizes[:write_scratch].should eq(TLS::RecordProtection::LARGEST_INNER_PLAINTEXT_BYTESIZE)
+
+      reader = layer_reading(output.to_slice)
+      reader.read_protection = TLS::RecordProtection.new(SUITE, Bytes.new(32, 4))
+      list_of_sizes = (1..3).map { (reader.read_after_handshake || fail "missing record")[1].size }
+      list_of_sizes.should eq([5, 5, 16_384])
     end
 
     it "writes nothing after close_notify" do

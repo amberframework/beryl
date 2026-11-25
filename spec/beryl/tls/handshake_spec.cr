@@ -332,6 +332,73 @@ describe "Beryl::TLS handshakes over a socket pair" do
       end
     end
 
+    it "keeps no handshake state and no IO::Buffered buffers once the handshake ends" do
+      TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        exchange_data(client, server)
+        [client, server].each do |socket|
+          socket.buffer_bytesizes[:handshake].should eq(0)
+          # Reads come from the record's plaintext and writes gather in the
+          # socket's own buffer, so IO::Buffered never allocates.
+          socket.@in_buffer.null?.should be_true
+          socket.@out_buffer.null?.should be_true
+        end
+        server_outcome = server.@outcome || fail "the server has no outcome"
+        server_outcome.resumption_master_secret.all?(&.zero?).should be_true
+        client_outcome = client.@outcome || fail "the client has no outcome"
+        client_outcome.resumption_master_secret.all?(&.zero?).should be_false
+      end
+    end
+
+    it "keeps small buffers for small records and grows them for a 16 KiB record" do
+      TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        exchange_data(client, server)
+        client.buffer_bytesizes[:pending_plaintext].should be < 64
+        client.buffer_bytesizes[:write_scratch].should be < 64
+        server.buffer_bytesizes[:read_plaintext].should be < 64
+
+        payload = Bytes.new(16_384) { |index| (index % 251).to_u8 }
+        spawn do
+          client.write(payload)
+          client.flush
+        end
+        received = Bytes.new(payload.size)
+        server.read_fully(received)
+        received.should eq(payload)
+        # A write of a whole record goes straight to the record layer.
+        client.buffer_bytesizes[:pending_plaintext].should be < 64
+        client.buffer_bytesizes[:write_scratch].should eq(TLS::RecordProtection::LARGEST_INNER_PLAINTEXT_BYTESIZE)
+        server.buffer_bytesizes[:read].should be >= TLS::RecordProtection::HEADER_BYTESIZE + payload.size + 1 + 16
+        server.buffer_bytesizes[:read].should be <= TLS::RecordLayer::LARGEST_RECORD_BYTESIZE
+        server.buffer_bytesizes[:read_plaintext].should be >= payload.size + 1 + 16
+
+        exchange_data(client, server)
+      end
+    end
+
+    it "gathers small writes into one record until a flush" do
+      TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
+        client, server = expect_connected(client_result, server_result)
+        protection = client.@record_layer.write_protection || fail "the client has no write protection"
+        sequence_number = protection.sequence_number
+        client << "one "
+        client << "two "
+        client.write_byte('3'.ord.to_u8)
+        client.print "\n"
+        protection.sequence_number.should eq(sequence_number)
+        client.flush
+        protection.sequence_number.should eq(sequence_number + 1)
+        server.peek.should eq("one two 3\n".to_slice)
+        server.gets.should eq("one two 3")
+
+        client.flush_on_newline = true
+        client.print "four\n"
+        server.gets.should eq("four")
+        client.read(Bytes.empty).should eq(0)
+      end
+    end
+
     it "carries a large write in several records" do
       TlsHarness.connect(TlsHarness.server_context, TlsHarness.client_context) do |client_result, server_result|
         client, server = expect_connected(client_result, server_result)
