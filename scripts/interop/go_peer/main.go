@@ -1,12 +1,16 @@
 // Go crypto/tls peer for Beryl's interop matrix.
 //
-//	go_peer server -addr 127.0.0.1:0 -cert chain.pem -key server.key [-groups P256] [-alpn h2,http/1.1]
+//	go_peer server -addr 127.0.0.1:0 -cert chain.pem -key server.key [-groups P256] [-alpn h2,http/1.1] [-client-ca ca.pem]
 //	go_peer client -addr 127.0.0.1:8443 -servername localhost -ca ca.pem [-groups P256] [-alpn http/1.1] [-connections 2] [-cert client-chain.pem -key client.key]
 //
 // The server prints "listening on ADDRESS" once it accepts connections and
-// answers every HTTP request with "hello from go". The client sends one GET
-// per connection and prints one line per connection (with -cert and -key it
-// presents that client certificate when the server asks for one):
+// answers every HTTP request with "hello from go". With -client-ca it
+// requires a client certificate verified to those roots
+// (tls.RequireAndVerifyClientCert), and for each request prints
+// "verified client: SUBJECT" and adds that line to its answer. The client
+// sends one GET per connection and prints one line per connection (with
+// -cert and -key it presents that client certificate when the server asks
+// for one):
 //
 //	negotiated: TLS_AES_128_GCM_SHA256 X25519 alpn=http/1.1 resumed=false body=hello from beryl
 //
@@ -59,6 +63,7 @@ func runServer(arguments []string) {
 	keyPath := flags.String("key", "server.key", "PEM private key")
 	groups := flags.String("groups", "", "comma-separated groups: X25519, P256")
 	alpn := flags.String("alpn", "", "comma-separated ALPN protocols")
+	clientCAPath := flags.String("client-ca", "", "PEM roots a required client certificate is verified to")
 	flags.Parse(arguments)
 
 	certificate, err := tls.LoadX509KeyPair(*certificatePath, *keyPath)
@@ -72,6 +77,16 @@ func runServer(arguments []string) {
 		CurvePreferences: curvePreferences(*groups),
 		NextProtos:       protocols(*alpn),
 	}
+	if *clientCAPath != "" {
+		clientRoots := x509.NewCertPool()
+		pem, err := os.ReadFile(*clientCAPath)
+		if err != nil || !clientRoots.AppendCertsFromPEM(pem) {
+			fmt.Fprintln(os.Stderr, "could not read the client roots", err)
+			os.Exit(1)
+		}
+		config.ClientAuth = tls.RequireAndVerifyClientCert
+		config.ClientCAs = clientRoots
+	}
 	listener, err := tls.Listen("tcp", *address, config)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -81,6 +96,12 @@ func runServer(arguments []string) {
 	os.Stdout.Sync()
 	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		io.WriteString(writer, "hello from go\n")
+		if request.TLS != nil && len(request.TLS.VerifiedChains) > 0 {
+			subject := request.TLS.VerifiedChains[0][0].Subject.String()
+			fmt.Printf("verified client: %s\n", subject)
+			os.Stdout.Sync()
+			fmt.Fprintf(writer, "verified client: %s\n", subject)
+		}
 	})
 	server := &http.Server{Handler: handler, TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}
 	server.Serve(listener)

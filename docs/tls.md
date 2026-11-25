@@ -37,7 +37,23 @@ server.listen
 | Extensions | SNI, ALPN, supported groups and versions, key share, signature algorithms (and `_cert`), PSK modes (`psk_dhe_ke` only), pre-shared key, cookie, record size limit (sent by the client with its own limit, answered by the server with its own), GREASE (sent by the client, ignored by the server) |
 | Resumption | session tickets sealed with XChaCha20-Poly1305 under the server's ticket key; every resumption runs a fresh ECDHE exchange; the client uses each ticket once |
 | Client certificates (server) | off by default; `Context::Server#client_verify_mode=` `Optional` or `Required` sends a CertificateRequest and verifies the client's chain (`clientAuth`) and CertificateVerify; see below |
+| Client certificates (client) | sent when the server asks and `Context::Client#certificate_chain=` with `private_key=` (or `certified_key=`) is set; signed with the first scheme the key supports that the CertificateRequest lists; otherwise an empty Certificate; see below |
 | Never | 0-RTT data (a server skips refused early data within a budget), renegotiation, compression, TLS 1.2 or older, RSA key exchange, SHA-1 or MD5 signatures, `psk_ke` |
+
+## Client certificates on the client
+
+A client presents a certificate when the server sends a CertificateRequest and its context holds one:
+
+```crystal
+context = Beryl::TLS::Context::Client.new
+context.certificate_chain = "client-chain.pem" # leaf first
+context.private_key = "client.key"             # PKCS #8, SEC 1 or PKCS #1
+```
+
+- The client signs CertificateVerify with the first scheme its key supports (P-256 `ecdsa_secp256r1_sha256`, RSA `rsa_pss_rsae_sha256/384/512`, `ed25519`) that the request's `signature_algorithms` lists, using the client context string (RFC 9846 §4.4.3). Certificate and CertificateVerify enter the transcript after the server's Finished and before the client's.
+- With no certificate configured, or no scheme in common, the client sends an empty Certificate and the server decides (§4.4.2.4).
+- `certificate_authorities` is checked for its form (an empty list is a `decode_error`) and otherwise informational: a configured certificate is sent whatever authorities the server names.
+- A chain without its key, or a key without its chain, raises `Beryl::TLS::Error` naming the missing half when a handshake needs the certificate.
 
 ## Client certificates on the server
 
@@ -103,7 +119,7 @@ future is never resumed.
 
 ## Seam for the standard library and Amber
 
-The classes are shaped like `OpenSSL::SSL`, so the crystal-alpha fork can alias them under a flag and Amber can use them directly: `Context::Client` (`.insecure`, `ca_certificates=`, `alpn_protocol=`, `verify_mode=`), `Context::Server` (`certificate_chain=`, `private_key=`, `alpn_protocol=`, `verify_mode=`, `client_ca_certificates=`), `Socket::Client.new(io, context, sync_close, hostname)`, `Socket::Server.new(io, context, sync_close, accept)`, `Server` (a `::Socket::Server`, `start_immediately`), and on a socket `alpn_protocol`, `cipher`, `tls_version`, `hostname`, `peer_certificate`. Errors descend from `Beryl::TLS::Error` and carry the alert. `Socket::Server` made with `accept: false` runs its handshake on first use, so an accept loop never waits on a slow client. Sockets that `Server` accepts raise TLS failures from reads and writes as `ConnectionFailed`, an `IO::Error` carrying the TLS error, so `HTTP::Server#bind(Beryl::TLS::Server.new(tcp_server, context))` ends a failed handshake quietly as it does any broken connection (`Socket#is_raising_io_errors=` sets this on any socket).
+The classes are shaped like `OpenSSL::SSL`, so the crystal-alpha fork can alias them under a flag and Amber can use them directly: `Context::Client` (`.insecure`, `ca_certificates=`, `alpn_protocol=`, `verify_mode=`, and `certificate_chain=` with `private_key=` for a client certificate sent when the server asks for one), `Context::Server` (`certificate_chain=`, `private_key=`, `alpn_protocol=`, `verify_mode=`, `client_ca_certificates=`), `Socket::Client.new(io, context, sync_close, hostname)`, `Socket::Server.new(io, context, sync_close, accept)`, `Server` (a `::Socket::Server`, `start_immediately`), and on a socket `alpn_protocol`, `cipher`, `tls_version`, `hostname`, `peer_certificate`. Errors descend from `Beryl::TLS::Error` and carry the alert. `Socket::Server` made with `accept: false` runs its handshake on first use, so an accept loop never waits on a slow client. Sockets that `Server` accepts raise TLS failures from reads and writes as `ConnectionFailed`, an `IO::Error` carrying the TLS error, so `HTTP::Server#bind(Beryl::TLS::Server.new(tcp_server, context))` ends a failed handshake quietly as it does any broken connection (`Socket#is_raising_io_errors=` sets this on any socket).
 
 ## Evidence
 

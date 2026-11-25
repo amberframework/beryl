@@ -65,6 +65,48 @@ module Beryl::TLS
       property list_of_key_share_groups : Array(NamedGroup) = [NamedGroup::X25519]
       @trust_store : Certificates::TrustStore? = nil
       @certificate_verifier : CertificateVerifier? = nil
+      @certified_key : CertifiedKey? = nil
+      @list_of_chain_certificates : Array(Certificates::Certificate)? = nil
+      @private_key : Certificates::SigningKey? = nil
+
+      # Reads the PEM certificate chain (leaf first) the client presents
+      # when a server asks for a certificate, as
+      # `OpenSSL::SSL::Context#certificate_chain=`.
+      def certificate_chain=(path : String) : String
+        @list_of_chain_certificates = Certificates.read_pem_chain(File.read(path))
+        @certified_key = nil
+        path
+      end
+
+      # Reads the PEM private key of the client certificate at *path*
+      # (PKCS #8, SEC 1 or PKCS #1), as `OpenSSL::SSL::Context#private_key=`.
+      def private_key=(path : String) : String
+        @private_key = Certificates.read_private_key(File.read(path))
+        @certified_key = nil
+        path
+      end
+
+      def certified_key=(certified_key : CertifiedKey) : CertifiedKey
+        @certified_key = certified_key
+      end
+
+      # The chain and key the client presents when a server sends a
+      # CertificateRequest, or nil when none is configured (the client
+      # then answers with an empty Certificate). Raises `Error` when only
+      # the chain or only the key was set.
+      def certified_key? : CertifiedKey?
+        @certified_key ||= begin
+          chain = @list_of_chain_certificates
+          key = @private_key
+          if chain && key
+            CertifiedKey.new(chain, key)
+          elsif chain
+            raise Error.new("the client context has a certificate chain but no private key")
+          elsif key
+            raise Error.new("the client context has a private key but no certificate chain")
+          end
+        end
+      end
 
       # A client that skips certificate verification, as
       # `OpenSSL::SSL::Context::Client.insecure`.

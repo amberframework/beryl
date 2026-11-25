@@ -34,6 +34,30 @@
   OpenSSL s_client and the Go client presenting client certificates to the
   example server, which now takes `--client-verify`, `--client-ca` and
   `--any-client-chain`.
+- TLS client certificates (mutual TLS), client side. `Context::Client`
+  gains `certificate_chain=` (PEM chain, leaf first), `private_key=`
+  (PKCS #8, SEC 1 or PKCS #1), `certified_key=` and `certified_key?`, shaped
+  like `OpenSSL::SSL::Context`. On a CertificateRequest the client picks the
+  first signature scheme its key signs (P-256, RSA-PSS, Ed25519) that the
+  request lists, and sends its chain and a CertificateVerify signed with the
+  client context string (RFC 9846 §4.4.3) before its Finished. With no
+  certificate, or no scheme in common, it sends an empty Certificate as
+  before. A chain set without its key, or a key without its chain, raises
+  `TLS::Error` naming the missing half. certificate_authorities is now
+  parsed (an empty or malformed list is a decode_error) and otherwise read
+  as information only.
+- BoGo: the shim configures the client certificate from `-cert-file` and
+  `-key-file` and treats `-use-old-client-cert-callback` as neutral. The
+  client-side TLS 1.3 ClientAuth, CertificateAuthorities and
+  SignatureAlgorithms tests now run and pass (603 passed, up from 552);
+  the TLS 1.2 variants they uncovered are disabled with the TLS 1.2 reason,
+  and six TLS 1.3 SignDefault tests where BoringSSL aborts but Beryl sends
+  an empty Certificate are disabled with that reason.
+- Interop: `examples/https_client.cr` takes `--certificate-chain` and
+  `--private-key`; the matrix presents P-256, RSA and Ed25519 client
+  certificates to `openssl s_server -Verify 1` and to a Go server with
+  `tls.RequireAndVerifyClientCert` (`go_peer server -client-ca`), each of
+  which reports the verified subject.
 
 ## 0.2.2 (2026-11-25)
 

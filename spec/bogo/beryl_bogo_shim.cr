@@ -22,7 +22,8 @@ require "../../src/beryl"
 # (`ClientVerifyMode::Optional`) and `-require-any-client-certificate`
 # requires one (`ClientVerifyMode::Required`). Like BoringSSL's own shim,
 # the server accepts any client chain unless `-verify-fail` is given; the
-# CertificateVerify signature is always checked.
+# CertificateVerify signature is always checked. As a client, `-cert-file`
+# and `-key-file` set the certificate it presents when the runner asks.
 module BerylBogoShim
   UNIMPLEMENTED_EXIT_STATUS =     89
   TLS13_VERSION             = 0x0304
@@ -99,7 +100,10 @@ module BerylBogoShim
   # `-implicit-handshake` only change how BoringSSL's own shim drives its
   # API (Beryl's sockets block and run the handshake when made), and the
   # `-no-tls1*` flags turn off versions Beryl never speaks.
-  NEUTRAL_FLAGS = ["-async", "-implicit-handshake", "-no-tls1", "-no-tls11", "-no-tls12", "-no-ssl3"]
+  # `-use-old-client-cert-callback` only changes which BoringSSL API hands
+  # its shim the client certificate, which Beryl's shim sets the same way.
+  NEUTRAL_FLAGS = ["-async", "-implicit-handshake", "-no-tls1", "-no-tls11", "-no-tls12", "-no-ssl3",
+                   "-use-old-client-cert-callback"]
 
   # Flags with a parameter that apply per connection.
   PER_CONNECTION_FLAGS_WITH_PARAMETER = [
@@ -240,9 +244,6 @@ module BerylBogoShim
     if !configuration.is_server? && {configuration.initial, configuration.resume}.any? { |settings| settings.is_failing_verification? || settings.expected_peer_certificate_path }
       raise Unimplemented.new("-verify-fail or -expect-peer-cert-file on a client")
     end
-    if !configuration.is_server? && (configuration.certificate_path || configuration.key_path)
-      raise Unimplemented.new("a client certificate: Beryl's client answers a CertificateRequest with an empty Certificate")
-    end
     if !configuration.is_server? && configuration.is_ticket_disabled?
       raise Unimplemented.new("-no-ticket on a client")
     end
@@ -317,7 +318,24 @@ module BerylBogoShim
     else
       context.verify_mode = Beryl::TLS::VerifyMode::None
     end
+    configure_client_certificate(context, configuration)
     context
+  end
+
+  # Sets the certificate the client presents when the runner's server asks
+  # for one (`-cert-file` and `-key-file`).
+  private def self.configure_client_certificate(context : Beryl::TLS::Context::Client, configuration : Configuration) : Nil
+    certificate_path = configuration.certificate_path
+    key_path = configuration.key_path
+    return unless certificate_path || key_path
+    raise Unimplemented.new("a client -cert-file without -key-file") unless certificate_path && key_path
+    begin
+      context.certificate_chain = certificate_path
+      context.private_key = key_path
+      context.certified_key?
+    rescue error : Beryl::Error
+      raise Unimplemented.new("the client credential: #{error.message}")
+    end
   end
 
   # Applies one connection's settings to the shared context.
