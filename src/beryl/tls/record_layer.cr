@@ -16,11 +16,12 @@ module Beryl::TLS
   # is not two bytes (`decode_error`), and the floods the limits bound.
   #
   # Every buffer it keeps starts at the size of the first record that needs
-  # it and grows, doubling, up to the record limits only when a larger
+  # it (the read-ahead buffer at a record header, then the first record)
+  # and grows, doubling, up to the record limits only when a larger
   # record arrives, so an idle connection with small requests holds a few
   # kilobytes. It reads ahead into its own buffer, so it turns off read
-  # buffering on an `IO::Buffered` under it: the bytes would otherwise be
-  # buffered twice.
+  # buffering on an `IO::Buffered` under it, for good: the bytes would
+  # otherwise be buffered twice.
   class RecordLayer
     # The largest plaintext fragment (§5.1).
     LARGEST_FRAGMENT_BYTESIZE = 16_384

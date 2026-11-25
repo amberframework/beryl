@@ -391,6 +391,11 @@ describe "Beryl::TLS handshakes over a socket pair" do
         protection.sequence_number.should eq(sequence_number + 1)
         server.peek.should eq("one two 3\n".to_slice)
         server.gets.should eq("one two 3")
+
+        client.flush_on_newline = true
+        client.print "four\n"
+        server.gets.should eq("four")
+        client.read(Bytes.empty).should eq(0)
       end
     end
 

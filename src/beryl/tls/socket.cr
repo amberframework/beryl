@@ -180,7 +180,8 @@ module Beryl::TLS
         return unbuffered_write(slice)
       end
       write_pending_plaintext if @pending_plaintext_bytesize + slice.size > largest_bytesize
-      append_pending_plaintext(slice, largest_bytesize)
+      @write_mutex.synchronize { append_pending_plaintext(slice, largest_bytesize) }
+      flush if flush_on_newline? && slice.includes?('\n'.ord.to_u8)
     end
 
     # :nodoc:
@@ -219,6 +220,7 @@ module Beryl::TLS
     end
 
     private def read_application_data(slice : Bytes) : Int32
+      return 0 if slice.empty?
       waiting = plaintext_waiting
       count = Math.min(slice.size, waiting.size)
       waiting[0, count].copy_to(slice)
@@ -228,8 +230,10 @@ module Beryl::TLS
 
     # The plaintext waiting to be read: what is left of the record last
     # opened, or the next record's once that is all read. Empty once the
-    # peer sent close_notify.
+    # peer sent close_notify. Plaintext already opened is still served
+    # after a failure, as a read buffer would serve it.
     private def plaintext_waiting : Bytes
+      return @read_buffer unless @read_buffer.empty?
       handshake_outcome
       raise ConnectionClosed.new("the connection failed earlier", AlertDescription::InternalError) if @has_failed
       while @read_buffer.empty?
@@ -256,11 +260,21 @@ module Beryl::TLS
       @pending_plaintext_bytesize = needed
     end
 
+    # Seals the gathered plaintext. The write lock is held until it is
+    # sealed, so a write from another fiber (a WebSocket pong, say) waits
+    # instead of overwriting it. The handshake runs first, outside the
+    # lock, as it does for every write.
     private def write_pending_plaintext : Nil
       return if @pending_plaintext_bytesize == 0
-      pending = @pending_plaintext_storage[0, @pending_plaintext_bytesize]
-      @pending_plaintext_bytesize = 0
-      unbuffered_write(pending)
+      handshake_outcome
+      @write_mutex.synchronize do
+        return if @pending_plaintext_bytesize == 0
+        begin
+          unbuffered_write(@pending_plaintext_storage[0, @pending_plaintext_bytesize])
+        ensure
+          @pending_plaintext_bytesize = 0
+        end
+      end
     end
 
     private def write_application_data(slice : Bytes) : Nil
