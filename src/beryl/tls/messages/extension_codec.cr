@@ -51,6 +51,19 @@ module Beryl::TLS::Messages
       Array(UInt16).new(list.remaining // 2) { list.read_u16 }
     end
 
+    # certificate_authorities (RFC 9846 §4.2.4): a non-empty two-byte
+    # vector of DER distinguished names, each non-empty. Returns the names.
+    def self.decode_certificate_authorities(contents : Bytes) : Array(Bytes)
+      reader = MessageReader.new(contents)
+      list = MessageReader.new(reader.read_vector16(3))
+      reader.finish
+      list_of_names = [] of Bytes
+      until list.at_end?
+        list_of_names << list.read_vector16(1)
+      end
+      list_of_names
+    end
+
     def self.encode_u16_list(list_of_values : Array(UInt16)) : Bytes
       writer = MessageWriter.new
       writer.write_vector16 { |list| list_of_values.each { |value| list.write_u16(value) } }

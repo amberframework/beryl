@@ -11,6 +11,8 @@
 # `--connections 2` connects twice with the same context, so the second
 # connection can resume the first's session; `--key-update` sends a
 # KeyUpdate that asks the server to update too, before the request.
+# `--certificate-chain` and `--private-key` set the certificate the client
+# presents when the server asks for one.
 require "option_parser"
 require "socket"
 require "../src/beryl"
@@ -20,6 +22,8 @@ connect_address = ""
 port = 443
 path = "/"
 trust_store_path = nil
+certificate_chain_path = nil
+private_key_path = nil
 is_insecure = false
 connection_count = 1
 is_sending_key_update = false
@@ -34,6 +38,10 @@ OptionParser.parse do |parser|
   parser.on("--port PORT", "Port (443)") { |value| port = value.to_i }
   parser.on("--path PATH", "Path to GET (/)") { |value| path = value }
   parser.on("--ca-certificates PATH", "Trust the PEM roots in PATH instead of the Mozilla roots") { |value| trust_store_path = value }
+  parser.on("--certificate-chain PATH", "PEM chain (leaf first) to present when the server asks for a certificate") do |value|
+    certificate_chain_path = value
+  end
+  parser.on("--private-key PATH", "PEM private key of that certificate") { |value| private_key_path = value }
   parser.on("--insecure", "Skip certificate verification") { is_insecure = true }
   parser.on("--connections COUNT", "Connections to make in a row (1)") { |value| connection_count = value.to_i }
   parser.on("--key-update", "Send a KeyUpdate before the request") { is_sending_key_update = true }
@@ -53,6 +61,12 @@ end
 context = is_insecure ? Beryl::TLS::Context::Client.insecure : Beryl::TLS::Context::Client.new
 if store_path = trust_store_path
   context.ca_certificates = store_path
+end
+if chain_path = certificate_chain_path
+  context.certificate_chain = chain_path
+end
+if key_path = private_key_path
+  context.private_key = key_path
 end
 context.alpn_protocols = list_of_alpn_protocols unless list_of_alpn_protocols.empty?
 unless list_of_groups.empty?

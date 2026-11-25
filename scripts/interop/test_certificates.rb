@@ -50,17 +50,24 @@ module TestCertificates
   # The client subject the interop cells look for in the server's answer.
   CLIENT_SUBJECT = "CN=Beryl Interop Client"
 
-  # Makes a P-256 client certificate (extended key usage clientAuth, no
-  # subject alternative name) from the root `generate` made in *directory*:
-  # client.key, client.pem and client-chain.pem (leaf, then root).
-  def self.generate_client(openssl, environment, directory)
+  # Makes a client certificate (extended key usage clientAuth, no subject
+  # alternative name) from the root `generate` made in *directory*. Without
+  # *kind* it is P-256 with subject CLIENT_SUBJECT, in client.key,
+  # client.pem and client-chain.pem (leaf, then root). With a *kind* of
+  # LIST_OF_KEY_KINDS its key is of that type and its subject is
+  # "CLIENT_SUBJECT KIND", in client-KIND.key, client-KIND.pem and
+  # client-KIND-chain.pem.
+  def self.generate_client(openssl, environment, directory, kind: nil)
+    name = kind ? "client-#{kind}" : "client"
+    subject = kind ? "#{CLIENT_SUBJECT} #{kind}" : CLIENT_SUBJECT
+    key_arguments = LIST_OF_KEY_KINDS.fetch(kind || "p256")
     File.write(File.join(directory, "client.ext"), CLIENT_EXTENSIONS)
-    run(environment, openssl, "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "client.key",
-        "-out", "client.csr", "-subj", "/#{CLIENT_SUBJECT}", chdir: directory)
-    run(environment, openssl, "x509", "-req", "-in", "client.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
-        "-out", "client.pem", "-days", "20", "-extfile", "client.ext", chdir: directory)
-    File.write(File.join(directory, "client-chain.pem"),
-               File.read(File.join(directory, "client.pem")) + File.read(File.join(directory, "ca.pem")))
+    run(environment, openssl, "req", *key_arguments, "-nodes", "-keyout", "#{name}.key",
+        "-out", "#{name}.csr", "-subj", "/#{subject}", chdir: directory)
+    run(environment, openssl, "x509", "-req", "-in", "#{name}.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
+        "-out", "#{name}.pem", "-days", "20", "-extfile", "client.ext", chdir: directory)
+    File.write(File.join(directory, "#{name}-chain.pem"),
+               File.read(File.join(directory, "#{name}.pem")) + File.read(File.join(directory, "ca.pem")))
   end
 
   def self.run(environment, *command, chdir:)

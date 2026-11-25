@@ -4,9 +4,11 @@
 # Runs Beryl's TLS 1.3 interop matrix: the example server against OpenSSL
 # s_client, curl and Go's crypto/tls, and the example client against
 # OpenSSL s_server and Go, over every suite, both groups, HelloRetryRequest,
-# ALPN, resumption, KeyUpdate and the three key types; and OpenSSL s_client
+# ALPN, resumption, KeyUpdate and the three key types; OpenSSL s_client
 # and the Go client presenting client certificates to the example server
-# in required mode, which answers with the client's subject.
+# in required mode, which answers with the client's subject; and the
+# example client presenting a certificate of each key type to s_server
+# -Verify 1 and to Go's tls.RequireAndVerifyClientCert.
 #
 #   /usr/bin/ruby scripts/interop/install_tools.rb TOOLS
 #   /usr/bin/ruby scripts/interop/run_matrix.rb TOOLS [--crystal crystal-alpha] [--report matrix.md]
@@ -124,9 +126,11 @@ end
 
 Dir.mktmpdir("beryl-interop") do |work|
   # Certificates: one root, a leaf per key type for localhost and 127.0.0.1,
-  # and a client certificate from the same root.
+  # and client certificates from the same root (one P-256 for the example
+  # server's cells, one per key type for the example client's).
   TestCertificates.generate(OPENSSL, TOOL_ENVIRONMENT, work)
   TestCertificates.generate_client(OPENSSL, TOOL_ENVIRONMENT, work)
+  TestCertificates::LIST_OF_KEY_KINDS.each_key { |kind| TestCertificates.generate_client(OPENSSL, TOOL_ENVIRONMENT, work, kind: kind) }
 
   # The Beryl examples, linked without OpenSSL, and the Go peer.
   %w(https_server https_client).each do |name|
@@ -305,6 +309,25 @@ Dir.mktmpdir("beryl-interop") do |work|
     record.call("Beryl client -> openssl s_server", "KeyUpdate (update requested)", output, [/negotiated: TLSv1\.3/])
   end
 
+  # Beryl client presenting a certificate of each key type to s_server,
+  # which requires one and verifies it to the root (-Verify 1); its verify
+  # callback prints the verified subject, and its -www page the result.
+  client_certificate = ->(kind) { ["--certificate-chain", chain.("client-#{kind}"), "--private-key", key.("client-#{kind}")] }
+  %w(p256 rsa ed25519).each do |kind|
+    port = free_port
+    pid, _, server_output = start_server([OPENSSL, "s_server", "-accept", port.to_s, "-cert", File.join(work, "p256.pem"),
+                                          "-cert_chain", ca, "-key", key.("p256"), "-tls1_3", "-www", "-Verify", "1", "-CAfile", ca],
+                                         port: port)
+    begin
+      output = client_output(beryl.(port, *client_certificate.(kind)))
+    ensure
+      stop_server(pid)
+    end
+    output += server_output.read
+    record.call("Beryl client -> openssl s_server -Verify 1", "client certificate, #{kind}", output,
+                [/negotiated: TLSv1\.3/, /depth=0 CN\s?=\s?#{TestCertificates::CLIENT_SUBJECT.sub("CN=", "")} #{kind}\nverify return:1/, /Verify return code: 0 \(ok\)/])
+  end
+
   # Beryl client, Go server.
   with_go_server = lambda do |kind, extra, &block|
     pid, port, = start_server([go_peer, "server", "-addr", "127.0.0.1:0", "-cert", chain.(kind), "-key", key.(kind), *extra],
@@ -334,6 +357,17 @@ Dir.mktmpdir("beryl-interop") do |work|
   with_go_server.call("p256", ["-alpn", "http/1.1"]) do |port|
     output = client_output(beryl.(port, "--alpn", "http/1.1", "--connections", "2", "--key-update"))
     record.call("Beryl client -> Go server", "ALPN, resumption and KeyUpdate", output, [%r{alpn=http/1\.1 resumed=false}, %r{alpn=http/1\.1 resumed=true}])
+  end
+
+  # Beryl client presenting a certificate of each key type to a Go server
+  # with tls.RequireAndVerifyClientCert, which answers with the verified
+  # subject.
+  %w(p256 rsa ed25519).each do |kind|
+    with_go_server.call("p256", ["-client-ca", ca]) do |port|
+      output = client_output(beryl.(port, *client_certificate.(kind)))
+      record.call("Beryl client -> Go server (RequireAndVerifyClientCert)", "client certificate, #{kind}", output,
+                  [/negotiated: TLSv1\.3/, /verified client: #{Regexp.escape(TestCertificates::CLIENT_SUBJECT)} #{kind}/])
+    end
   end
 
   failures = results.reject { |result| result[:ok] }
