@@ -25,7 +25,7 @@
 dependencies:
   beryl:
     github: amberframework/beryl
-    version: 0.1.0
+    version: 0.2.0
 ```
 
 ```crystal
@@ -48,7 +48,7 @@ Beryl::Certificates.verify_server_chain(chain, hostname: "example.com") # => the
 The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `Beryl::Crypto::V1` names each algorithm exactly, and `Beryl::Crypto::Compatibility` holds the old ones that existing formats still need.
 
 > [!NOTE]
-> Beryl is opt-in today. It becomes a default in Amber once its own gates pass, and every pull request must pass them to merge. 0.1.0 has the hashes, MACs, AEADs, public-key algorithms and certificate validation below; TLS comes in a later release ([CHANGELOG.md](CHANGELOG.md)).
+> Beryl is opt-in today. It becomes a default in Amber once its own gates pass, and every pull request must pass them to merge. 0.2.0 has the hashes, MACs, AEADs, public-key algorithms and certificate validation below, and TLS 1.3 as a client and a server ([docs/tls.md](docs/tls.md), [CHANGELOG.md](CHANGELOG.md)).
 
 ## What's inside
 
@@ -59,6 +59,7 @@ The calls on `Beryl::Crypto` always use the algorithm Beryl recommends today. `B
 | Curves | X25519 key agreement, Ed25519 signatures, P-256 ECDSA (RFC 6979 nonces) and ECDH, P-384 ECDSA verification | RFC 7748, RFC 8032, FIPS 186-5, SP 800-186, SEC 1 | [public-key.md](docs/crypto/public-key.md) |
 | RSA | PKCS #1 v1.5 and PSS signatures, OAEP encryption, 2,048 to 4,096-bit private keys | RFC 8017 | [public-key.md](docs/crypto/public-key.md#rsa) |
 | Certificates | X.509 certificates, CRLs and private key files; chain verification against the pinned Mozilla roots or the system bundle; host names checked | RFC 5280, RFC 9525, RFC 7468 | [certificates.md](docs/certificates.md) |
+| TLS | TLS 1.3 client and server (`Beryl::TLS`), shaped like `OpenSSL::SSL`: session tickets, HelloRetryRequest, ALPN, SNI, KeyUpdate, record size limit; TLS 1.3 only | RFC 8446 (9846), RFC 8448, RFC 8449, RFC 7301, RFC 6066, RFC 8701 | [tls.md](docs/tls.md) |
 
 ### Processor instructions, and Data Independent Timing
 

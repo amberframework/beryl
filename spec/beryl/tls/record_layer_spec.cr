@@ -94,6 +94,21 @@ describe Beryl::TLS::RecordProtection do
     end
   end
 
+  it "seals into reused buffers the same records it seals into new ones, and opens into a reused buffer" do
+    traffic_secret = Bytes.new(32, 3)
+    record_storage = Bytes.new(64, 0xEE)
+    scratch = Bytes.new(64, 0xEE)
+    reused = TLS::RecordProtection.new(SUITE, traffic_secret)
+    fresh = TLS::RecordProtection.new(SUITE, traffic_secret)
+    reader = TLS::RecordProtection.new(SUITE, traffic_secret)
+    plaintext_storage = Bytes.new(64, 0xEE)
+    ["first", "a second, longer record", ""].each do |text|
+      record = reused.seal(TLS::ContentType::ApplicationData, text.to_slice, into: record_storage, scratch: scratch)
+      record.should eq(fresh.seal(TLS::ContentType::ApplicationData, text.to_slice))
+      reader.open(record[0, 5], record[5..], into: plaintext_storage).should eq({TLS::ContentType::ApplicationData, text.to_slice})
+    end
+  end
+
   it "works for every suite" do
     TLS::CipherSuite.each do |suite|
       traffic_secret = Bytes.new(suite.hash_algorithm.bytesize, 9)
