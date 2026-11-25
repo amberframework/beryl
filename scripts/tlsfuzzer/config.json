@@ -230,10 +230,12 @@
         "--any-client-chain"
       ],
       "arguments": [
+        "-E",
+        "signature_algorithms_cert:CR key_share:SH supported_versions:SH",
         "-s",
         "ecdsa_secp256r1_sha256 rsa_pss_rsae_sha256 rsa_pss_rsae_sha384 rsa_pss_rsae_sha512 ed25519 ecdsa_secp384r1_sha384"
       ],
-      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order."
+      "arguments_reason": "The server asks for a client certificate (optional, so the probes that send an empty Certificate complete) and accepts a chain from any issuer, since tlsfuzzer brings its own self-signed client certificates; the CertificateVerify signature is always checked. -s lists the schemes Beryl verifies, in its order. -E names the extensions Beryl sends: signature_algorithms_cert in the CertificateRequest (RFC 9846 §4.2.3 allows it there), key_share and supported_versions in the ServerHello."
     },
     {
       "script": "test-tls13-certificate-verify.py",
