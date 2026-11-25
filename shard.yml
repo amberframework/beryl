@@ -1,5 +1,5 @@
 name: beryl
-version: 0.2.0
+version: 0.2.1
 description: Security for Amber V2. Cryptography written in Crystal, with no C library underneath.
 authors:
   - AgentC <agent_c@agentc.consulting>
