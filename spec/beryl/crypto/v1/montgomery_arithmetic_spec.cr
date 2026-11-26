@@ -3,6 +3,7 @@ require "../../../spec_helper"
 
 private alias MontgomeryArithmetic = Beryl::Crypto::V1::MontgomeryArithmetic
 private alias MontgomeryMultiplicationInAssembly = Beryl::Crypto::V1::MontgomeryMultiplicationInAssembly
+private alias MontgomeryMultiplicationWithTwoCarryChains = Beryl::Crypto::V1::MontgomeryMultiplicationWithTwoCarryChains
 
 # Random words from a seeded generator, so a failure replays.
 private def random_words(random : Random, word_count : Int32) : Slice(UInt64)
@@ -116,6 +117,60 @@ describe "Beryl::Crypto::V1::MontgomeryMultiplicationInAssembly" do
   {% end %}
 end
 
+describe "Beryl::Crypto::V1::MontgomeryMultiplicationWithTwoCarryChains" do
+  {% for word_count in [16, 24, 32, 48, 64] %}
+    it "multiplies and squares as the Crystal multiplication does, {{ word_count }} words" do
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+        # The kernel needs BMI2 and ADX; on a processor without them there is nothing to compare.
+        next unless Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+
+        random = Random::PCG32.new({{ word_count }}_u64 + 3)
+        400.times do |trial|
+          modulus = random_modulus(random, {{ word_count }})
+          modulus.map! { |word| word | 0xffffffff00000000_u64 } if trial % 5 == 1
+          negated_inverse = MontgomeryArithmetic.negated_inverse_of_low_word(modulus[0])
+          first_factor = random_below(random, modulus)
+          second_factor = random_below(random, modulus)
+          # Every word all ones below the top, and an unreduced first factor,
+          # make the longest carries.
+          if trial % 4 == 0
+            second_factor = modulus.dup
+            second_factor[0] -= 1
+            first_factor = trial % 8 == 0 ? Slice(UInt64).new({{ word_count }}, UInt64::MAX) : second_factor.dup
+          end
+          crystal_scratch = Slice(UInt64).new(2 * {{ word_count }} + 2)
+          # Scratch left full of a pattern: the kernel must not rely on it being zero.
+          scratch = Slice(UInt64).new(MontgomeryArithmetic.multiplication_scratch_word_count({{ word_count }}), 0x5a5a5a5a5a5a5a5a_u64)
+          expected = Slice(UInt64).new({{ word_count }})
+          MontgomeryArithmetic.multiply_{{ word_count }}(expected.to_unsafe, first_factor.to_unsafe, second_factor.to_unsafe,
+            modulus.to_unsafe, negated_inverse, crystal_scratch.to_unsafe)
+          from_assembly = Slice(UInt64).new({{ word_count }})
+          MontgomeryMultiplicationWithTwoCarryChains.multiply_{{ word_count }}(from_assembly.to_unsafe, first_factor.to_unsafe,
+            second_factor.to_unsafe, modulus.to_unsafe, negated_inverse, scratch.to_unsafe)
+          from_assembly.should eq(expected)
+
+          # The result may overwrite the second factor.
+          overwritten = second_factor.dup
+          MontgomeryMultiplicationWithTwoCarryChains.multiply_{{ word_count }}(overwritten.to_unsafe, first_factor.to_unsafe,
+            overwritten.to_unsafe, modulus.to_unsafe, negated_inverse, scratch.to_unsafe)
+          overwritten.should eq(expected)
+
+          MontgomeryArithmetic.multiply_{{ word_count }}(expected.to_unsafe, second_factor.to_unsafe, second_factor.to_unsafe,
+            modulus.to_unsafe, negated_inverse, crystal_scratch.to_unsafe)
+          MontgomeryMultiplicationWithTwoCarryChains.square_{{ word_count }}(from_assembly.to_unsafe, second_factor.to_unsafe,
+            modulus.to_unsafe, negated_inverse, scratch.to_unsafe)
+          from_assembly.should eq(expected)
+
+          # The result may overwrite the factor.
+          MontgomeryMultiplicationWithTwoCarryChains.square_{{ word_count }}(second_factor.to_unsafe, second_factor.to_unsafe,
+            modulus.to_unsafe, negated_inverse, scratch.to_unsafe)
+          second_factor.should eq(expected)
+        end
+      {% end %}
+    end
+  {% end %}
+end
+
 describe "Beryl::Crypto::V1::MontgomeryArithmetic.square" do
   it "returns what the multiplication of a number by itself returns" do
     random = Random::PCG32.new(2048_u64)
@@ -124,7 +179,7 @@ describe "Beryl::Crypto::V1::MontgomeryArithmetic.square" do
         modulus = random_modulus(random, word_count)
         negated_inverse = MontgomeryArithmetic.negated_inverse_of_low_word(modulus[0])
         factor = random_below(random, modulus)
-        scratch = Slice(UInt64).new(2 * word_count + 2)
+        scratch = Slice(UInt64).new(MontgomeryArithmetic.multiplication_scratch_word_count(word_count))
         expected = Slice(UInt64).new(word_count)
         MontgomeryArithmetic.multiply(expected, factor, factor, modulus, negated_inverse, scratch)
         MontgomeryArithmetic.square(factor, factor, modulus, negated_inverse, scratch)
@@ -140,7 +195,7 @@ describe "Beryl::Crypto::V1::MontgomeryArithmetic.square" do
       negated_inverse = MontgomeryArithmetic.negated_inverse_of_low_word(modulus[0])
       factor = modulus.dup
       factor[0] -= 1
-      scratch = Slice(UInt64).new(34)
+      scratch = Slice(UInt64).new(MontgomeryArithmetic.multiplication_scratch_word_count(16))
       expected = Slice(UInt64).new(16)
       MontgomeryArithmetic.multiply(expected, factor, factor, modulus, negated_inverse, scratch)
       MontgomeryArithmetic.square(factor, factor, modulus, negated_inverse, scratch)
@@ -198,7 +253,7 @@ describe "Beryl::Crypto::V1::MontgomeryArithmetic.exponentiate_by_public_exponen
           base = random_below(random, modulus)
           scratch = Slice(UInt64).new(MontgomeryArithmetic.public_exponentiation_scratch_word_count(word_count))
           r_squared = Slice(UInt64).new(word_count)
-          MontgomeryArithmetic.compute_r_squared(r_squared, modulus, 64 * word_count, negated_inverse, scratch[word_count, 2 * word_count + 2])
+          MontgomeryArithmetic.compute_r_squared(r_squared, modulus, 64 * word_count, negated_inverse, scratch[word_count, MontgomeryArithmetic.multiplication_scratch_word_count(word_count)])
           correction = Slice(UInt64).new(word_count)
           MontgomeryArithmetic.compute_public_exponent_correction(correction, exponent, modulus, r_squared, negated_inverse, scratch)
           plain = Slice(UInt64).new(word_count)
