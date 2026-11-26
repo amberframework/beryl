@@ -73,10 +73,13 @@ end
 
 # Message sizes that cross every boundary of the assembly paths: each size up
 # to 600 bytes, and sizes around the multiples of the 128-byte and 256-byte
-# groups and the 16 KiB sealing chunk.
+# groups, the 512-byte and 1024-byte ChaCha20 groups of AVX2 and AVX-512
+# (whose first group carries 448 or 960 message bytes), the Poly1305 vector
+# groups, and the 16 KiB sealing chunk.
 LIST_OF_CIPHER_CHECK_BYTESIZES = (0..600).to_a +
-                                 [1023, 1024, 1025, 2047, 2048, 2049, 4095, 4096, 4097, 16_383, 16_384, 16_385,
-                                  16_384 + 127, 16_384 + 129, 32_767, 32_768, 32_769, 65_536 + 17, 100_000]
+                                 [959, 960, 961, 1023, 1024, 1025, 1087, 1088, 1089, 1471, 1472, 1473, 1535, 1536, 1537,
+                                  1983, 1984, 1985, 2047, 2048, 2049, 3007, 3008, 3009, 4095, 4096, 4097,
+                                  16_383, 16_384, 16_385, 16_384 + 127, 16_384 + 129, 32_767, 32_768, 32_769, 65_536 + 17, 100_000]
 
 describe "Beryl ciphers on the processor's instructions" do
   it "states which instructions this run uses" do
@@ -142,6 +145,42 @@ describe "Beryl ciphers on the processor's instructions" do
       expected = PortableCipherReference.seal_with_chacha20_and_poly1305(subkey, short_nonce, associated_data, plaintext)
       fail "XChaCha20-Poly1305 differs from the portable code at #{message_bytesize} bytes" unless sealed == expected
       extended.decrypt(sealed, nonce: extended_nonce, associated_data: associated_data).should eq(plaintext)
+    end
+  end
+
+  it "runs the ChaCha20 keystream and Poly1305 as the portable code does, at every length that changes path" do
+    generator = Random.new(0x6b73_7472)
+    LIST_OF_CIPHER_CHECK_BYTESIZES.each do |message_bytesize|
+      key = generator.random_bytes(32)
+      nonce = generator.random_bytes(12)
+      initial_counter = generator.rand(UInt32::MAX // 2).to_u32
+      message = generator.random_bytes(message_bytesize)
+      expected = Bytes.new(message_bytesize)
+      Beryl::Crypto::V1::ChaCha20StreamCipher.xor_keystream(key, nonce, initial_counter, message, expected)
+      written = Bytes.new(message_bytesize)
+      Beryl::Crypto::V1::ChaCha20WithVectorInstructions.xor_keystream(key, nonce, initial_counter, message, written)
+      fail "the ChaCha20 keystream differs from the portable code at #{message_bytesize} bytes" unless written == expected
+
+      associated_data = generator.random_bytes(generator.rand(0..40))
+      expected_tag = Bytes.new(16)
+      Beryl::Crypto::V1::Poly1305OneTimeAuthenticator.authenticate_encrypted_message(key, associated_data, message, expected_tag)
+      tag = Bytes.new(16)
+      Beryl::Crypto::V1::Poly1305WithWideMultiplication.authenticate_encrypted_message(key, associated_data, message, tag)
+      fail "Poly1305 differs from the portable code at #{message_bytesize} bytes" unless tag == expected_tag
+    end
+  end
+
+  it "runs Poly1305 as the portable code does on the largest key and message words" do
+    [0xff_u8, 0xfe_u8, 0x00_u8].each do |message_byte|
+      [64, 1024, 1040, 4096, 65_536 + 48].each do |message_bytesize|
+        key = Bytes.new(32, 0xff_u8)
+        message = Bytes.new(message_bytesize, message_byte)
+        expected_tag = Bytes.new(16)
+        Beryl::Crypto::V1::Poly1305OneTimeAuthenticator.authenticate_encrypted_message(key, Bytes.empty, message, expected_tag)
+        tag = Bytes.new(16)
+        Beryl::Crypto::V1::Poly1305WithWideMultiplication.authenticate_encrypted_message(key, Bytes.empty, message, tag)
+        tag.should eq(expected_tag)
+      end
     end
   end
 

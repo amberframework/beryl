@@ -119,6 +119,8 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   mulx adcx adox xor sbb cmovc imul shr shl or
   vpxorq vpbroadcastq vpmadd52luq vpmadd52huq valignq vmovq vpsrlq vpandq vpaddq vpsubq vpcmpuq vpcmpeqq
   vpblendmq vmovdqu64 kmovb vzeroupper vpand vpor vpxor vmovdqu vpextrq
+  vmovd vmovdqa vmovdqu32 vmovdqa64 vpbroadcastd vpaddd vpxord vporq vpshufb vpslld vpsrld vpsllq vpsrldq vprold
+  vpunpckldq vpunpckhdq vpunpcklqdq vpunpckhqdq vperm2i128 vshufi32x4 vextracti128 vextracti64x4 vpshufd vpinsrd addl vpmuludq imulq
 ].freeze
 # Instructions that write the condition flags. LLVM drops a clobber name it
 # does not know without a word, and the flags are "cc" on AArch64 but "flags"
