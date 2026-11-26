@@ -20,7 +20,8 @@ module Beryl::Crypto::V1
   #
   # On a processor with AES and carry-less multiply instructions (ARMv8
   # `aese` and `pmull`, x86-64 AES-NI and `pclmulqdq`), both run on those
-  # instructions, eight blocks at a time
+  # instructions, eight blocks at a time, and on x86-64 with VAES and
+  # VPCLMULQDQ four or two blocks to an instruction
   # (`GaloisCounterModeWithProcessorInstructions`). Elsewhere AES runs as a
   # Boolean circuit and GHASH as carry-less multiplies built from integer
   # ones, with no table (`BitslicedAdvancedEncryptionStandard` and
@@ -41,7 +42,7 @@ module Beryl::Crypto::V1
     @round_keys : Slice(UInt64)
     @hash_key_state : Slice(UInt64)
 
-    # The round keys as bytes and the hash key powers H to H^8, for the
+    # The round keys as bytes and the table of hash key powers, for the
     # processor's instructions; empty when the portable code runs.
     @round_key_bytes : Bytes
     @hash_key_powers : Bytes
