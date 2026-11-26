@@ -363,6 +363,20 @@ module Beryl::Crypto::V1
       # instead of 14 additions: 4·Y^2 is (2·Y)^2, 8·Y^4 is half of its
       # square, 4·X·Y^2 is X·(2·Y)^2 and 8·X·Y^2 its double.
       def double : Point
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+          # P-256 on x86-64: the same steps in one assembly statement.
+          input = self
+          doubled = uninitialized Point
+          scratch = uninitialized StaticArray(UInt64, 52)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(true,
+              pointerof(scratch), pointerof(input), pointerof(doubled))
+          else
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(false,
+              pointerof(scratch), pointerof(input), pointerof(doubled))
+          end
+          return doubled
+        {% end %}
         twice_y = Field.add(@y, @y)
         delta = Field.square(@z)
         four_y_squared = Field.square(twice_y)
@@ -443,6 +457,19 @@ module Beryl::Crypto::V1
       # The sum with *other* by the formula alone: right when neither is
       # infinity and the two are neither equal nor opposite.
       def add_unchecked(other : Point) : Point
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+          # P-256 on x86-64: the same steps in one assembly statement.
+          first = self
+          scratch = uninitialized StaticArray(UInt64, 68)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_addition_statement(true,
+              pointerof(scratch), pointerof(first), pointerof(other))
+          else
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_addition_statement(false,
+              pointerof(scratch), pointerof(first), pointerof(other))
+          end
+          return (pointerof(scratch).as(UInt64*) + 56).as(Point*).value
+        {% end %}
         z1_squared = Field.square(@z)
         z2_squared = Field.square(other.z)
         u1 = Field.mul(@x, z2_squared)

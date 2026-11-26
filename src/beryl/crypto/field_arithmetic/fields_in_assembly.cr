@@ -264,253 +264,385 @@ module Beryl::Crypto::FieldArithmetic
       StaticArray[product_0, product_1, product_2, product_3]
     end
 
-    # The text of an x86-64 Montgomery multiplication modulo the P-256 prime
-    # on memory: $0 points at the result, $1 at a, $2 at b. The product
-    # words live in r8 to r15; rax, rdx and rcx are scratch. The reduction
-    # is the one described for AArch64. The statement writes the flags, so
-    # it names the x86-64 clobber "flags" (see the module comment).
+    # The text of a run of P-256 field operations on x86-64, in one
+    # statement, each operand a field element in memory at a fixed offset
+    # from one of the statement's pointer operands ($0, $1, ...), so a whole
+    # point doubling or addition runs without leaving the assembly.
+    # *steps* lists {operation, destination, a, b}, each place a
+    # {pointer, offset} pair, and *pointers* the pointer operands in order.
+    # Operations, each returning what fiat-crypto's function returns:
     #
-    # *product* picks how the 512-bit product is formed: "mulq" (every
-    # x86-64 processor), "mulx" (BMI2 and ADX: each row after the first adds
-    # its low halves on the `adcx` chain and its high halves on the `adox`
-    # chain, both cleared by `xorl`, as OpenSSL's `ecp_nistz256` does with
-    # ADX), or "mulx_square" (a squaring with `mulx`: the six cross products
-    # once, doubled on the `adcx` chain while the four squares come in on
-    # the `adox` chain; it reads only $1).
-    macro p256_x86_64_statement(result, a, b, product_kind = "mulq")
+    # - "mul" (`mulq`, every x86-64 processor) and "mulx" (BMI2 and ADX:
+    #   each row after the first adds its low halves on the `adcx` chain and
+    #   its high halves on the `adox` chain, both cleared by `xorl`, as
+    #   OpenSSL's `ecp_nistz256` does with ADX): the Montgomery product. The
+    #   512-bit product lives in r8 to r15 (rax, rcx and rdx scratch); the
+    #   reduction is the one described for AArch64, then one conditional
+    #   subtraction of p (`cmovnc`).
+    # - "mulx_square": a·a with `mulx`, the six cross products once, doubled
+    #   on the `adcx` chain while the four squares come in on the `adox`
+    #   chain (b is not read).
+    # - "add": the five-word sum, p subtracted, the sum kept when that
+    #   borrows; "sub": a - b, p added under the mask of its borrow (`sbb`
+    #   of a register from itself), p's top word built from the mask as
+    #   (mask_low << 32) - mask.
+    # - "half": a/2 for a below p (no fiat-crypto counterpart; see
+    #   `half_portable`): p added under the mask of a's low bit, the
+    #   five-word sum shifted right one bit with `shrd`.
+    #
+    # Each operation reads all of a and b before it writes its destination,
+    # so a destination may be one of its own operands. The statement writes
+    # the flags, so it names the x86-64 clobber "flags" (see the module
+    # comment).
+    macro p256_x86_64_sequence_statement(steps, pointers)
       {%
         product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
         lines = [] of StringLiteral
       %}
-      {% if product_kind == "mulx" %}
+      {% for step in steps %}
         {%
-          lines << "movq 0($1), %rdx"
-          lines << "mulxq 0($2), %r8, %r9"
-          lines << "mulxq 8($2), %rax, %r10"
-          lines << "addq %rax, %r9"
-          lines << "mulxq 16($2), %rax, %r11"
-          lines << "adcq %rax, %r10"
-          lines << "mulxq 24($2), %rax, %r12"
-          lines << "adcq %rax, %r11"
-          lines << "adcq $$0, %r12"
+          operation = step[0]
+          destination = step[1]
+          first = step[2]
+          second = step[3]
+          a_words = (0..3).map { |index| "#{first[1] + 8 * index}(#{first[0].id})" }
+          b_words = (0..3).map { |index| "#{second[1] + 8 * index}(#{second[0].id})" }
+          destination_words = (0..3).map { |index| "#{destination[1] + 8 * index}(#{destination[0].id})" }
         %}
-        {% for row in 1..3 %}
+        {% if operation == "mul" %}
           {%
-            lines << "movq #{8 * row}($1), %rdx"
-            lines << "xorl %eax, %eax"
+            lines << "movq #{a_words[0].id}, %rax"
+            lines << "mulq #{b_words[0].id}"
+            lines << "movq %rax, %r8"
+            lines << "movq %rdx, %r9"
           %}
-          {% for column in 0..2 %}
+          {% for column in 1..3 %}
             {%
-              lines << "mulxq #{8 * column}($2), %rax, %rcx"
-              lines << "adcxq %rax, #{product[row + column].id}"
-              lines << "adoxq %rcx, #{product[row + column + 1].id}"
+              lines << "movq #{a_words[0].id}, %rax"
+              lines << "mulq #{b_words[column].id}"
+              lines << "addq %rax, #{product[column].id}"
+              lines << "adcq $$0, %rdx"
+              lines << "movq %rdx, #{product[column + 1].id}"
+            %}
+          {% end %}
+          {% for row in 1..3 %}
+            {%
+              lines << "movq #{a_words[row].id}, %rax"
+              lines << "mulq #{b_words[0].id}"
+              lines << "addq %rax, #{product[row].id}"
+              lines << "adcq $$0, %rdx"
+              lines << "movq %rdx, %rcx"
+            %}
+            {% for column in 1..3 %}
+              {%
+                lines << "movq #{a_words[row].id}, %rax"
+                lines << "mulq #{b_words[column].id}"
+                lines << "addq %rcx, %rax"
+                lines << "adcq $$0, %rdx"
+                lines << "addq %rax, #{product[row + column].id}"
+                lines << "adcq $$0, %rdx"
+                lines << "movq %rdx, %rcx"
+              %}
+            {% end %}
+            {% lines << "movq %rcx, #{product[row + 4].id}" %}
+          {% end %}
+        {% elsif operation == "mulx" %}
+          {%
+            lines << "movq #{a_words[0].id}, %rdx"
+            lines << "mulxq #{b_words[0].id}, %r8, %r9"
+            lines << "mulxq #{b_words[1].id}, %rax, %r10"
+            lines << "addq %rax, %r9"
+            lines << "mulxq #{b_words[2].id}, %rax, %r11"
+            lines << "adcq %rax, %r10"
+            lines << "mulxq #{b_words[3].id}, %rax, %r12"
+            lines << "adcq %rax, %r11"
+            lines << "adcq $$0, %r12"
+          %}
+          {% for row in 1..3 %}
+            {%
+              lines << "movq #{a_words[row].id}, %rdx"
+              lines << "xorl %eax, %eax"
+            %}
+            {% for column in 0..2 %}
+              {%
+                lines << "mulxq #{b_words[column].id}, %rax, %rcx"
+                lines << "adcxq %rax, #{product[row + column].id}"
+                lines << "adoxq %rcx, #{product[row + column + 1].id}"
+              %}
+            {% end %}
+            {%
+              lines << "mulxq #{b_words[3].id}, %rax, #{product[row + 4].id}"
+              lines << "adcxq %rax, #{product[row + 3].id}"
+              lines << "movl $$0, %ecx"
+              lines << "adoxq %rcx, #{product[row + 4].id}"
+              lines << "adcxq %rcx, #{product[row + 4].id}"
+            %}
+          {% end %}
+        {% elsif operation == "mulx_square" %}
+          {%
+            lines << "movq #{a_words[0].id}, %rdx"
+            lines << "mulxq #{a_words[1].id}, %r9, %r10"
+            lines << "mulxq #{a_words[2].id}, %rax, %r11"
+            lines << "mulxq #{a_words[3].id}, %rcx, %r12"
+            lines << "addq %rax, %r10"
+            lines << "adcq %rcx, %r11"
+            lines << "adcq $$0, %r12"
+            lines << "movq #{a_words[1].id}, %rdx"
+            lines << "xorl %eax, %eax"
+            lines << "mulxq #{a_words[2].id}, %rax, %rcx"
+            lines << "adcxq %rax, %r11"
+            lines << "adoxq %rcx, %r12"
+            lines << "mulxq #{a_words[3].id}, %rax, %r13"
+            lines << "adcxq %rax, %r12"
+            lines << "movl $$0, %ecx"
+            lines << "adoxq %rcx, %r13"
+            lines << "adcxq %rcx, %r13"
+            lines << "movq #{a_words[2].id}, %rdx"
+            lines << "mulxq #{a_words[3].id}, %rax, %r14"
+            lines << "addq %rax, %r13"
+            lines << "adcq $$0, %r14"
+            lines << "movq #{a_words[0].id}, %rdx"
+            lines << "xorl %ecx, %ecx"
+            lines << "mulxq %rdx, %r8, %rax"
+            lines << "adcxq %r9, %r9"
+            lines << "adoxq %rax, %r9"
+            lines << "movq #{a_words[1].id}, %rdx"
+            lines << "mulxq %rdx, %rax, %rcx"
+            lines << "adcxq %r10, %r10"
+            lines << "adoxq %rax, %r10"
+            lines << "adcxq %r11, %r11"
+            lines << "adoxq %rcx, %r11"
+            lines << "movq #{a_words[2].id}, %rdx"
+            lines << "mulxq %rdx, %rax, %rcx"
+            lines << "adcxq %r12, %r12"
+            lines << "adoxq %rax, %r12"
+            lines << "adcxq %r13, %r13"
+            lines << "adoxq %rcx, %r13"
+            lines << "movq #{a_words[3].id}, %rdx"
+            lines << "mulxq %rdx, %rax, %r15"
+            lines << "adcxq %r14, %r14"
+            lines << "adoxq %rax, %r14"
+            lines << "movl $$0, %ecx"
+            lines << "adcxq %rcx, %r15"
+            lines << "adoxq %rcx, %r15"
+          %}
+        {% elsif operation == "add" %}
+          {%
+            lines << "movl $$0xffffffff, %ecx"
+            lines << "movabsq $$0xffffffff00000001, %rdx"
+            lines << "movl $$0, %eax"
+          %}
+          {% for index in 0..3 %}
+            {%
+              lines << "movq #{a_words[index].id}, #{product[index].id}"
+              lines << "#{(index == 0 ? "addq" : "adcq").id} #{b_words[index].id}, #{product[index].id}"
             %}
           {% end %}
           {%
-            lines << "mulxq 24($2), %rax, #{product[row + 4].id}"
-            lines << "adcxq %rax, #{product[row + 3].id}"
-            lines << "movl $$0, %ecx"
-            lines << "adoxq %rcx, #{product[row + 4].id}"
-            lines << "adcxq %rcx, #{product[row + 4].id}"
+            lines << "adcq $$0, %rax"
+            lines << "movq %r8, %r12"
+            lines << "movq %r9, %r13"
+            lines << "movq %r10, %r14"
+            lines << "movq %r11, %r15"
+            lines << "subq $$-1, %r12"
+            lines << "sbbq %rcx, %r13"
+            lines << "sbbq $$0, %r14"
+            lines << "sbbq %rdx, %r15"
+            lines << "sbbq $$0, %rax"
+            lines << "cmovncq %r12, %r8"
+            lines << "cmovncq %r13, %r9"
+            lines << "cmovncq %r14, %r10"
+            lines << "cmovncq %r15, %r11"
           %}
-        {% end %}
-      {% elsif product_kind == "mulx_square" %}
-        {%
-          lines << "movq 0($1), %rdx"
-          lines << "mulxq 8($1), %r9, %r10"
-          lines << "mulxq 16($1), %rax, %r11"
-          lines << "mulxq 24($1), %rcx, %r12"
-          lines << "addq %rax, %r10"
-          lines << "adcq %rcx, %r11"
-          lines << "adcq $$0, %r12"
-          lines << "movq 8($1), %rdx"
-          lines << "xorl %eax, %eax"
-          lines << "mulxq 16($1), %rax, %rcx"
-          lines << "adcxq %rax, %r11"
-          lines << "adoxq %rcx, %r12"
-          lines << "mulxq 24($1), %rax, %r13"
-          lines << "adcxq %rax, %r12"
-          lines << "movl $$0, %ecx"
-          lines << "adoxq %rcx, %r13"
-          lines << "adcxq %rcx, %r13"
-          lines << "movq 16($1), %rdx"
-          lines << "mulxq 24($1), %rax, %r14"
-          lines << "addq %rax, %r13"
-          lines << "adcq $$0, %r14"
-          lines << "movq 0($1), %rdx"
-          lines << "xorl %ecx, %ecx"
-          lines << "mulxq %rdx, %r8, %rax"
-          lines << "adcxq %r9, %r9"
-          lines << "adoxq %rax, %r9"
-          lines << "movq 8($1), %rdx"
-          lines << "mulxq %rdx, %rax, %rcx"
-          lines << "adcxq %r10, %r10"
-          lines << "adoxq %rax, %r10"
-          lines << "adcxq %r11, %r11"
-          lines << "adoxq %rcx, %r11"
-          lines << "movq 16($1), %rdx"
-          lines << "mulxq %rdx, %rax, %rcx"
-          lines << "adcxq %r12, %r12"
-          lines << "adoxq %rax, %r12"
-          lines << "adcxq %r13, %r13"
-          lines << "adoxq %rcx, %r13"
-          lines << "movq 24($1), %rdx"
-          lines << "mulxq %rdx, %rax, %r15"
-          lines << "adcxq %r14, %r14"
-          lines << "adoxq %rax, %r14"
-          lines << "movl $$0, %ecx"
-          lines << "adcxq %rcx, %r15"
-          lines << "adoxq %rcx, %r15"
-        %}
-      {% else %}
-      {%
-        lines << "movq 0($1), %rax"
-        lines << "mulq 0($2)"
-        lines << "movq %rax, #{product[0].id}"
-        lines << "movq %rdx, #{product[1].id}"
-      %}
-      {% for column in 1..3 %}
-        {%
-          lines << "movq 0($1), %rax"
-          lines << "mulq #{8 * column}($2)"
-          lines << "addq %rax, #{product[column].id}"
-          lines << "adcq $$0, %rdx"
-          lines << "movq %rdx, #{product[column + 1].id}"
-        %}
-      {% end %}
-      {% for row in 1..3 %}
-        {%
-          lines << "movq #{8 * row}($1), %rax"
-          lines << "mulq 0($2)"
-          lines << "addq %rax, #{product[row].id}"
-          lines << "adcq $$0, %rdx"
-          lines << "movq %rdx, %rcx"
-        %}
-        {% for column in 1..3 %}
+        {% elsif operation == "sub" %}
+          {% for index in 0..3 %}
+            {%
+              lines << "movq #{a_words[index].id}, #{product[index].id}"
+              lines << "#{(index == 0 ? "subq" : "sbbq").id} #{b_words[index].id}, #{product[index].id}"
+            %}
+          {% end %}
           {%
-            lines << "movq #{8 * row}($1), %rax"
-            lines << "mulq #{8 * column}($2)"
-            lines << "addq %rcx, %rax"
-            lines << "adcq $$0, %rdx"
-            lines << "addq %rax, #{product[row + column].id}"
-            lines << "adcq $$0, %rdx"
-            lines << "movq %rdx, %rcx"
+            lines << "sbbq %rax, %rax"
+            lines << "movl %eax, %ecx"
+            lines << "movq %rcx, %rdx"
+            lines << "shlq $$32, %rdx"
+            lines << "subq %rax, %rdx"
+            lines << "addq %rax, %r8"
+            lines << "adcq %rcx, %r9"
+            lines << "adcq $$0, %r10"
+            lines << "adcq %rdx, %r11"
           %}
+        {% elsif operation == "half" %}
+          {% for index in 0..3 %}
+            {% lines << "movq #{a_words[index].id}, #{product[index].id}" %}
+          {% end %}
+          {%
+            lines << "movq %r8, %rax"
+            lines << "andq $$1, %rax"
+            lines << "xorl %ecx, %ecx"
+            lines << "subq %rax, %rcx"
+            lines << "movl %ecx, %edx"
+            lines << "movq %rdx, %rax"
+            lines << "shlq $$32, %rax"
+            lines << "subq %rcx, %rax"
+            lines << "addq %rcx, %r8"
+            lines << "adcq %rdx, %r9"
+            lines << "adcq $$0, %r10"
+            lines << "adcq %rax, %r11"
+            lines << "sbbq %rcx, %rcx"
+            lines << "shrdq $$1, %r9, %r8"
+            lines << "shrdq $$1, %r10, %r9"
+            lines << "shrdq $$1, %r11, %r10"
+            lines << "shrdq $$1, %rcx, %r11"
+          %}
+        {% else %}
+          {% raise "unknown P-256 operation #{operation}" %}
         {% end %}
-        {% lines << "movq %rcx, #{product[row + 4].id}" %}
-      {% end %}
-      {% end %}
-      {% low = [product[0], product[1], product[2], product[3]] %}
-      {% for step in 0..3 %}
-        {%
-          word = low[0]
-          lines << "movq #{word.id}, %rax"
-          lines << "shlq $$32, %rax"
-          lines << "movq #{word.id}, %rdx"
-          lines << "shrq $$32, %rdx"
-          lines << "movq #{word.id}, %rcx"
-          lines << "subq %rax, %rcx"
-          lines << "sbbq %rdx, #{word.id}"
-          lines << "addq %rax, #{low[1].id}"
-          lines << "adcq %rdx, #{low[2].id}"
-          lines << "adcq %rcx, #{low[3].id}"
-          lines << "adcq $$0, #{word.id}"
-          low = [low[1], low[2], low[3], low[0]]
-        %}
-      {% end %}
-      {%
-        lines << "addq #{product[4].id}, #{product[0].id}"
-        lines << "adcq #{product[5].id}, #{product[1].id}"
-        lines << "adcq #{product[6].id}, #{product[2].id}"
-        lines << "adcq #{product[7].id}, #{product[3].id}"
-        lines << "movl $$0, %ecx"
-        lines << "adcq $$0, %rcx"
-      %}
-      {% for index in 0..3 %}
-        {% lines << "movq #{product[index].id}, #{product[index + 4].id}" %}
-      {% end %}
-      {%
-        lines << "movl $$0xffffffff, %eax"
-        lines << "movabsq $$0xffffffff00000001, %rdx"
-        lines << "subq $$-1, #{product[4].id}"
-        lines << "sbbq %rax, #{product[5].id}"
-        lines << "sbbq $$0, #{product[6].id}"
-        lines << "sbbq %rdx, #{product[7].id}"
-        lines << "sbbq $$0, %rcx"
-      %}
-      {% for index in 0..3 %}
-        {% lines << "cmovncq #{product[index + 4].id}, #{product[index].id}" %}
-      {% end %}
-      {% for index in 0..3 %}
-        {% lines << "movq #{product[index].id}, #{8 * index}($0)" %}
+        {% if operation == "mul" || operation == "mulx" || operation == "mulx_square" %}
+          {% low = [product[0], product[1], product[2], product[3]] %}
+          {% for step_index in 0..3 %}
+            {%
+              word = low[0]
+              lines << "movq #{word.id}, %rax"
+              lines << "shlq $$32, %rax"
+              lines << "movq #{word.id}, %rdx"
+              lines << "shrq $$32, %rdx"
+              lines << "movq #{word.id}, %rcx"
+              lines << "subq %rax, %rcx"
+              lines << "sbbq %rdx, #{word.id}"
+              lines << "addq %rax, #{low[1].id}"
+              lines << "adcq %rdx, #{low[2].id}"
+              lines << "adcq %rcx, #{low[3].id}"
+              lines << "adcq $$0, #{word.id}"
+              low = [low[1], low[2], low[3], low[0]]
+            %}
+          {% end %}
+          {%
+            lines << "addq #{product[4].id}, #{product[0].id}"
+            lines << "adcq #{product[5].id}, #{product[1].id}"
+            lines << "adcq #{product[6].id}, #{product[2].id}"
+            lines << "adcq #{product[7].id}, #{product[3].id}"
+            lines << "movl $$0, %ecx"
+            lines << "adcq $$0, %rcx"
+          %}
+          {% for index in 0..3 %}
+            {% lines << "movq #{product[index].id}, #{product[index + 4].id}" %}
+          {% end %}
+          {%
+            lines << "movl $$0xffffffff, %eax"
+            lines << "movabsq $$0xffffffff00000001, %rdx"
+            lines << "subq $$-1, #{product[4].id}"
+            lines << "sbbq %rax, #{product[5].id}"
+            lines << "sbbq $$0, #{product[6].id}"
+            lines << "sbbq %rdx, #{product[7].id}"
+            lines << "sbbq $$0, %rcx"
+          %}
+          {% for index in 0..3 %}
+            {% lines << "cmovncq #{product[index + 4].id}, #{product[index].id}" %}
+          {% end %}
+        {% end %}
+        {% for index in 0..3 %}
+          {% lines << "movq #{product[index].id}, #{destination_words[index].id}" %}
+        {% end %}
       {% end %}
       asm({{ lines.join("\n") }}
-        :: "r"(pointerof({{ result }})), "r"(pointerof({{ a }})), "r"(pointerof({{ b }}))
+        :: {% for pointer, index in pointers %}{% if index > 0 %}, {% end %}"r"({{ pointer }}){% end %}
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
     end
 
-    # The text of fiat-crypto's P-256 `add` or `sub` on x86-64, on memory
-    # ($0 the result, $1 a, $2 b), with the same result for every input:
-    # `add` forms the five-word sum, subtracts p, and keeps the sum when that
-    # borrows (`cmovnc`); `sub` forms a - b and adds p under the mask of its
-    # borrow (`sbb` of a register from itself), p's words built from the
-    # mask (0xffffffff00000001 as (mask_low << 32) - mask).
-    macro p256_x86_64_add_or_sub_statement(operation, result, a, b)
-      {% lines = [] of StringLiteral %}
-      {% words = %w(%r8 %r9 %r10 %r11) %}
-      {% if operation == "add" %}
-        {%
-          lines << "movl $$0xffffffff, %ecx"
-          lines << "movabsq $$0xffffffff00000001, %rdx"
-          lines << "movl $$0, %eax"
-        %}
-        {% for index in 0..3 %}
-          {%
-            lines << "movq #{8 * index}($1), #{words[index].id}"
-            lines << "#{(index == 0 ? "addq" : "adcq").id} #{8 * index}($2), #{words[index].id}"
-          %}
-        {% end %}
-        {%
-          lines << "adcq $$0, %rax"
-          lines << "movq %r8, %r12"
-          lines << "movq %r9, %r13"
-          lines << "movq %r10, %r14"
-          lines << "movq %r11, %r15"
-          lines << "subq $$-1, %r12"
-          lines << "sbbq %rcx, %r13"
-          lines << "sbbq $$0, %r14"
-          lines << "sbbq %rdx, %r15"
-          lines << "sbbq $$0, %rax"
-          lines << "cmovncq %r12, %r8"
-          lines << "cmovncq %r13, %r9"
-          lines << "cmovncq %r14, %r10"
-          lines << "cmovncq %r15, %r11"
-        %}
-      {% else %}
-        {% for index in 0..3 %}
-          {%
-            lines << "movq #{8 * index}($1), #{words[index].id}"
-            lines << "#{(index == 0 ? "subq" : "sbbq").id} #{8 * index}($2), #{words[index].id}"
-          %}
-        {% end %}
-        {%
-          lines << "sbbq %rax, %rax"
-          lines << "movl %eax, %ecx"
-          lines << "movq %rcx, %rdx"
-          lines << "shlq $$32, %rdx"
-          lines << "subq %rax, %rdx"
-          lines << "addq %rax, %r8"
-          lines << "adcq %rcx, %r9"
-          lines << "adcq $$0, %r10"
-          lines << "adcq %rdx, %r11"
-        %}
-      {% end %}
-      {% for index in 0..3 %}
-        {% lines << "movq #{words[index].id}, #{8 * index}($0)" %}
-      {% end %}
-      asm({{ lines.join("\n") }}
-        :: "r"(pointerof({{ result }})), "r"(pointerof({{ a }})), "r"(pointerof({{ b }}))
-        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
+    # A P-256 point doubling on x86-64 in one statement: the steps of
+    # `Point#double` (OpenSSL's `ecp_nistz256_point_double`), from the
+    # point at *point* (X, Y, Z, 32 bytes each) into the point at *result*,
+    # with *scratch* (52 words) for the values in between; *wide* picks
+    # `mulx` over `mulq`. Every step reads its operands before it writes,
+    # and the input is read for the last time before the result's X and Y
+    # are written (its Z after Z is read), so *result* may be *point*.
+    macro p256_x86_64_point_double_statement(wide, scratch, point, result)
+      {%
+        multiply = wide ? "mulx" : "mul"
+        square = wide ? "mulx_square" : "mul"
+        x = {"$1", 0}
+        y = {"$1", 32}
+        z = {"$1", 64}
+        new_x = {"$2", 0}
+        new_y = {"$2", 32}
+        new_z = {"$2", 64}
+        slot = (0..12).map { |index| {"$0", 32 * index} }
+        steps = [
+          {"add", slot[0], y, y},
+          {square, slot[1], z, z},
+          {square, slot[2], slot[0], slot[0]},
+          {multiply, slot[3], y, z},
+          {"add", new_z, slot[3], slot[3]},
+          {"add", slot[4], x, slot[1]},
+          {"sub", slot[5], x, slot[1]},
+          {multiply, slot[6], slot[4], slot[5]},
+          {"add", slot[7], slot[6], slot[6]},
+          {"add", slot[7], slot[7], slot[6]},
+          {square, slot[8], slot[2], slot[2]},
+          {"half", slot[8], slot[8], slot[8]},
+          {multiply, slot[9], slot[2], x},
+          {"add", slot[10], slot[9], slot[9]},
+          {square, slot[11], slot[7], slot[7]},
+          {"sub", new_x, slot[11], slot[10]},
+          {"sub", slot[12], slot[9], new_x},
+          {multiply, slot[12], slot[12], slot[7]},
+          {"sub", new_y, slot[12], slot[8]},
+        ]
+      %}
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ point }}, {{ result }}])
+    end
+
+    # A P-256 point addition on x86-64 in one statement: the steps of
+    # `Point#add_unchecked` (add-1998-cmo-2, 12M + 4S) on the points at
+    # *first* and *second*, with *scratch* (68 words); the sum's X, Y and Z
+    # are words 56 to 67 of *scratch*.
+    macro p256_x86_64_point_addition_statement(wide, scratch, first, second)
+      {%
+        multiply = wide ? "mulx" : "mul"
+        square = wide ? "mulx_square" : "mul"
+        x1 = {"$1", 0}
+        y1 = {"$1", 32}
+        z1 = {"$1", 64}
+        x2 = {"$2", 0}
+        y2 = {"$2", 32}
+        z2 = {"$2", 64}
+        slot = (0..16).map { |index| {"$0", 32 * index} }
+        steps = [
+          {square, slot[0], z1, z1},
+          {square, slot[1], z2, z2},
+          {multiply, slot[2], x1, slot[1]},
+          {multiply, slot[3], x2, slot[0]},
+          {multiply, slot[4], z2, slot[1]},
+          {multiply, slot[4], y1, slot[4]},
+          {multiply, slot[5], z1, slot[0]},
+          {multiply, slot[5], y2, slot[5]},
+          {"sub", slot[6], slot[3], slot[2]},
+          {"sub", slot[7], slot[5], slot[4]},
+          {multiply, slot[8], z1, z2},
+          {square, slot[9], slot[6], slot[6]},
+          {multiply, slot[10], slot[6], slot[9]},
+          {multiply, slot[11], slot[2], slot[9]},
+          {square, slot[12], slot[7], slot[7]},
+          {"sub", slot[12], slot[12], slot[10]},
+          {"add", slot[13], slot[11], slot[11]},
+          {"sub", slot[14], slot[12], slot[13]},
+          {"sub", slot[15], slot[11], slot[14]},
+          {multiply, slot[15], slot[7], slot[15]},
+          {multiply, slot[13], slot[4], slot[10]},
+          {"sub", slot[15], slot[15], slot[13]},
+          {multiply, slot[16], slot[8], slot[6]},
+        ]
+      %}
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ first }}, {{ second }}])
+    end
+
+    # One P-256 field operation on x86-64 (`p256_x86_64_sequence_statement`):
+    # *result* = *operation*(*a*, *b*), all three `Limbs` variables.
+    macro p256_x86_64_statement(operation, result, a, b)
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement(
+        [{ {{ operation }}, {"$0", 0}, {"$1", 0}, {"$2", 0} }],
+        [pointerof({{ result }}), pointerof({{ a }}), pointerof({{ b }})])
     end
 
     # The text of an AArch64 Montgomery multiplication modulo any odd
@@ -878,33 +1010,33 @@ module Beryl::Crypto::FieldArithmetic
 
       def self.mul_with_multiply(a : Limbs, b : Limbs) : Limbs
         result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_statement(result, a, b)
+        FieldsInAssembly.p256_x86_64_statement("mul", result, a, b)
         result
       end
 
       def self.mul_with_wide_multiply(a : Limbs, b : Limbs) : Limbs
         result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_statement(result, a, b, "mulx")
+        FieldsInAssembly.p256_x86_64_statement("mulx", result, a, b)
         result
       end
 
       def self.square_with_wide_multiply(a : Limbs) : Limbs
         result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_statement(result, a, a, "mulx_square")
+        FieldsInAssembly.p256_x86_64_statement("mulx_square", result, a, a)
         result
       end
 
       # fiat-crypto's `add`, in assembly.
       def self.add(a : Limbs, b : Limbs) : Limbs
         result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_add_or_sub_statement("add", result, a, b)
+        FieldsInAssembly.p256_x86_64_statement("add", result, a, b)
         result
       end
 
       # fiat-crypto's `sub`, in assembly.
       def self.sub(a : Limbs, b : Limbs) : Limbs
         result = uninitialized Limbs
-        FieldsInAssembly.p256_x86_64_add_or_sub_statement("sub", result, a, b)
+        FieldsInAssembly.p256_x86_64_statement("sub", result, a, b)
         result
       end
 
@@ -913,9 +1045,11 @@ module Beryl::Crypto::FieldArithmetic
         sub(Limbs.new(0_u64), a)
       end
 
-      @[AlwaysInline]
+      # a/2 mod p for a below p, in assembly.
       def self.half(a : Limbs) : Limbs
-        FieldsInAssembly.half_portable(a, PRIME_WORDS)
+        result = uninitialized Limbs
+        FieldsInAssembly.p256_x86_64_statement("half", result, a, a)
+        result
       end
     {% else %}
       @[AlwaysInline]
