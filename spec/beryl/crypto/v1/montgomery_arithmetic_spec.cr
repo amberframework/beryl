@@ -275,3 +275,63 @@ describe "Beryl::Crypto::V1::MontgomeryArithmetic.exponentiate_by_public_exponen
     end
   end
 end
+
+private alias IntegerFusedMultiplyAdd = Beryl::Crypto::V1::MontgomeryMultiplicationWithIntegerFusedMultiplyAdd
+
+private def big_of(words : Slice(UInt64)) : BigInt
+  words.to_a.reverse.reduce(BigInt.new(0)) { |sum, word| (sum << 64) + word }
+end
+
+describe "Beryl::Crypto::V1::MontgomeryMultiplicationWithIntegerFusedMultiplyAdd" do
+  it "writes words as 52-bit digits and back" do
+    random = Random::PCG32.new(52_u64)
+    {16, 24, 32}.each do |word_count|
+      words = random_words(random, word_count)
+      digits = Slice(UInt64).new(IntegerFusedMultiplyAdd.padded_digit_count_for(word_count))
+      IntegerFusedMultiplyAdd.write_digits(words, digits)
+      digits.each { |digit| (digit >> 52).should eq(0) }
+      back = Slice(UInt64).new(word_count)
+      IntegerFusedMultiplyAdd.write_words(digits, back)
+      back.should eq(words)
+    end
+  end
+
+  {% for word_count in [16, 24, 32] %}
+    it "exponentiates by both primes' exponents as the 64-bit code does, {{ word_count }} words" do
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+        # The path needs AVX-512 IFMA; on a processor without it there is nothing to compare.
+        next unless Beryl::Crypto::ProcessorFeatures::HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD
+
+        random = Random::PCG32.new({{ word_count }}_u64 + 52)
+        12.times do |trial|
+          primes = {random_modulus(random, {{ word_count }}), random_modulus(random, {{ word_count }})}
+          primes[1].map! { |word| word | 0xffffffff00000000_u64 } if trial % 3 == 1
+          negated_inverses = primes.map { |prime| MontgomeryArithmetic.negated_inverse_of_low_word(prime[0]) }
+          scratch = Slice(UInt64).new(MontgomeryArithmetic.exponentiation_scratch_word_count({{ word_count }}))
+          r_squareds = primes.map do |prime|
+            r_squared = Slice(UInt64).new({{ word_count }})
+            MontgomeryArithmetic.compute_r_squared(r_squared, prime, 64 * {{ word_count }}, MontgomeryArithmetic.negated_inverse_of_low_word(prime[0]),
+              Slice(UInt64).new(MontgomeryArithmetic.multiplication_scratch_word_count({{ word_count }})))
+            r_squared
+          end
+          pair = IntegerFusedMultiplyAdd::PrimePair.new(primes[0], r_squareds[0], negated_inverses[0], primes[1], r_squareds[1],
+            negated_inverses[1])
+          bases = primes.map { |prime| random_below(random, prime) }
+          exponents = {Bytes.new(8 * {{ word_count }}) { random.rand(256).to_u8 }, Bytes.new(8 * {{ word_count }}) { random.rand(256).to_u8 }}
+          exponents[0].fill(0xff_u8) if trial % 4 == 2
+          expected = {Slice(UInt64).new({{ word_count }}), Slice(UInt64).new({{ word_count }})}
+          2.times do |half|
+            MontgomeryArithmetic.exponentiate(expected[half], bases[half], exponents[half], primes[half], r_squareds[half],
+              negated_inverses[half], scratch)
+          end
+          MontgomeryArithmetic.leave_montgomery_form(expected[1], primes[1], negated_inverses[1],
+            Slice(UInt64).new(MontgomeryArithmetic.public_exponentiation_scratch_word_count({{ word_count }})))
+          results = {Slice(UInt64).new({{ word_count }}), Slice(UInt64).new({{ word_count }})}
+          pair.exponentiate(results[0], results[1], bases[0], bases[1], exponents[0], exponents[1])
+          results[0].should eq(expected[0])
+          results[1].should eq(expected[1])
+        end
+      {% end %}
+    end
+  {% end %}
+end
