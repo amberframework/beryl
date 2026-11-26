@@ -489,25 +489,29 @@ module Beryl::Crypto::FieldArithmetic
         x3 = {"$1", 96}
         z3 = {"$1", 128}
         slot = (0..9).map { |index| {"$0", 32 * index} }
+        # The operations of `DiffieHellmanOverCurve25519.ladder`, ordered
+        # so that independent ones sit next to each other: A, B, C and D;
+        # then DA, CB, AA and BB; then DA ± CB and E = AA - BB; then the
+        # rest. Each value is what the ladder computes, so the result is.
         steps = [
           {"cswap", nil, x2, x3},
           {"cswap", nil, z2, z3},
           {"add", slot[0], x2, z2},
-          {square, slot[1], slot[0], slot[0]},
           {"sub", slot[2], x2, z2},
-          {square, slot[3], slot[2], slot[2]},
-          {"sub", slot[4], slot[1], slot[3]},
           {"add", slot[5], x3, z3},
           {"sub", slot[6], x3, z3},
           {multiply, slot[7], slot[6], slot[0]},
           {multiply, slot[8], slot[5], slot[2]},
+          {square, slot[1], slot[0], slot[0]},
+          {square, slot[3], slot[2], slot[2]},
           {"add", slot[9], slot[7], slot[8]},
+          {"sub", slot[0], slot[7], slot[8]},
+          {"sub", slot[4], slot[1], slot[3]},
           {square, x3, slot[9], slot[9]},
-          {"sub", slot[9], slot[7], slot[8]},
-          {square, slot[9], slot[9], slot[9]},
-          {multiply, z3, u, slot[9]},
+          {square, slot[0], slot[0], slot[0]},
           {multiply, x2, slot[1], slot[3]},
           {scalar_multiply, slot[9], slot[4], slot[4]},
+          {multiply, z3, u, slot[0]},
           {"add", slot[9], slot[3], slot[9]},
           {multiply, z2, slot[4], slot[9]},
         ]
