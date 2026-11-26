@@ -392,6 +392,29 @@ module Beryl::Crypto::V1
         Point.new(new_x, new_y, new_z)
       end
 
+      # Five doublings in a row (one window of the variable-point
+      # multiplication); on x86-64, P-256 runs them as one assembly
+      # statement.
+      def double_five_times : Point
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+          input = self
+          doubled = uninitialized Point
+          scratch = uninitialized StaticArray(UInt64, 52)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(true,
+              pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+          else
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(false,
+              pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+          end
+          doubled
+        {% else %}
+          point = self
+          5.times { point = point.double }
+          point
+        {% end %}
+      end
+
       # The sum with *other*, in constant time, for any pair except a point
       # and itself (which gives infinity).
       def add(other : Point) : Point
@@ -697,7 +720,7 @@ module Beryl::Crypto::V1
       result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
       result = result.replace_if(is_infinity, multiples[15].double)
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
-        5.times { result = result.double }
+        result = result.double_five_times
         selected, is_zero = signed_multiple(scalar, window_index, multiples_pointer)
         sum = result.add_unchecked(selected)
         sum = sum.replace_if(is_infinity, selected)

@@ -557,39 +557,46 @@ module Beryl::Crypto::FieldArithmetic
     # `mulx` over `mulq`. Every step reads its operands before it writes,
     # and the input is read for the last time before the result's X and Y
     # are written (its Z after Z is read), so *result* may be *point*.
-    macro p256_x86_64_point_double_statement(wide, scratch, point, result)
+    # *count* doublings run one after another, each after the first on
+    # *result* in place.
+    macro p256_x86_64_point_double_statement(wide, scratch, point, result, count = 1)
       {%
         multiply = wide ? "mulx" : "mul"
         square = wide ? "mulx_square" : "mul"
-        x = {"$1", 0}
-        y = {"$1", 32}
-        z = {"$1", 64}
         new_x = {"$2", 0}
         new_y = {"$2", 32}
         new_z = {"$2", 64}
         slot = (0..12).map { |index| {"$0", 32 * index} }
-        steps = [
-          {"add", slot[0], y, y},
-          {square, slot[1], z, z},
-          {square, slot[2], slot[0], slot[0]},
-          {multiply, slot[3], y, z},
-          {"add", new_z, slot[3], slot[3]},
-          {"add", slot[4], x, slot[1]},
-          {"sub", slot[5], x, slot[1]},
-          {multiply, slot[6], slot[4], slot[5]},
-          {"add", slot[7], slot[6], slot[6]},
-          {"add", slot[7], slot[7], slot[6]},
-          {square, slot[8], slot[2], slot[2]},
-          {"half", slot[8], slot[8], slot[8]},
-          {multiply, slot[9], slot[2], x},
-          {"add", slot[10], slot[9], slot[9]},
-          {square, slot[11], slot[7], slot[7]},
-          {"sub", new_x, slot[11], slot[10]},
-          {"sub", slot[12], slot[9], new_x},
-          {multiply, slot[12], slot[12], slot[7]},
-          {"sub", new_y, slot[12], slot[8]},
-        ]
+        steps = [] of TupleLiteral
       %}
+      {% for round in 0...count %}
+        {%
+          x = round == 0 ? {"$1", 0} : new_x
+          y = round == 0 ? {"$1", 32} : new_y
+          z = round == 0 ? {"$1", 64} : new_z
+          steps = steps + [
+            {"add", slot[0], y, y},
+            {square, slot[1], z, z},
+            {square, slot[2], slot[0], slot[0]},
+            {multiply, slot[3], y, z},
+            {"add", new_z, slot[3], slot[3]},
+            {"add", slot[4], x, slot[1]},
+            {"sub", slot[5], x, slot[1]},
+            {multiply, slot[6], slot[4], slot[5]},
+            {"add", slot[7], slot[6], slot[6]},
+            {"add", slot[7], slot[7], slot[6]},
+            {square, slot[8], slot[2], slot[2]},
+            {"half", slot[8], slot[8], slot[8]},
+            {multiply, slot[9], slot[2], x},
+            {"add", slot[10], slot[9], slot[9]},
+            {square, slot[11], slot[7], slot[7]},
+            {"sub", new_x, slot[11], slot[10]},
+            {"sub", slot[12], slot[9], new_x},
+            {multiply, slot[12], slot[12], slot[7]},
+            {"sub", new_y, slot[12], slot[8]},
+          ]
+        %}
+      {% end %}
       ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ point }}, {{ result }}])
     end
 
