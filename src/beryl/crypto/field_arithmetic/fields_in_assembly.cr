@@ -449,6 +449,70 @@ module Beryl::Crypto::FieldArithmetic
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
     end
 
+    # The text of fiat-crypto's P-256 `add` or `sub` on x86-64, on memory
+    # ($0 the result, $1 a, $2 b), with the same result for every input:
+    # `add` forms the five-word sum, subtracts p, and keeps the sum when that
+    # borrows (`cmovnc`); `sub` forms a - b and adds p under the mask of its
+    # borrow (`sbb` of a register from itself), p's words built from the
+    # mask (0xffffffff00000001 as (mask_low << 32) - mask).
+    macro p256_x86_64_add_or_sub_statement(operation, result, a, b)
+      {% lines = [] of StringLiteral %}
+      {% words = %w(%r8 %r9 %r10 %r11) %}
+      {% if operation == "add" %}
+        {%
+          lines << "movl $$0xffffffff, %ecx"
+          lines << "movabsq $$0xffffffff00000001, %rdx"
+          lines << "movl $$0, %eax"
+        %}
+        {% for index in 0..3 %}
+          {%
+            lines << "movq #{8 * index}($1), #{words[index].id}"
+            lines << "#{(index == 0 ? "addq" : "adcq").id} #{8 * index}($2), #{words[index].id}"
+          %}
+        {% end %}
+        {%
+          lines << "adcq $$0, %rax"
+          lines << "movq %r8, %r12"
+          lines << "movq %r9, %r13"
+          lines << "movq %r10, %r14"
+          lines << "movq %r11, %r15"
+          lines << "subq $$-1, %r12"
+          lines << "sbbq %rcx, %r13"
+          lines << "sbbq $$0, %r14"
+          lines << "sbbq %rdx, %r15"
+          lines << "sbbq $$0, %rax"
+          lines << "cmovncq %r12, %r8"
+          lines << "cmovncq %r13, %r9"
+          lines << "cmovncq %r14, %r10"
+          lines << "cmovncq %r15, %r11"
+        %}
+      {% else %}
+        {% for index in 0..3 %}
+          {%
+            lines << "movq #{8 * index}($1), #{words[index].id}"
+            lines << "#{(index == 0 ? "subq" : "sbbq").id} #{8 * index}($2), #{words[index].id}"
+          %}
+        {% end %}
+        {%
+          lines << "sbbq %rax, %rax"
+          lines << "movl %eax, %ecx"
+          lines << "movq %rcx, %rdx"
+          lines << "shlq $$32, %rdx"
+          lines << "subq %rax, %rdx"
+          lines << "addq %rax, %r8"
+          lines << "adcq %rcx, %r9"
+          lines << "adcq $$0, %r10"
+          lines << "adcq %rdx, %r11"
+        %}
+      {% end %}
+      {% for index in 0..3 %}
+        {% lines << "movq #{words[index].id}, #{8 * index}($0)" %}
+      {% end %}
+      asm({{ lines.join("\n") }}
+        :: "r"(pointerof({{ result }})), "r"(pointerof({{ a }})), "r"(pointerof({{ b }}))
+        : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
+    end
+
     # The text of an AArch64 Montgomery multiplication modulo any odd
     # modulus of four words, with every value in registers: $0 to $5 the
     # running sum, $6 and $7 scratch, $8 to $11 the result of the final
@@ -830,19 +894,23 @@ module Beryl::Crypto::FieldArithmetic
         result
       end
 
-      @[AlwaysInline]
+      # fiat-crypto's `add`, in assembly.
       def self.add(a : Limbs, b : Limbs) : Limbs
-        P256Field.add(a, b)
+        result = uninitialized Limbs
+        FieldsInAssembly.p256_x86_64_add_or_sub_statement("add", result, a, b)
+        result
       end
 
-      @[AlwaysInline]
+      # fiat-crypto's `sub`, in assembly.
       def self.sub(a : Limbs, b : Limbs) : Limbs
-        P256Field.sub(a, b)
+        result = uninitialized Limbs
+        FieldsInAssembly.p256_x86_64_add_or_sub_statement("sub", result, a, b)
+        result
       end
 
       @[AlwaysInline]
       def self.opp(a : Limbs) : Limbs
-        P256Field.opp(a)
+        sub(Limbs.new(0_u64), a)
       end
 
       @[AlwaysInline]
