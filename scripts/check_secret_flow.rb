@@ -116,6 +116,9 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   adds adcs adc mul umulh ror
   lsl lsr extr subs sbcs sbc csel cmp bit
   movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
+  mulx adcx adox xor sbb cmovc imul shr shl or
+  vpxorq vpbroadcastq vpmadd52luq vpmadd52huq valignq vmovq vpsrlq vpandq vpaddq vpsubq vpcmpuq vpcmpeqq
+  vpblendmq vmovdqu64 kmovb vzeroupper vpand vpor vpxor vmovdqu vpextrq
 ].freeze
 # Instructions that write the condition flags. LLVM drops a clobber name it
 # does not know without a word, and the flags are "cc" on AArch64 but "flags"
@@ -123,7 +126,7 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
 # optimizer keep a flag value live across it (milestone F3's x86-64 P-256
 # multiplication broke ECDH that way in --release builds).
 AARCH64_FLAG_WRITERS = %w[adds adcs subs sbcs cmp cmn tst ands bics].freeze
-X86_FLAG_WRITERS = /\A(?:add|adc|sub|sbb|inc|dec|neg|cmp|test|and|or|xor|shl|shr|sar|rol|ror|mul|imul)[bwlq]?\z/.freeze
+X86_FLAG_WRITERS = /\A(?:adcx|adox|add|adc|sub|sbb|inc|dec|neg|cmp|test|and|or|xor|shl|shr|sar|rol|ror|mul|imul)[bwlq]?\z/.freeze
 LOOP_COUNT_DOWN = /\A(?:subs (\w+), \1, #1|dec %(\w+))\z/.freeze
 LOOP_BRANCH = /\A(?:b\.ne|jnz) 1b\z/.freeze
 FORWARD_JUMP = /\A(?:b|jmp) 9f\z/.freeze
@@ -156,7 +159,7 @@ def assembly_faults(template)
     list_of_writes = list_of_lines.select do |line|
       !line.match?(LOOP_COUNT_DOWN) && line.match?(/\A\w+ #{counting_register}\b|, %#{counting_register}\z/)
     end
-    unless !list_of_writes.empty? && list_of_writes.all? { |line| line.match?(/\Amov (?:#{counting_register}, (?:\$\d+|#\d+)|\$\d+, %#{counting_register})\z/) }
+    unless !list_of_writes.empty? && list_of_writes.all? { |line| line.match?(/\Amov (?:#{counting_register}, (?:\$\d+|#\d+)|\$\$?\d+, %#{counting_register})\z/) }
       list_of_faults << "the block-counting register #{counting_register} is written by: #{list_of_writes.join(' | ')}"
     end
   end
