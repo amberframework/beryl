@@ -558,7 +558,8 @@ module Beryl::Crypto::V1
       point.z == Field.set_one
     end
 
-    # Returns entry *index* of the 16 points at *multiples*, reading all 16.
+    # Returns entry *index* of the 16 points at *multiples*, reading all 16:
+    # on the vector registers on AArch64, and on x86-64 with AVX2.
     @[AlwaysInline]
     def self.select_multiple(multiples : Pointer(Point), index : UInt64) : Point
       {% if flag?(:aarch64) && !flag?(:beryl_portable_curves) %}
@@ -566,13 +567,26 @@ module Beryl::Crypto::V1
         ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_vector_statement({{ bytesize // 8 * 3 }}, 16, 0,
           pointerof(selected), multiples, index)
         selected
-      {% else %}
-        selected = Point.neutral
-        16.times do |candidate|
-          selected = selected.replace_if(ConstantTimeSelection.equal_bit(candidate.to_u64, index), multiples[candidate])
-        end
+      {% elsif flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
+        return select_multiple_portable(multiples, index) unless ::Beryl::Crypto::ProcessorFeatures::HAS_AVX2
+
+        selected = uninitialized Point
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_avx2_statement({{ bytesize // 8 * 3 }}, 16,
+          pointerof(selected), multiples, index)
         selected
+      {% else %}
+        select_multiple_portable(multiples, index)
       {% end %}
+    end
+
+    # `select_multiple` by masks on the general registers.
+    @[AlwaysInline]
+    def self.select_multiple_portable(multiples : Pointer(Point), index : UInt64) : Point
+      selected = Point.neutral
+      16.times do |candidate|
+        selected = selected.replace_if(ConstantTimeSelection.equal_bit(candidate.to_u64, index), multiples[candidate])
+      end
+      selected
     end
 
     # Returns entry *index* of the 16 affine points at *table*, reading all
@@ -584,17 +598,30 @@ module Beryl::Crypto::V1
         ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_vector_statement({{ bytesize // 8 * 2 }}, 16, 0,
           pointerof(selected), table, index)
         selected
+      {% elsif flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
+        return select_affine_portable(table, index) unless ::Beryl::Crypto::ProcessorFeatures::HAS_AVX2
+
+        selected = uninitialized AffinePoint
+        ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.select_entry_avx2_statement({{ bytesize // 8 * 2 }}, 16,
+          pointerof(selected), table, index)
+        selected
       {% else %}
-        selected_x = Limbs.new(0_u64)
-        selected_y = Limbs.new(0_u64)
-        16.times do |candidate|
-          is_candidate = ConstantTimeSelection.equal_bit(candidate.to_u64, index)
-          entry = table[candidate]
-          selected_x = Field.selectznz(is_candidate, selected_x, entry.x)
-          selected_y = Field.selectznz(is_candidate, selected_y, entry.y)
-        end
-        AffinePoint.new(selected_x, selected_y)
+        select_affine_portable(table, index)
       {% end %}
+    end
+
+    # `select_affine` by masks on the general registers.
+    @[AlwaysInline]
+    def self.select_affine_portable(table : Pointer(AffinePoint), index : UInt64) : AffinePoint
+      selected_x = Limbs.new(0_u64)
+      selected_y = Limbs.new(0_u64)
+      16.times do |candidate|
+        is_candidate = ConstantTimeSelection.equal_bit(candidate.to_u64, index)
+        entry = table[candidate]
+        selected_x = Field.selectznz(is_candidate, selected_x, entry.x)
+        selected_y = Field.selectznz(is_candidate, selected_y, entry.y)
+      end
+      AffinePoint.new(selected_x, selected_y)
     end
 
     # Returns [scalar]point for a big-endian *scalar* of BYTESIZE bytes

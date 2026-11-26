@@ -522,6 +522,47 @@ module Beryl::Crypto::FieldArithmetic
       StaticArray[{{ result_names[0].id }}, {{ result_names[1].id }}, {{ result_names[2].id }}, {{ result_names[3].id }}]
     end
 
+    # The text of an x86-64 selection of entry *index* from *table*, a run
+    # of *entry_count* entries of *word_count* words (even, at most 20),
+    # into *destination*, with AVX2: each entry is read 32 bytes at a time
+    # (16 for a last half), ANDed with a mask that is all ones for the entry
+    # whose number equals *index* (`vpcmpeqq` of a counter against the
+    # index, both broadcast) and zero for every other, and ORed into the
+    # kept copy. Every entry is read and every merge runs, so the time does
+    # not depend on *index*; an index past the table gives zeros. Registers:
+    # ymm0 to ymm4 the kept copy, ymm11 the entry read, ymm12 the mask,
+    # ymm13 the index, ymm14 the counter, ymm15 all ones (minus one in each
+    # lane, which `vpsubq` turns into an increment).
+    macro select_entry_avx2_statement(word_count, entry_count, destination, table, index)
+      {%
+        chunk_count = (word_count + 3) // 4
+        lines = ["vmovq $2, %xmm13", "vpbroadcastq %xmm13, %ymm13", "vpcmpeqq %ymm15, %ymm15, %ymm15",
+                 "vpxor %ymm14, %ymm14, %ymm14"]
+      %}
+      {% for chunk in 0...chunk_count %}
+        {% lines << "vpxor %ymm#{chunk}, %ymm#{chunk}, %ymm#{chunk}" %}
+      {% end %}
+      {% for entry in 0...entry_count %}
+        {% lines << "vpcmpeqq %ymm13, %ymm14, %ymm12" %}
+        {% for chunk in 0...chunk_count %}
+          {% register = (chunk * 4 + 4 <= word_count) ? "ymm" : "xmm" %}
+          {%
+            lines << "vpand #{entry * word_count * 8 + chunk * 32}($1), %#{register.id}12, %#{register.id}11"
+            lines << "vpor %#{register.id}11, %#{register.id}#{chunk}, %#{register.id}#{chunk}"
+          %}
+        {% end %}
+        {% lines << "vpsubq %ymm15, %ymm14, %ymm14" %}
+      {% end %}
+      {% for chunk in 0...chunk_count %}
+        {% register = (chunk * 4 + 4 <= word_count) ? "ymm" : "xmm" %}
+        {% lines << "vmovdqu %#{register.id}#{chunk}, #{chunk * 32}($0)" %}
+      {% end %}
+      {% lines << "vzeroupper" %}
+      asm({{ lines.join("\n") }}
+        :: "r"({{ destination }}), "r"({{ table }}), "r"({{ index }})
+        : "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15", "memory")
+    end
+
     # The text of an AArch64 selection of entry *index* from *table*, a run
     # of *entry_count* entries of *word_count* words (even, at most 18),
     # into *destination*, every entry from *first_entry* on read and none
