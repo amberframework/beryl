@@ -14,6 +14,23 @@
 - AES-GCM on x86-64 runs on VAES and VPCLMULQDQ: 512-bit registers with
   AVX-512 (sealing and opening stitched in one loop), 256-bit registers
   without (AMD Zen 3); AES-NI and `pclmulqdq` stay the fallback.
+- X25519 runs on four 64-bit words (fiat-crypto's `curve25519_solinas_64`,
+  products reduced modulo 2^256 - 38), in assembly on x86-64 (`mulx`/`adx`,
+  else `mulq`) and AArch64, each x86-64 ladder step one statement; the
+  randomized starting point stays. Against OpenSSL 3.0.13 on Linux, X25519
+  key agreement went from 0.87 to 1.06 times its speed on Xeon 6975P-C,
+  from 0.74 to 1.04 on EPYC 7763 and from 0.90 to 1.27 on Linux in Colima
+  on M4; 1.23 on macOS against OpenSSL 4.1.0.
+- Ed25519 verification uses ref10's double-scalar method with wider windows
+  on the same field: 2.2 to 2.8 times OpenSSL's speed on Linux (from 0.855
+  in Colima at 0.2.3), 3.48 on macOS.
+- P-256 on x86-64: `mulx`/`adcx`/`adox` field multiplication reducing after
+  each row, assembly addition, subtraction and halving, AVX2 table
+  selection, and the point doubling, addition and window steps each as one
+  assembly statement. P-256 ECDH went from 0.80 to 1.11 times OpenSSL's
+  speed on Xeon 6975P-C and from 0.65 to 0.99 on EPYC 7763; it is 1.05 on
+  EPYC 9V74, and still behind on EPYC 9V45 (0.87) and Xeon Platinum 8573C
+  (0.96). P-256 verification is 1.05 to 1.19 on every x86-64 model measured.
 
 ## 0.2.3 (2026-11-25)
 

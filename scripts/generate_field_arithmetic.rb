@@ -41,6 +41,8 @@ FIAT_CRYPTO_COMMIT = "3d2880ef2803faa9385589a81a835d5828eb3d38"
 PINNED_SHA256 = {
   "curve25519_64.json" => "30cd244c417295d599bc06cd636f44df2d06d2c3c7d7aa548c6dc6fd61fe4f23",
   "curve25519_64.c" => "645233c37707ba0580338aa84d8380357078a2c9bb2db80f0c5ff4e979650e3e",
+  "curve25519_solinas_64.json" => "508946dc4428d7b8ccee2ec64878442e9261b993095e15e48a69efaee35af141",
+  "curve25519_solinas_64.c" => "f0e010be3dc6d0d66f3a7cf036a60535d903d6d5cbc1918f7eb90373b20b9dc6",
   "curve25519_scalar_64.json" => "67b53ec6bbea6ee576c77a7788705e86367cf341fd0a3bf802d1840c9f7a1526",
   "curve25519_scalar_64.c" => "6ce7b54074efe552d455c087b982bba0f93d41d3d5d9f90fb2d9afaf8a36626a",
   "p256_64.json" => "189970db01e8e2041d07ddda0e578d5cb7039a860e5637af50e43a5acd6f16ea",
@@ -61,6 +63,10 @@ LIST_OF_FIELDS = [
   Field.new(fiat_name: "curve25519_64", module_name: "Curve25519Field", file_name: "curve25519_field",
             description: "integers modulo 2^255 - 19 in five unsaturated 51-bit limbs (X25519, Ed25519)",
             prefix: "fiat_25519_"),
+  Field.new(fiat_name: "curve25519_solinas_64", module_name: "Curve25519SolinasField", file_name: "curve25519_solinas_field",
+            description: "integers modulo 2^255 - 19 on four saturated 64-bit words, reduced modulo 2^256 - 38 " \
+                         "(Solinas reduction), every value of every word allowed",
+            prefix: "fiat_curve25519_solinas_"),
   Field.new(fiat_name: "curve25519_scalar_64", module_name: "Curve25519ScalarField", file_name: "curve25519_scalar_field",
             description: "integers modulo the Ed25519 group order L = 2^252 + 27742317777372353535851937790883648493, " \
                          "in the Montgomery domain on four 64-bit words",

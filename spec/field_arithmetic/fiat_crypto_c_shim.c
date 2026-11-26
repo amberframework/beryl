@@ -40,6 +40,14 @@ void beryl_fiat_25519_carry_scmul_121666(uint64_t *out1, const uint64_t *arg1) {
   fiat_25519_carry_scmul_121666(out1, arg1);
 }
 
+#include "../../vendor/fiat-crypto/curve25519_solinas_64.c"
+void beryl_fiat_curve25519_solinas_mul(uint64_t *out1, const uint64_t *arg1, const uint64_t *arg2) {
+  fiat_curve25519_solinas_mul(out1, arg1, arg2);
+}
+void beryl_fiat_curve25519_solinas_square(uint64_t *out1, const uint64_t *arg1) {
+  fiat_curve25519_solinas_square(out1, arg1);
+}
+
 #include "../../vendor/fiat-crypto/curve25519_scalar_64.c"
 void beryl_fiat_25519_scalar_mul(uint64_t *out1, const uint64_t *arg1, const uint64_t *arg2) {
   fiat_25519_scalar_mul(out1, arg1, arg2);
