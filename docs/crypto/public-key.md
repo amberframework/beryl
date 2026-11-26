@@ -132,14 +132,15 @@ Before milestone F3, P-256 ran 2.5 to 3 times slower and P-384 verification 1.35
 
 On the build Mac (Apple M1 Max, Homebrew OpenSSL 4.1.0) the four-word X25519 field and the Ed25519 verification windows took X25519 key agreement from 0.986 to 1.23 times OpenSSL's speed and Ed25519 verification from 1.73 to 3.48; every other row stayed at 1.08 or more.
 
-On Linux the comparison is against the distribution's OpenSSL 3.0.13 (Ubuntu 24.04, `libssl3t64` 3.0.13-0ubuntu3.16), with the same bench, on GitHub's `ubuntu-24.04` runners (the processor model varies per job and each log names it) and in Colima on m4-mini-01 (Linux on Apple M4). Each cell is Beryl against OpenSSL, before (commit f22d290; in Colima e7a0765) → after this change; on Zen 4 and Zen 5 only the after was measured. P-256 ECDH remains behind OpenSSL on Zen 5 (0.870) and, by 1%, on Zen 3 (0.990); see below.
+On Linux the comparison is against the distribution's OpenSSL 3.0.13 (Ubuntu 24.04, `libssl3t64` 3.0.13-0ubuntu3.16), with the same bench, on GitHub's `ubuntu-24.04` runners (the processor model varies per job and each log names it) and in Colima on m4-mini-01 (Linux on Apple M4). Each cell is Beryl against OpenSSL, before (commit f22d290; in Colima e7a0765) → after this change; on Zen 4 and Zen 5 only the after was measured. P-256 ECDH remains behind OpenSSL on Zen 5 (0.870), on Xeon Platinum 8573C (0.960) and, by 1%, on Zen 3 (0.990); see below.
 
 | Processor | X25519 shared secret | P-256 ECDH | P-256 ECDSA verify | Ed25519 verify |
 |---|---|---|---|---|
 | Intel Xeon 6975P-C | 0.870 → 1.06 | 0.800 → 1.11 | 0.990 → 1.17 | 1.68 → 2.55 |
 | AMD EPYC 7763 (Zen 3) | 0.741 → 1.04 | 0.654 → 0.990 | 0.820 → 1.05 | 1.53 → 2.29 |
 | AMD EPYC 9V74 (Zen 4) | 1.06 | 1.05 | 1.08 | 2.23 |
-| AMD EPYC 9V45 (Zen 5) | 1.24 | 0.870 | 1.08 | 1.94 |
+| AMD EPYC 9V45 (Zen 5) | 1.24 | 0.870 | 1.10 | 1.96 |
+| Intel Xeon Platinum 8573C | 1.06 | 0.960 | 1.17 | 2.54 |
 | Arm Neoverse-N2 (GitHub `ubuntu-24.04-arm`) | 0.982 → 1.36 | 1.05 → 1.05 | 1.26 → 1.27 | 1.35 → 2.75 |
 | Apple M4 in Colima (OpenSSL 3.0.13) | 0.901 → 1.27 | 1.14 → 1.16 | 1.40 → 1.42 | 1.31 → 2.71 |
 
