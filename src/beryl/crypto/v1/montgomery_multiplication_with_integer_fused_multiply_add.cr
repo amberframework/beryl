@@ -139,6 +139,7 @@ module Beryl::Crypto::V1
           lines << "vpmovzxbq %xmm2, %zmm2"
           lines << "mov $$#{(1 << lane_shift) - 1}, %edx"
           lines << "kmovb %edx, %k7"
+          lines << "vpbroadcastq %rax, %zmm25"
         %}
         {% for half in halves %}
           {% lines << "vpxorq %zmm31, %zmm31, %zmm31" %}
@@ -152,6 +153,10 @@ module Beryl::Crypto::V1
               lines << "vpsrlq $$51, %zmm27, %zmm3"
               lines << "valignq $$7, %zmm31, %zmm3, %zmm4"
               lines << "vmovdqa64 %zmm3, %zmm31"
+              lines << "vpsllq $$1, %zmm27, %zmm3"
+              lines << "vpandq %zmm25, %zmm3, %zmm3"
+              lines << "vpaddq %zmm4, %zmm3, %zmm3"
+              lines << "vmovdqu64 %zmm3, #{half[:offset] + 64 * index}(%rdi)"
               lines << "vpsubq %zmm4, %zmm0, %zmm4"
               lines << "vpandq %zmm27, %zmm4, %zmm4"
               lines << "vpaddq %zmm4, %zmm26, %zmm26"
@@ -176,37 +181,22 @@ module Beryl::Crypto::V1
             {% end %}
           {% end %}
         {% end %}
+        # Each row's mask, lanes above its digit's: k1 to k7 for digits at
+        # lanes 0 to 6 (a digit at lane 7 has none in its register).
+        {% for lane in 0...7 %}
+          {% lines << "mov $$#{(255 << (lane + 1)) % 256}, %edx" %}
+          {% lines << "kmovb %edx, %k#{lane + 1}" %}
+        {% end %}
       {% end %}
       {% for digit in 0...digit_count %}
         {%
           lane = digit % 8
           first_register = lane == 7 ? digit // 8 + 1 : digit // 8
         %}
-        {% if square %}
-          {%
-            lines << "mov $$#{(255 << (lane + 1)) % 256}, %edx"
-            lines << "kmovb %edx, %k6"
-          %}
+        {% if square && digit == 1 %}
           {% for half in halves %}
-            {%
-              first = half[:first]
-              third = half[:third]
-              lines << "mov #{half[:offset] + 8 * digit}(%rsi), %#{first.id}"
-              lines << "add %#{first.id}, %#{first.id}"
-              lines << "and %rax, %#{first.id}"
-            %}
-            {% if digit == 1 %}
-              {% lines << "valignq $$1, %#{half[:first_columns].id}, %zmm0, %zmm26" %}
-              {% lines << "vpaddq %zmm26, %#{half[:sums][0].id}, %#{half[:sums][0].id}" %}
-            {% end %}
-            {% if digit > 0 %}
-              {%
-                lines << "mov #{half[:offset] + 8 * (digit - 1)}(%rsi), %#{third.id}"
-                lines << "shr $$51, %#{third.id}"
-                lines << "add %#{third.id}, %#{first.id}"
-              %}
-            {% end %}
-            {% lines << "vpbroadcastq %#{first.id}, %#{half[:broadcast_b].id}" %}
+            {% lines << "valignq $$1, %#{half[:first_columns].id}, %zmm0, %zmm26" %}
+            {% lines << "vpaddq %zmm26, %#{half[:sums][0].id}, %#{half[:sums][0].id}" %}
           {% end %}
         {% end %}
         {% for half in halves %}
@@ -217,11 +207,11 @@ module Beryl::Crypto::V1
             third = half[:third]
             offset = half[:offset]
           %}
+          {% lines << "vpbroadcastq #{offset + 8 * digit}(%rdi), %#{half[:broadcast_b].id}" %}
           {% if !square || digit == 0 %}
-            {% lines << "vpbroadcastq #{offset + 8 * digit}(%rdi), %#{half[:broadcast_b].id}" if !square %}
             {%
               lines << "mov #{offset}(%rsi), %rdx"
-              lines << "mulx #{offset + 8 * digit}(%rdi), %#{first.id}, %#{second.id}"
+              lines << "mulx #{offset + 8 * digit}(#{(square ? "%rsi" : "%rdi").id}), %#{first.id}, %#{second.id}"
               lines << "add %#{first.id}, %#{accumulator.id}"
               lines << "adc $$0, %#{second.id}"
             %}
@@ -246,7 +236,7 @@ module Beryl::Crypto::V1
           {% for index in (square ? first_register : 0)...register_count %}
             {%
               width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm"
-              mask = square && index == digit // 8 ? "{%k6}" : ""
+              mask = square && index == digit // 8 ? "{%k#{lane + 1}}" : ""
             %}
             {% lines << "vpmadd52luq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}#{mask.id}" %}
           {% end %}
@@ -272,7 +262,7 @@ module Beryl::Crypto::V1
           {% for index in (square ? first_register : 0)...register_count %}
             {%
               width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm"
-              mask = square && index == digit // 8 ? "{%k6}" : ""
+              mask = square && index == digit // 8 ? "{%k#{lane + 1}}" : ""
             %}
             {% lines << "vpmadd52huq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}#{mask.id}" %}
           {% end %}
@@ -436,10 +426,11 @@ module Beryl::Crypto::V1
         # Two almost Montgomery squarings of numbers of {{ digit_count }}
         # digits, as `dual_multiply_{{ word_count }}` with *a* for *b*, but
         # each product a_i·a_j with i < j taken once, against the digits of
-        # 2a; *result* may be *a*.
-        def self.dual_square_{{ word_count }}(result : UInt64*, a : UInt64*, modulus : UInt64*,
+        # 2a, which it writes to *doubled* (as many words as *a*); *result*
+        # may be *a*.
+        def self.dual_square_{{ word_count }}(result : UInt64*, a : UInt64*, modulus : UInt64*, doubled : UInt64*,
                                               first_negated_inverse : UInt64, second_negated_inverse : UInt64) : Nil
-          operands = StaticArray[result.address, a.address, a.address, modulus.address, first_negated_inverse,
+          operands = StaticArray[result.address, a.address, doubled.address, modulus.address, first_negated_inverse,
                                  second_negated_inverse]
           operands_address = operands.to_unsafe.address
           multiplication_statement(2, {{ digit_count }}, {{ padded_digit_count }}, operands_address, true)
@@ -588,6 +579,7 @@ module Beryl::Crypto::V1
         table = Slice(UInt64).new(MontgomeryArithmetic::TABLE_ENTRY_COUNT * pair_size)
         power = Slice(UInt64).new(pair_size)
         selected = Slice(UInt64).new(pair_size)
+        doubled = Slice(UInt64).new(pair_size)
         MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_digits(first_base, selected[0, @padded_digit_count])
         MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_digits(second_base, selected[@padded_digit_count, @padded_digit_count])
         @ones.copy_to(table[0, pair_size])
@@ -595,7 +587,7 @@ module Beryl::Crypto::V1
         (2...MontgomeryArithmetic::TABLE_ENTRY_COUNT).each do |entry|
           if entry.even?
             half_entry = table[(entry // 2) * pair_size, pair_size]
-            square_pair(table[entry * pair_size, pair_size], half_entry)
+            square_pair(table[entry * pair_size, pair_size], half_entry, doubled)
           else
             multiply_pair(table[entry * pair_size, pair_size], table[(entry - 1) * pair_size, pair_size], table[pair_size, pair_size])
           end
@@ -605,7 +597,7 @@ module Beryl::Crypto::V1
         bit_count = first_exponent.size * 8
         window_count = (bit_count + MontgomeryArithmetic::WINDOW_BIT_COUNT - 1) // MontgomeryArithmetic::WINDOW_BIT_COUNT
         (window_count - 1).downto(0) do |window_index|
-          MontgomeryArithmetic::WINDOW_BIT_COUNT.times { square_pair(power, power) }
+          MontgomeryArithmetic::WINDOW_BIT_COUNT.times { square_pair(power, power, doubled) }
           low_bit = window_index * MontgomeryArithmetic::WINDOW_BIT_COUNT
           select_pair(selected, table, MontgomeryArithmetic.window_bits(first_exponent, low_bit),
             MontgomeryArithmetic.window_bits(second_exponent, low_bit))
@@ -622,7 +614,7 @@ module Beryl::Crypto::V1
         MontgomeryArithmetic.subtract_modulus_when_not_below(first_result, unreduced, top_bit_of(first_digits), @first_prime)
         MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_words(second_digits, unreduced)
         MontgomeryArithmetic.subtract_modulus_when_not_below(second_result, unreduced, top_bit_of(second_digits), @second_prime)
-        {table, power, selected, unreduced}.each { |words| wipe_words(words) }
+        {table, power, selected, doubled, unreduced}.each { |words| wipe_words(words) }
       end
 
       # The bit of the number in *digits* at 2^(64n), just above its n
@@ -646,14 +638,16 @@ module Beryl::Crypto::V1
         {% end %}
       end
 
-      private def square_pair(result : Slice(UInt64), a : Slice(UInt64)) : Nil
+      # Squares both numbers of *a* into *result*, with *doubled* (a pair's
+      # size) for the digits of 2a.
+      private def square_pair(result : Slice(UInt64), a : Slice(UInt64), doubled : Slice(UInt64)) : Nil
         {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
           {% begin %}
             case @word_count
             {% for word_count in SUPPORTED_WORD_COUNTS %}
             when {{ word_count }}
               MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.dual_square_{{ word_count }}(result.to_unsafe, a.to_unsafe,
-                @moduli.to_unsafe, @first_negated_inverse, @second_negated_inverse)
+                @moduli.to_unsafe, doubled.to_unsafe, @first_negated_inverse, @second_negated_inverse)
             {% end %}
             end
           {% end %}

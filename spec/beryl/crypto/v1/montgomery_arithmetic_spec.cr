@@ -322,15 +322,16 @@ describe "Beryl::Crypto::V1::MontgomeryMultiplicationWithIntegerFusedMultiplyAdd
             IntegerFusedMultiplyAdd.write_digits(value, a[half * padded, padded])
           end
           squared = Slice(UInt64).new(2 * padded)
+          doubled = Slice(UInt64).new(2 * padded)
           multiplied = Slice(UInt64).new(2 * padded)
           IntegerFusedMultiplyAdd.dual_square_{{ word_count }}(squared.to_unsafe, a.to_unsafe, moduli.to_unsafe,
-            negated_inverses[0], negated_inverses[1])
+            doubled.to_unsafe, negated_inverses[0], negated_inverses[1])
           IntegerFusedMultiplyAdd.dual_multiply_{{ word_count }}(multiplied.to_unsafe, a.to_unsafe, a.to_unsafe,
             moduli.to_unsafe, negated_inverses[0], negated_inverses[1])
           squared.should eq(multiplied)
           # In place, as the exponentiation squares.
           IntegerFusedMultiplyAdd.dual_square_{{ word_count }}(a.to_unsafe, a.to_unsafe, moduli.to_unsafe,
-            negated_inverses[0], negated_inverses[1])
+            doubled.to_unsafe, negated_inverses[0], negated_inverses[1])
           a.should eq(multiplied)
         end
       {% end %}
