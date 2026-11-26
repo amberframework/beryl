@@ -680,25 +680,28 @@ module Beryl::Crypto::FieldArithmetic
           x = round == 0 ? {input_name, 0} : state_x
           y = round == 0 ? {input_name, 32} : state_y
           z = round == 0 ? {input_name, 64} : state_z
+          # The longest chain is Z^2, X ± Z^2, their product, 3 times
+          # it, its square, X', Y'; each step off that chain comes right
+          # after one on it, so the processor runs the two side by side.
           steps = steps + [
             {"add", slot[0], y, y},
             {square, slot[1], z, z},
-            {multiply, slot[3], y, z},
-            {square, slot[2], slot[0], slot[0]},
             {"add", slot[4], x, slot[1]},
             {"sub", slot[5], x, slot[1]},
-            {"add", state_z, slot[3], slot[3]},
             {multiply, slot[6], slot[4], slot[5]},
-            {multiply, slot[9], slot[2], x},
-            {square, slot[8], slot[2], slot[2]},
+            {square, slot[2], slot[0], slot[0]},
             {"add", slot[7], slot[6], slot[6]},
+            {multiply, slot[3], y, z},
             {"add", slot[7], slot[7], slot[6]},
-            {"add", slot[10], slot[9], slot[9]},
-            {"half", slot[8], slot[8], slot[8]},
             {square, slot[11], slot[7], slot[7]},
+            {multiply, slot[9], slot[2], x},
+            {"add", state_z, slot[3], slot[3]},
+            {"add", slot[10], slot[9], slot[9]},
             {"sub", state_x, slot[11], slot[10]},
+            {square, slot[8], slot[2], slot[2]},
             {"sub", slot[12], slot[9], state_x},
             {multiply, slot[12], slot[12], slot[7]},
+            {"half", slot[8], slot[8], slot[8]},
             {"sub", state_y, slot[12], slot[8]},
           ]
         %}
@@ -726,30 +729,34 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
         {%
+          # Ordered as the doubling is: the steps of the two longest chains
+          # (through H and through R) alternate, and the products off them
+          # (Z1·Z2, S1·H^3, Z3) sit in the serial tail. The first point is
+          # read for the last time before the sum is written.
           steps = steps + [
             {square, slot[0], z1, z1},
             {square, slot[1], z2, z2},
-            {multiply, slot[2], x1, slot[1]},
             {multiply, slot[3], x2, slot[0]},
-            {multiply, slot[4], z2, slot[1]},
-            {multiply, slot[4], y1, slot[4]},
+            {multiply, slot[2], x1, slot[1]},
             {multiply, slot[5], z1, slot[0]},
-            {multiply, slot[5], y2, slot[5]},
+            {multiply, slot[4], z2, slot[1]},
             {"sub", slot[6], slot[3], slot[2]},
-            {"sub", slot[7], slot[5], slot[4]},
-            {multiply, slot[8], z1, z2},
+            {multiply, slot[5], y2, slot[5]},
             {square, slot[9], slot[6], slot[6]},
+            {multiply, slot[4], y1, slot[4]},
+            {"sub", slot[7], slot[5], slot[4]},
             {multiply, slot[10], slot[6], slot[9]},
-            {multiply, slot[11], slot[2], slot[9]},
             {square, slot[12], slot[7], slot[7]},
+            {multiply, slot[11], slot[2], slot[9]},
             {"sub", slot[12], slot[12], slot[10]},
             {"add", slot[13], slot[11], slot[11]},
             {"sub", sum_x, slot[12], slot[13]},
+            {multiply, slot[8], z1, z2},
             {"sub", slot[15], slot[11], sum_x},
             {multiply, slot[15], slot[7], slot[15]},
             {multiply, slot[13], slot[4], slot[10]},
-            {"sub", sum_y, slot[15], slot[13]},
             {multiply, sum_z, slot[8], slot[6]},
+            {"sub", sum_y, slot[15], slot[13]},
           ]
         %}
         {% if masks %}
