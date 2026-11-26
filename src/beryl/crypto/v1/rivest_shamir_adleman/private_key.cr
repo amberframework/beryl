@@ -42,6 +42,9 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     @first_prime_exponent : Bytes
     @second_prime_exponent : Bytes
     @coefficient : Slice(UInt64)
+    # The primes in the form of the AVX-512 IFMA path, where the processor
+    # and the key suit it (`MontgomeryMultiplicationWithIntegerFusedMultiplyAdd`).
+    @prime_pair : MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PrimePair?
 
     # Takes the components of RFC 8017 §3.2 as big-endian bytes (leading
     # zero bytes allowed): the modulus n, the public exponent e (or an
@@ -91,6 +94,12 @@ module Beryl::Crypto::V1::RivestShamirAdleman
       SecretWiping.wipe(private_exponent_bytes)
       is_well_formed &= primes_multiply_to_modulus_bit
       is_well_formed &= coefficient_inverts_second_prime_bit
+      if MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PrimePair.usable_for?(@first_prime.word_count,
+           @second_prime.word_count, @first_prime_exponent.size, @second_prime_exponent.size)
+        @prime_pair = MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PrimePair.new(@first_prime.words,
+          @first_prime.r_squared, @first_prime.negated_inverse, @second_prime.words, @second_prime.r_squared,
+          @second_prime.negated_inverse)
+      end
 
       unless Declassification.reveal(is_well_formed == 1_u64)
         wipe
@@ -240,7 +249,7 @@ module Beryl::Crypto::V1::RivestShamirAdleman
         MontgomeryArithmetic.decode_big_endian(input, input_words)
         result_words = Slice(UInt64).new(word_count)
         is_in_range = PrivateKey.exponentiate_by_chinese_remainder(result_words, input_words, @first_prime, @second_prime,
-          @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus)
+          @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus, @prime_pair)
 
         check_words = Slice(UInt64).new(word_count)
         @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent, @public_exponent_correction)
@@ -270,7 +279,8 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     def self.exponentiate_by_chinese_remainder(result : Slice(UInt64), input : Slice(UInt64), first_prime : OddModulus,
                                                second_prime : OddModulus, first_prime_exponent : Bytes,
                                                second_prime_exponent : Bytes, coefficient : Slice(UInt64),
-                                               modulus : OddModulus) : UInt64
+                                               modulus : OddModulus,
+                                               prime_pair : MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PrimePair? = nil) : UInt64
       is_in_range = MontgomeryArithmetic.less_than_bit(input, modulus.words)
       first_word_count = first_prime.word_count
       second_word_count = second_prime.word_count
@@ -278,13 +288,18 @@ module Beryl::Crypto::V1::RivestShamirAdleman
       base = Slice(UInt64).new(first_word_count)
       first_power = Slice(UInt64).new(first_word_count)
       first_prime.reduce_to_montgomery_form(base, input)
-      first_prime.exponentiate(first_power, base, first_prime_exponent)
-
       second_base = Slice(UInt64).new(second_word_count)
       second_power = Slice(UInt64).new(second_word_count)
       second_prime.reduce_to_montgomery_form(second_base, input)
-      second_prime.exponentiate(second_power, second_base, second_prime_exponent)
-      second_prime.leave_montgomery_form(second_power)
+      if prime_pair
+        # Both exponentiations at once; the second result leaves Montgomery
+        # form there.
+        prime_pair.exponentiate(first_power, second_power, base, second_base, first_prime_exponent, second_prime_exponent)
+      else
+        first_prime.exponentiate(first_power, base, first_prime_exponent)
+        second_prime.exponentiate(second_power, second_base, second_prime_exponent)
+        second_prime.leave_montgomery_form(second_power)
+      end
 
       # m₁ - m₂ mod p, in p's Montgomery form, times qInv: the Montgomery
       # product drops the factor R, leaving h = qInv·(m₁ - m₂) mod p.
@@ -311,6 +326,9 @@ module Beryl::Crypto::V1::RivestShamirAdleman
 
     # Overwrites the secret parts of the key. The key cannot be used after.
     def wipe : Nil
+      if prime_pair = @prime_pair
+        prime_pair.wipe
+      end
       @first_prime.wipe
       @second_prime.wipe
       SecretWiping.wipe(@first_prime_exponent)
