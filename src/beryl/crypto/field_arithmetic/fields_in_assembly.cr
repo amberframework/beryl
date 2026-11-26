@@ -302,6 +302,8 @@ module Beryl::Crypto::FieldArithmetic
       {%
         product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
         lines = [] of StringLiteral
+        previous_destination = nil
+        previous_result = product
       %}
       {% for step in steps %}
         {%
@@ -314,6 +316,25 @@ module Beryl::Crypto::FieldArithmetic
           destination_words = (0..3).map { |index| "#{destination[1] + 8 * index}(#{destination[0].id})" }
           result = product
         %}
+        {% if first == previous_destination && %w(add sub half csel).includes?(operation) %}
+          {%
+            # The first operand is the previous step's result, still in
+            # registers: it is moved to r8 to r11 (from r12, r13, r8 and
+            # r9 after `mulx`, in an order that overwrites no word still
+            # to be moved) instead of loaded, and so is the second when it
+            # is the same element.
+            if previous_result[0] == "%r12"
+              lines << "movq %r9, %r11"
+              lines << "movq %r8, %r10"
+              lines << "movq %r13, %r9"
+              lines << "movq %r12, %r8"
+            end
+            a_words = [product[0], product[1], product[2], product[3]]
+            if second == first
+              b_words = a_words
+            end
+          %}
+        {% end %}
         {% if operation == "mul" %}
           {%
             lines << "movq #{a_words[0].id}, %rax"
@@ -627,7 +648,12 @@ module Beryl::Crypto::FieldArithmetic
         {% for index in 0..3 %}
           {% lines << "movq #{result[index].id}, #{destination_words[index].id}" %}
         {% end %}
+        {%
+          previous_destination = destination
+          previous_result = result
+        %}
       {% end %}
+      {% lines = lines.reject { |line| line.starts_with?("movq %") && line[5..-1].split(", ")[0] == line[5..-1].split(", ")[1] } %}
       asm({{ lines.join("\n") }}
         :: {% for pointer, index in pointers %}{% if index > 0 %}, {% end %}"r"({{ pointer }}){% end %}
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
@@ -680,28 +706,28 @@ module Beryl::Crypto::FieldArithmetic
           x = round == 0 ? {input_name, 0} : state_x
           y = round == 0 ? {input_name, 32} : state_y
           z = round == 0 ? {input_name, 64} : state_z
-          # The longest chain is Z^2, X ± Z^2, their product, 3 times
-          # it, its square, X', Y'; each step off that chain comes right
-          # after one on it, so the processor runs the two side by side.
+          # Nine additions, subtractions and halvings take their first
+          # operand from the step just before them, in registers (see
+          # `p256_x86_64_sequence_statement`).
           steps = steps + [
             {"add", slot[0], y, y},
             {square, slot[1], z, z},
-            {"add", slot[4], x, slot[1]},
+            {"add", slot[4], slot[1], x},
             {"sub", slot[5], x, slot[1]},
             {multiply, slot[6], slot[4], slot[5]},
-            {square, slot[2], slot[0], slot[0]},
             {"add", slot[7], slot[6], slot[6]},
-            {multiply, slot[3], y, z},
             {"add", slot[7], slot[7], slot[6]},
-            {square, slot[11], slot[7], slot[7]},
-            {multiply, slot[9], slot[2], x},
+            {multiply, slot[3], y, z},
             {"add", state_z, slot[3], slot[3]},
+            {square, slot[2], slot[0], slot[0]},
+            {multiply, slot[9], slot[2], x},
             {"add", slot[10], slot[9], slot[9]},
+            {square, slot[11], slot[7], slot[7]},
             {"sub", state_x, slot[11], slot[10]},
             {square, slot[8], slot[2], slot[2]},
+            {"half", slot[8], slot[8], slot[8]},
             {"sub", slot[12], slot[9], state_x},
             {multiply, slot[12], slot[12], slot[7]},
-            {"half", slot[8], slot[8], slot[8]},
             {"sub", state_y, slot[12], slot[8]},
           ]
         %}
@@ -729,33 +755,35 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
         {%
-          # Ordered as the doubling is: the steps of the two longest chains
-          # (through H and through R) alternate, and the products off them
-          # (Z1·Z2, S1·H^3, Z3) sit in the serial tail. The first point is
-          # read for the last time before the sum is written.
+          # The steps of the two longest chains (through H and through R)
+          # alternate, the products off them (Z1·Z2, S1·H^3, Z3) sit in the
+          # serial tail, and five subtractions and additions take their
+          # first operand from the step just before them, in registers.
+          # The first point is read for the last time before the sum is
+          # written.
           steps = steps + [
             {square, slot[0], z1, z1},
             {square, slot[1], z2, z2},
-            {multiply, slot[3], x2, slot[0]},
             {multiply, slot[2], x1, slot[1]},
+            {multiply, slot[3], x2, slot[0]},
+            {"sub", slot[6], slot[3], slot[2]},
             {multiply, slot[5], z1, slot[0]},
             {multiply, slot[4], z2, slot[1]},
-            {"sub", slot[6], slot[3], slot[2]},
-            {multiply, slot[5], y2, slot[5]},
             {square, slot[9], slot[6], slot[6]},
             {multiply, slot[4], y1, slot[4]},
+            {multiply, slot[5], y2, slot[5]},
             {"sub", slot[7], slot[5], slot[4]},
             {multiply, slot[10], slot[6], slot[9]},
-            {square, slot[12], slot[7], slot[7]},
             {multiply, slot[11], slot[2], slot[9]},
-            {"sub", slot[12], slot[12], slot[10]},
             {"add", slot[13], slot[11], slot[11]},
+            {square, slot[12], slot[7], slot[7]},
+            {"sub", slot[12], slot[12], slot[10]},
             {"sub", sum_x, slot[12], slot[13]},
             {multiply, slot[8], z1, z2},
             {"sub", slot[15], slot[11], sum_x},
-            {multiply, slot[15], slot[7], slot[15]},
             {multiply, slot[13], slot[4], slot[10]},
             {multiply, sum_z, slot[8], slot[6]},
+            {multiply, slot[15], slot[7], slot[15]},
             {"sub", sum_y, slot[15], slot[13]},
           ]
         %}
