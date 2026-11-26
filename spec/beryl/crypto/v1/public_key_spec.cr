@@ -84,6 +84,27 @@ describe Beryl::Crypto::V1::Ed25519 do
   end
 end
 
+describe Beryl::Crypto::V1::Edwards25519VerificationArithmetic do
+  it "gives the encoding of the group's own double-scalar multiplication, sparse and full scalars alike" do
+    group = Beryl::Crypto::V1::Edwards25519Group
+    random = Random.new(25519)
+    list_of_scalars = [Bytes.new(32), Bytes.new(32) { |index| index == 0 ? 1_u8 : 0_u8 },
+                       Bytes.new(32) { |index| index == 31 ? 0x10_u8 : 0_u8 }, Bytes.new(32) { 0xff_u8 }]
+    40.times do
+      scalar = Bytes.new(32)
+      random.random_bytes(scalar)
+      scalar[31] &= 0x1f_u8
+      list_of_scalars << scalar
+    end
+    point = group.multiply_base(Bytes.new(32) { |index| (index * 7 + 3).to_u8 }).negate
+    list_of_scalars.each_with_index do |first_scalar, index|
+      second_scalar = list_of_scalars[(index * 5 + 1) % list_of_scalars.size]
+      expected = group.multiply_and_add_public(first_scalar, point, second_scalar).encode
+      Beryl::Crypto::V1::Edwards25519VerificationArithmetic.multiply_and_add_encoded(first_scalar, point, second_scalar).should eq(expected)
+    end
+  end
+end
+
 describe Beryl::Crypto::V1::P256 do
   it "signs, verifies and agrees in both encodings" do
     private_key = P256::PrivateKey.generate
