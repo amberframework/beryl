@@ -219,6 +219,11 @@ module Beryl::Crypto::V1
     # - On the stitched 512-bit loop (a message of at least two groups),
     #   the message is decrypted into *plaintext* while it is hashed, in one
     #   pass, as OpenSSL does; a wrong tag then zeroes *plaintext*.
+    # - A short message (as short as `seal`'s single-call case) is hashed,
+    #   then decrypted in the same counter-mode call that makes the tag
+    #   mask, as `seal` encrypts it; a wrong tag then zeroes *plaintext*.
+    #   Two calls (the tag mask, then the keystream) cost AMD Zen 5 half its
+    #   speed at 64 bytes.
     # - Otherwise the tag is computed first and the message decrypted only
     #   when it is right.
     def self.open(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
@@ -229,6 +234,10 @@ module Beryl::Crypto::V1
       if VECTOR_REGISTER_BITSIZE == 512 && ciphertext.size >= STITCHED_GROUP_BYTESIZE * 2
         return open_stitched(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext,
           starts_at_counter_two)
+      end
+
+      if ciphertext.size < GROUP_BYTESIZE - BLOCK_BYTESIZE
+        return open_short(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext)
       end
 
       full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
@@ -250,6 +259,27 @@ module Beryl::Crypto::V1
       tags_match = ::Crypto::Subtle.constant_time_compare(full_tag[0, tag.size], tag)
       SecretWiping.wipe(full_tag)
       tags_match
+    end
+
+    # Opens a short message: hashes *ciphertext* first (*plaintext* may be
+    # *ciphertext*), then decrypts it and makes the tag mask in one call.
+    private def self.open_short(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
+                                associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      accumulator_storage = StaticArray(UInt8, 16).new(0_u8)
+      accumulator = accumulator_storage.to_slice
+      tag_mask_storage = StaticArray(UInt8, 16).new(0_u8)
+      tag_mask = tag_mask_storage.to_slice
+      absorb_closing_blocks(accumulator, hash_key_powers, associated_data, ciphertext, associated_data.size, ciphertext.size)
+      encrypt_after_tag_mask(round_keys, round_count, counter_block, ciphertext, plaintext, tag_mask)
+
+      full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
+      full_tag = full_tag_storage.to_slice
+      write_masked_digest(accumulator, tag_mask, full_tag)
+      SecretWiping.wipe(tag_mask)
+      SecretWiping.wipe(accumulator)
+      is_authentic = Declassification.reveal(compare_tags(full_tag, tag))
+      SecretWiping.wipe(plaintext) unless is_authentic
+      is_authentic
     end
 
     # Opens in one pass on the stitched 512-bit loop. Every part is hashed
