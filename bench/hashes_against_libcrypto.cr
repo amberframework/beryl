@@ -206,10 +206,10 @@ module HashesAgainstLibcrypto
     key = Random::Secure.random_bytes(KEY_BYTESIZE)
     io.puts "Beryl #{Beryl::VERSION} against #{String.new(LibCrypto.beryl_bench_openssl_version(0))}"
     io.puts "#{settings.round_count} rounds, #{settings.seconds_per_arm} s of processor time per arm in each, the arms taking turns of about 2 MiB of input"
-    io.puts "SHA-1, SHA-256 and SHA-512 instructions in use by Beryl: " \
+    io.puts "SHA-1 and SHA-256 instructions in use by Beryl: " \
             "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA1_INSTRUCTIONS}, " \
-            "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA256_INSTRUCTIONS}, " \
-            "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA512_INSTRUCTIONS}"
+            "#{Beryl::Crypto::ProcessorFeatures::HAS_SHA256_INSTRUCTIONS}; " \
+            "SHA-512 instructions in use by Beryl: #{Beryl::Crypto::V1::SecureHashWith64BitWords.compression_in_use}"
     io.puts
     io.puts "| Algorithm | Message | Beryl MB/s (median) | libcrypto MB/s (median) | Beryl against libcrypto (median of rounds) | Paired 95% interval | At least as fast |"
     io.puts "|---|---|---|---|---|---|---|"

@@ -206,6 +206,17 @@ module Beryl::Crypto
       HAS_VECTOR_CARRYLESS_MULTIPLY = false
     {% end %}
 
+    # Whether the processor has the bit manipulation instructions BMI1
+    # (`andn`, bit 3 of EBX in leaf 7) and BMI2 (`rorx`, bit 8), which the
+    # rounds of the x86-64 SHA-512 code use. They change no register width,
+    # so no flag turns them off on their own; the hashes that use them
+    # follow `-Dberyl_portable_hashes` and `HAS_AVX2`.
+    {% if flag?(:x86_64) %}
+      HAS_BIT_MANIPULATION_INSTRUCTIONS = has_leaf7_bit?(1, 3) && has_leaf7_bit?(1, 8)
+    {% else %}
+      HAS_BIT_MANIPULATION_INSTRUCTIONS = false
+    {% end %}
+
     {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) && !flag?(:beryl_without_mulx) %}
       HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS = has_leaf7_bit?(1, 8) && has_leaf7_bit?(1, 19)
     {% else %}
