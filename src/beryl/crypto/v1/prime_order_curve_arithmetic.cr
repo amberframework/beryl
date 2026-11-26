@@ -709,8 +709,11 @@ module Beryl::Crypto::V1
         # P-256 on x86-64: each window in assembly statements on a point
         # only the assembly reads until the end (compiled code copying the
         # points between steps, with loads wider than the assembly's 8-byte
-        # stores, cost about 6 of 32 µs on EPYC 9V45): five in-place
-        # doublings, then one statement for the negation of the picked
+        # stores, cost about 6 of 32 µs on EPYC 9V45): five doublings, each
+        # from one of two points into the other (in place, a doubling read
+        # the point the one before had just stored, and five of them took
+        # about 13% longer on EPYC 9V45 than the doublings measured apart),
+        # then one statement for the negation of the picked
         # multiple, the addition and both replacements, with the masks of
         # `signed_multiple` and `replace_if` in words 72 to 74 of the
         # scratch space (76 to 79 stay zero). The doublings stay separate
@@ -718,6 +721,9 @@ module Beryl::Crypto::V1
         # ran slower on Zen 5 than five of one, and a doubling's code fits
         # the processor's decoded-instruction cache.
         state = result
+        other_state = result
+        current = pointerof(state)
+        spare = pointerof(other_state)
         scratch = StaticArray(UInt64, 80).new(0_u64)
         (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
           digit, is_negative = booth_digit(scalar, window_index)
@@ -728,18 +734,24 @@ module Beryl::Crypto::V1
           scratch[73] = ConstantTimeSelection.mask_of(is_infinity)
           scratch[74] = ConstantTimeSelection.mask_of(is_zero)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
-            5.times { ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(state), 1) }
+            5.times do
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), spare, 1, input: current)
+              current, spare = spare, current
+            end
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
-              pointerof(scratch), pointerof(state), 0, other: pointerof(selected), masks: true)
+              pointerof(scratch), current, 0, other: pointerof(selected), masks: true)
           else
-            5.times { ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(state), 1) }
+            5.times do
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), spare, 1, input: current)
+              current, spare = spare, current
+            end
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
-              pointerof(scratch), pointerof(state), 0, other: pointerof(selected), masks: true)
+              pointerof(scratch), current, 0, other: pointerof(selected), masks: true)
           end
           is_infinity &= is_zero
         end
         SecretWiping.wipe(scratch.to_slice)
-        return state.replace_if(is_infinity, Point.neutral)
+        return current.value.replace_if(is_infinity, Point.neutral)
       {% end %}
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         result = result.double_five_times
