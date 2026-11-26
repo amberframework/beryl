@@ -298,14 +298,29 @@ module Beryl::Crypto::FieldArithmetic
     # so a destination may be one of its own operands. The statement writes
     # the flags, so it names the x86-64 clobber "flags" (see the module
     # comment).
-    macro p256_x86_64_sequence_statement(steps, pointers)
+    #
+    # An addition, subtraction, halving or selection whose a is the
+    # previous step's result takes a from the registers that step left it
+    # in. With *scratch* (the name of a pointer operand, such as "$0"), a
+    # result written to that pointer is not stored when no later step
+    # reads it from memory before it is written again: the memory there is
+    # the statement's own, and nothing reads it after the statement.
+    macro p256_x86_64_sequence_statement(steps, pointers, scratch = nil)
       {%
         product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
         lines = [] of StringLiteral
         previous_destination = nil
         previous_result = product
+        chained_steps = [] of BoolLiteral
+        last_destination = nil
       %}
       {% for step in steps %}
+        {%
+          chained_steps << (step[2] == last_destination && %w(add sub half csel).includes?(step[0]))
+          last_destination = step[1]
+        %}
+      {% end %}
+      {% for step, step_position in steps %}
         {%
           operation = step[0]
           destination = step[1]
@@ -645,8 +660,34 @@ module Beryl::Crypto::FieldArithmetic
             {% lines << "cmovncq #{product[index + 4].id}, #{product[index].id}" %}
           {% end %}
         {% end %}
-        {% for index in 0..3 %}
-          {% lines << "movq #{result[index].id}, #{destination_words[index].id}" %}
+        {% store_needed = true %}
+        {% if scratch && destination[0] == scratch %}
+          {%
+            store_needed = false
+            settled = false
+          %}
+          {% for later_index in 0...steps.size %}
+            {% if later_index > step_position && !settled %}
+              {%
+                later = steps[later_index]
+                first_from_registers = chained_steps[later_index] && later_index == step_position + 1
+                reads_memory = (later[2] == destination && !first_from_registers) ||
+                               (later[3] == destination && !(first_from_registers && later[3] == later[2])) ||
+                               (later[0] == "csel" && later[4] == destination)
+                if reads_memory
+                  store_needed = true
+                  settled = true
+                elsif later[1] == destination
+                  settled = true
+                end
+              %}
+            {% end %}
+          {% end %}
+        {% end %}
+        {% if store_needed %}
+          {% for index in 0..3 %}
+            {% lines << "movq #{result[index].id}, #{destination_words[index].id}" %}
+          {% end %}
         {% end %}
         {%
           previous_destination = destination
@@ -802,7 +843,7 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
       {% end %}
-      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, {{ pointers }})
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, {{ pointers }}, "$0")
     end
 
     # The end of a P-256 point addition on x86-64 in one statement: the
