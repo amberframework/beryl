@@ -85,20 +85,21 @@ module Beryl::Crypto::V1
     # The text of a Montgomery multiplication (or, with *square*, a
     # squaring) of *word_count*-word numbers, a multiple of 8, as described
     # above; *parameters* points at the six operand words.
+    #
+    # For 16 and 24 words the loops are written out (the strips of a·b, and
+    # the reduction blocks), which frees r14 to point at the modulus and a
+    # register to point at a: those copies are not made, and the first strip
+    # stores its words without adding them to T, so T is not cleared first.
     macro strip_statement(word_count, square, parameters)
       {%
         n = word_count
+        is_unrolled = n <= 24
         initial_window = %w(rax rbx rcx rsi rdi rbp r8 r9 r10)
         modulus_offset = 32
         t_offset = 8 * (4 + n)
         a_offset = t_offset + 8 * (2 * n + 2)
         u_offset = a_offset + 8 * n
         lines = [] of StringLiteral
-      %}
-      # Set up the scratch: the result pointer, -m^-1, the modulus, the copy
-      # of a (multiplication only), and T's words that are added before they
-      # are written.
-      {%
         lines << "mov 40($0), %r13"
         lines << "mov 0($0), %r11"
         lines << "mov %r11, 0(%r13)"
@@ -106,11 +107,18 @@ module Beryl::Crypto::V1
         lines << "mov %r11, 8(%r13)"
         lines << "mov 24($0), %r11"
       %}
-      {% for k in 0...n %}
-        {% lines << "mov #{8 * k}(%r11), %r12" %}
-        {% lines << "mov %r12, #{modulus_offset + 8 * k}(%r13)" %}
+      # Set up the scratch: the result pointer, -m^-1, then where the loops
+      # need them the modulus, the copy of a and T's words that are added
+      # before they are written.
+      {% if is_unrolled %}
+        {% lines << "mov %r11, 24(%r13)" %}
+      {% else %}
+        {% for k in 0...n %}
+          {% lines << "mov #{8 * k}(%r11), %r12" %}
+          {% lines << "mov %r12, #{modulus_offset + 8 * k}(%r13)" %}
+        {% end %}
       {% end %}
-      {% if !square %}
+      {% if !square && !is_unrolled %}
         {% lines << "mov 8($0), %r11" %}
         {% for k in 0...n %}
           {% lines << "mov #{8 * k}(%r11), %r12" %}
@@ -118,8 +126,10 @@ module Beryl::Crypto::V1
         {% end %}
       {% end %}
       {% lines << "mov $$0, %r12" %}
-      {% for k in 0...n %}
-        {% lines << "mov %r12, #{t_offset + 8 * k}(%r13)" %}
+      {% if !square && !is_unrolled %}
+        {% for k in 0...n %}
+          {% lines << "mov %r12, #{t_offset + 8 * k}(%r13)" %}
+        {% end %}
       {% end %}
       {% lines << "mov %r12, #{t_offset + 16 * n}(%r13)" %}
 
@@ -135,25 +145,17 @@ module Beryl::Crypto::V1
             {% t_operand = "#{t_offset + 8 * (16 * chunk + row)}(%r13)" %}
             {% if count == 8 %}
               {% lines << "mov #{8 * (8 * chunk + row)}($0), %rdx" %}
-              {% x_operands = [] of StringLiteral %}
-              {% for i in 0...8 %}
-                {% x_operands << "#{8 * (8 * chunk + i)}($0)" %}
-              {% end %}
               {% for i in 0...7 %}
-                {% lines << "mulx #{x_operands[i].id}, %r11, %r12" %}
+                {% lines << "mulx #{8 * (8 * chunk + i)}($0), %r11, %r12" %}
                 {% lines << "adcx %r11, %#{window[i].id}" %}
                 {% lines << "adox %r12, %#{window[i + 1].id}" %}
               {% end %}
               {%
-                lines << "mulx #{x_operands[7].id}, %r11, %#{window[8].id}"
+                lines << "mulx #{8 * (8 * chunk + 7)}($0), %r11, %#{window[8].id}"
                 lines << "adcx %r11, %#{window[7].id}"
                 lines << "mov $$0, %r11"
                 lines << "adox %r11, %#{window[8].id}"
                 lines << "adcx %r11, %#{window[8].id}"
-              %}
-              {%
-                lines << "adcx #{t_operand.id}, %#{window[0].id}"
-                lines << "mov %#{window[0].id}, #{t_operand.id}"
               %}
             {% else %}
               {% lines << "mov $$0, %#{window[8].id}" %}
@@ -169,9 +171,11 @@ module Beryl::Crypto::V1
                 {% lines << "adox %r11, %#{window[count + 1].id}" %}
                 {% lines << "adcx %r11, %#{window[count + 1].id}" %}
               {% end %}
-              {% lines << "adcx #{t_operand.id}, %#{window[0].id}" %}
-              {% lines << "mov %#{window[0].id}, #{t_operand.id}" %}
             {% end %}
+            {% if chunk > 0 %}
+              {% lines << "adcx #{t_operand.id}, %#{window[0].id}" %}
+            {% end %}
+            {% lines << "mov %#{window[0].id}, #{t_operand.id}" %}
             {% window = window[1..-1] + [window[0]] %}
           {% end %}
           {% lines << "mov $$0, %r11" %}
@@ -196,6 +200,43 @@ module Beryl::Crypto::V1
             lines << "mov %rbx, #{t_offset + 16 * k + 8}(%r13)"
           %}
         {% end %}
+      {% elsif is_unrolled %}
+        {%
+          lines << "mov 16($0), %r14"
+          lines << "mov 8($0), $0"
+        %}
+        {% for chunk in 0...(n // 8) %}
+          {% window = initial_window %}
+          {% for index in 0...8 %}
+            {% lines << "xor %#{window[index].id}, %#{window[index].id}" %}
+          {% end %}
+          {% for row in 0...n %}
+            {% t_operand = "#{t_offset + 8 * (8 * chunk + row)}(%r13)" %}
+            {% lines << "mov #{8 * row}(%r14), %rdx" %}
+            {% for i in 0...7 %}
+              {% lines << "mulx #{8 * (8 * chunk + i)}($0), %r11, %r12" %}
+              {% lines << "adcx %r11, %#{window[i].id}" %}
+              {% lines << "adox %r12, %#{window[i + 1].id}" %}
+            {% end %}
+            {%
+              lines << "mulx #{8 * (8 * chunk + 7)}($0), %r11, %#{window[8].id}"
+              lines << "adcx %r11, %#{window[7].id}"
+              lines << "mov $$0, %r11"
+              lines << "adox %r11, %#{window[8].id}"
+              lines << "adcx %r11, %#{window[8].id}"
+            %}
+            {% if chunk > 0 %}
+              {% lines << "adcx #{t_operand.id}, %#{window[0].id}" %}
+            {% end %}
+            {% lines << "mov %#{window[0].id}, #{t_operand.id}" %}
+            {% window = window[1..-1] + [window[0]] %}
+          {% end %}
+          {% lines << "mov $$0, %r11" %}
+          {% for index in 0...8 %}
+            {% lines << "adcx %r11, %#{window[index].id}" %}
+            {% lines << "mov %#{window[index].id}, #{t_offset + 8 * (8 * chunk + n + index)}(%r13)" %}
+          {% end %}
+        {% end %}
       {% else %}
         {% lines << "mov 16($0), $0" %}
         {% lines << "mov $$#{n // 8}, %r14" %}
@@ -204,26 +245,20 @@ module Beryl::Crypto::V1
         {% for index in 0...8 %}
           {% lines << "xor %#{window[index].id}, %#{window[index].id}" %}
         {% end %}
-        {% x_operands = [] of StringLiteral %}
-        {% for i in 0...8 %}
-          {% x_operands << "#{a_offset + 8 * i}(%r13)" %}
-        {% end %}
         {% for row in 0...n %}
           {% lines << "mov #{8 * row}($0), %rdx" %}
           {% t_operand = "#{t_offset + 8 * row}(%r13)" %}
           {% for i in 0...7 %}
-            {% lines << "mulx #{x_operands[i].id}, %r11, %r12" %}
+            {% lines << "mulx #{a_offset + 8 * i}(%r13), %r11, %r12" %}
             {% lines << "adcx %r11, %#{window[i].id}" %}
             {% lines << "adox %r12, %#{window[i + 1].id}" %}
           {% end %}
           {%
-            lines << "mulx #{x_operands[7].id}, %r11, %#{window[8].id}"
+            lines << "mulx #{a_offset + 56}(%r13), %r11, %#{window[8].id}"
             lines << "adcx %r11, %#{window[7].id}"
             lines << "mov $$0, %r11"
             lines << "adox %r11, %#{window[8].id}"
             lines << "adcx %r11, %#{window[8].id}"
-          %}
-          {%
             lines << "adcx #{t_operand.id}, %#{window[0].id}"
             lines << "mov %#{window[0].id}, #{t_operand.id}"
           %}
@@ -242,98 +277,118 @@ module Beryl::Crypto::V1
         %}
       {% end %}
 
-      # The reduction, eight words a block; $0 holds the scratch.
-      {%
-        lines << "mov %r13, $0"
-        lines << "mov $$0, %r11"
-        lines << "mov %r11, 16($0)"
-        lines << "mov $$#{n // 8}, %r14"
-        lines << "1:"
-        lines << "xor %r11, %r11"
-        window = initial_window
-      %}
-      {% for index in 0...8 %}
-        {% lines << "mov #{t_offset + 8 * index}(%r13), %#{window[index].id}" %}
-      {% end %}
-      {% m_operands = [] of StringLiteral %}
-      {% for i in 0...8 %}
-        {% m_operands << "#{modulus_offset + 8 * i}($0)" %}
-      {% end %}
-      {% for j in 0...8 %}
+      # The reduction, eight words a block. Written out, r13 holds the
+      # scratch and r14 points at the modulus; as a loop, $0 holds the
+      # scratch (with the copy of the modulus) and r13 moves up a block at a
+      # time.
+      {% if is_unrolled %}
         {%
-          lines << "mov %#{window[0].id}, %rdx"
-          lines << "mulx 8($0), %rdx, %r12"
-          lines << "mov %rdx, #{u_offset + 8 * j}(%r13)"
+          lines << "mov 24(%r13), %r14"
+          scratch_base = "%r13"
+          block_count = n // 8
+          m_operands = (0...n).to_a.map { |k| "#{8 * k}(%r14)" }
         %}
-        {% for i in 0...7 %}
-          {% lines << "mulx #{m_operands[i].id}, %r11, %r12" %}
-          {% lines << "adcx %r11, %#{window[i].id}" %}
-          {% lines << "adox %r12, %#{window[i + 1].id}" %}
-        {% end %}
+      {% else %}
         {%
-          lines << "mulx #{m_operands[7].id}, %r11, %#{window[8].id}"
-          lines << "adcx %r11, %#{window[7].id}"
-          lines << "mov $$0, %r11"
-          lines << "adox %r11, %#{window[8].id}"
-          lines << "adcx %r11, %#{window[8].id}"
+          lines << "mov %r13, $0"
+          scratch_base = "$0"
+          block_count = 1
+          m_operands = (0...n).to_a.map { |k| "#{modulus_offset + 8 * k}($0)" }
         %}
-        {% window = window[1..-1] + [window[0]] %}
-      {% end %}
-      {% u_operands = [] of StringLiteral %}
-      {% for i in 0...8 %}
-        {% u_operands << "#{u_offset + 8 * i}(%r13)" %}
-      {% end %}
-      {% for row in 0...(n - 8) %}
-        {% lines << "mov #{modulus_offset + 8 * (8 + row)}($0), %rdx" %}
-        {% t_operand = "#{t_offset + 8 * (8 + row)}(%r13)" %}
-        {% for i in 0...7 %}
-          {% lines << "mulx #{u_operands[i].id}, %r11, %r12" %}
-          {% lines << "adcx %r11, %#{window[i].id}" %}
-          {% lines << "adox %r12, %#{window[i + 1].id}" %}
-        {% end %}
-        {%
-          lines << "mulx #{u_operands[7].id}, %r11, %#{window[8].id}"
-          lines << "adcx %r11, %#{window[7].id}"
-          lines << "mov $$0, %r11"
-          lines << "adox %r11, %#{window[8].id}"
-          lines << "adcx %r11, %#{window[8].id}"
-        %}
-        {%
-          lines << "adcx #{t_operand.id}, %#{window[0].id}"
-          lines << "mov %#{window[0].id}, #{t_operand.id}"
-        %}
-        {% window = window[1..-1] + [window[0]] %}
       {% end %}
       {%
         lines << "mov $$0, %r11"
-        lines << "mov $$0, %#{window[8].id}"
+        lines << "mov %r11, 16(#{scratch_base.id})"
       %}
-      {% for index in 0...9 %}
-        {% lines << (index == 1 ? "adcx 16($0), %#{window[1].id}" : "adcx %r11, %#{window[index].id}") %}
-        {% lines << "adox #{t_offset + 8 * (n + index)}(%r13), %#{window[index].id}" %}
-        {% lines << "mov %#{window[index].id}, #{t_offset + 8 * (n + index)}(%r13)" %}
+      {% if !is_unrolled %}
+        {%
+          lines << "mov $$#{n // 8}, %r14"
+          lines << "1:"
+        %}
       {% end %}
-      {%
-        lines << "mov $$0, %r12"
-        lines << "adcx %r11, %r12"
-        lines << "adox %r11, %r12"
-        lines << "mov %r12, 16($0)"
-        lines << "lea 64(%r13), %r13"
-        lines << "dec %r14"
-        lines << "jnz 1b"
-      %}
+      {% for block in 0...block_count %}
+        {%
+          t_base = is_unrolled ? t_offset + 64 * block : t_offset
+          lines << "xor %r11, %r11"
+          window = initial_window
+        %}
+        {% for index in 0...8 %}
+          {% lines << "mov #{t_base + 8 * index}(%r13), %#{window[index].id}" %}
+        {% end %}
+        {% for j in 0...8 %}
+          {%
+            lines << "mov %#{window[0].id}, %rdx"
+            lines << "mulx 8(#{scratch_base.id}), %rdx, %r12"
+            lines << "mov %rdx, #{u_offset + 8 * j}(%r13)"
+          %}
+          {% for i in 0...7 %}
+            {% lines << "mulx #{m_operands[i].id}, %r11, %r12" %}
+            {% lines << "adcx %r11, %#{window[i].id}" %}
+            {% lines << "adox %r12, %#{window[i + 1].id}" %}
+          {% end %}
+          {%
+            lines << "mulx #{m_operands[7].id}, %r11, %#{window[8].id}"
+            lines << "adcx %r11, %#{window[7].id}"
+            lines << "mov $$0, %r11"
+            lines << "adox %r11, %#{window[8].id}"
+            lines << "adcx %r11, %#{window[8].id}"
+          %}
+          {% window = window[1..-1] + [window[0]] %}
+        {% end %}
+        {% for row in 0...(n - 8) %}
+          {% t_operand = "#{t_base + 8 * (8 + row)}(%r13)" %}
+          {% lines << "mov #{m_operands[8 + row].id}, %rdx" %}
+          {% for i in 0...7 %}
+            {% lines << "mulx #{u_offset + 8 * i}(%r13), %r11, %r12" %}
+            {% lines << "adcx %r11, %#{window[i].id}" %}
+            {% lines << "adox %r12, %#{window[i + 1].id}" %}
+          {% end %}
+          {%
+            lines << "mulx #{u_offset + 56}(%r13), %r11, %#{window[8].id}"
+            lines << "adcx %r11, %#{window[7].id}"
+            lines << "mov $$0, %r11"
+            lines << "adox %r11, %#{window[8].id}"
+            lines << "adcx %r11, %#{window[8].id}"
+            lines << "adcx #{t_operand.id}, %#{window[0].id}"
+            lines << "mov %#{window[0].id}, #{t_operand.id}"
+          %}
+          {% window = window[1..-1] + [window[0]] %}
+        {% end %}
+        {%
+          lines << "mov $$0, %r11"
+          lines << "mov $$0, %#{window[8].id}"
+        %}
+        {% for index in 0...9 %}
+          {% lines << (index == 1 ? "adcx 16(#{scratch_base.id}), %#{window[1].id}" : "adcx %r11, %#{window[index].id}") %}
+          {% lines << "adox #{t_base + 8 * (n + index)}(%r13), %#{window[index].id}" %}
+          {% lines << "mov %#{window[index].id}, #{t_base + 8 * (n + index)}(%r13)" %}
+        {% end %}
+        {%
+          lines << "mov $$0, %r12"
+          lines << "adcx %r11, %r12"
+          lines << "adox %r11, %r12"
+          lines << "mov %r12, 16(#{scratch_base.id})"
+        %}
+      {% end %}
+      {% if !is_unrolled %}
+        {%
+          lines << "lea 64(%r13), %r13"
+          lines << "dec %r14"
+          lines << "jnz 1b"
+        %}
+      {% end %}
       # T[n..2n] less m into the result; when that borrows, T[n..2n] instead.
-      {% lines << "mov 0($0), %rbx" %}
+      {% lines << "mov 0(#{scratch_base.id}), %rbx" %}
       {% for k in 0...n %}
-        {% lines << "mov #{t_offset + 8 * (n + k)}($0), %rax" %}
-        {% lines << "#{(k == 0 ? "sub" : "sbb").id} #{modulus_offset + 8 * k}($0), %rax" %}
+        {% lines << "mov #{t_offset + 8 * (n + k)}(#{scratch_base.id}), %rax" %}
+        {% lines << "#{(k == 0 ? "sub" : "sbb").id} #{m_operands[k].id}, %rax" %}
         {% lines << "mov %rax, #{8 * k}(%rbx)" %}
       {% end %}
-      {% lines << "mov #{t_offset + 16 * n}($0), %rax" %}
+      {% lines << "mov #{t_offset + 16 * n}(#{scratch_base.id}), %rax" %}
       {% lines << "sbb $$0, %rax" %}
       {% for k in 0...n %}
         {% lines << "mov #{8 * k}(%rbx), %rax" %}
-        {% lines << "cmovc #{t_offset + 8 * (n + k)}($0), %rax" %}
+        {% lines << "cmovc #{t_offset + 8 * (n + k)}(#{scratch_base.id}), %rax" %}
         {% lines << "mov %rax, #{8 * k}(%rbx)" %}
       {% end %}
       %finished = 0_u64
@@ -342,8 +397,58 @@ module Beryl::Crypto::V1
         : "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "memory", "flags")
     end
 
+    # The text that copies entry $0[2] (below 32, secret) of a table of 32
+    # entries of *word_count* words at $0[1] into $0[0], with AVX2: every
+    # entry is read, ANDed with the mask of lanes where the entry's number
+    # (counted up in ymm1) equals the index (`vpcmpeqq`), and ORed in, 32
+    # words (eight registers) at a time.
+    macro select_entry_with_vectors_statement(word_count, parameters)
+      {%
+        lines = [] of StringLiteral
+        lines << "mov 0($0), %rdi"
+        lines << "mov 8($0), %rsi"
+        lines << "vpbroadcastq 16($0), %ymm0"
+        lines << "mov $$1, %rax"
+        lines << "vmovq %rax, %xmm2"
+        lines << "vpbroadcastq %xmm2, %ymm2"
+      %}
+      {% for chunk in 0...((word_count + 31) // 32) %}
+        {% register_count = (word_count - 32 * chunk) < 32 ? (word_count - 32 * chunk) // 4 : 8 %}
+        {% lines << "vpxor %ymm1, %ymm1, %ymm1" %}
+        {% for index in 0...register_count %}
+          {% lines << "vpxor %ymm#{5 + index}, %ymm#{5 + index}, %ymm#{5 + index}" %}
+        {% end %}
+        {% for entry in 0...32 %}
+          {% lines << "vpcmpeqq %ymm1, %ymm0, %ymm3" %}
+          {% for index in 0...register_count %}
+            {% lines << "vpand #{8 * (entry * word_count + 32 * chunk + 4 * index)}(%rsi), %ymm3, %ymm4" %}
+            {% lines << "vpor %ymm4, %ymm#{5 + index}, %ymm#{5 + index}" %}
+          {% end %}
+          {% lines << "vpaddq %ymm2, %ymm1, %ymm1" %}
+        {% end %}
+        {% for index in 0...register_count %}
+          {% lines << "vmovdqu %ymm#{5 + index}, #{8 * (32 * chunk + 4 * index)}(%rdi)" %}
+        {% end %}
+      {% end %}
+      {% lines << "vzeroupper" %}
+      %finished = 0_u64
+      asm({{ lines.join("\n") }}
+        : "=r"(%finished) : "0"({{ parameters }})
+        : "rax", "rsi", "rdi", "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9", "xmm10",
+          "xmm11", "xmm12", "memory", "flags")
+    end
+
     {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
       {% for word_count in [16, 24, 32, 48, 64] %}
+        # Copies entry *index* (below 32, secret) of a table of
+        # {{ word_count }}-word entries into *destination_pointer*, reading
+        # every entry; needs AVX2.
+        def self.select_entry_{{ word_count }}(destination_pointer : UInt64*, table_pointer : UInt64*, index : UInt64) : Nil
+          operands = StaticArray[destination_pointer.address, table_pointer.address, index]
+          operands_address = operands.to_unsafe.address
+          select_entry_with_vectors_statement({{ word_count }}, operands_address)
+        end
+
         # Sets result to a·b/R mod m for {{ word_count }}-word numbers (*b*
         # below m), with *scratch_pointer* to
         # {{ SCRATCH_WORD_COUNT_PER_WORD * word_count + SCRATCH_EXTRA_WORD_COUNT }}

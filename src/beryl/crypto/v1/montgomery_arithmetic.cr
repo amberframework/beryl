@@ -485,6 +485,18 @@ module Beryl::Crypto::V1
           {% end %}
           end
         {% end %}
+      {% elsif flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+        if ProcessorFeatures::HAS_AVX2
+          {% begin %}
+            case word_count
+            {% for count in SPECIALIZED_WORD_COUNTS %}
+            when {{ count }}
+              MontgomeryMultiplicationWithTwoCarryChains.select_entry_{{ count }}(selected.to_unsafe, table.to_unsafe, window)
+              return
+            {% end %}
+            end
+          {% end %}
+        end
       {% end %}
       selected_pointer = selected.to_unsafe
       table_pointer = table.to_unsafe
