@@ -183,23 +183,17 @@ module Beryl::Crypto::V1
     # the plaintext into *plaintext*; returns false, leaving *plaintext*
     # untouched, otherwise. *counter_block* is the first counter block (J0).
     #
-    # - A short message (fewer than 15 blocks) has its keystream and the tag
-    #   mask encrypted in one call into a staging buffer, and is XORed out
-    #   of it once the tag is right.
     # - On the stitched 512-bit loop, a message of two groups up to
     #   `OPENING_SCRATCH_BYTESIZE` is decrypted into a scratch buffer on the
     #   stack while it is hashed, in one pass, and copied out once the tag
     #   is right (as ChaCha20-Poly1305 opens on AArch64).
     # - Otherwise the tag is computed first and the message decrypted after.
     #
-    # The staging and scratch buffers are wiped.
+    # The scratch buffer is wiped.
     def self.open(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
                   associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
       raise OutputSizeMismatch.new("counter mode writes as many bytes as it reads") unless plaintext.size == ciphertext.size
 
-      if ciphertext.size < GROUP_BYTESIZE - BLOCK_BYTESIZE
-        return open_short_message(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext)
-      end
       if VECTOR_REGISTER_BITSIZE == 512 && ciphertext.size >= STITCHED_GROUP_BYTESIZE * 2 && ciphertext.size <= OPENING_SCRATCH_BYTESIZE
         return open_through_scratch(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext)
       end
@@ -220,29 +214,6 @@ module Beryl::Crypto::V1
       tags_match = ::Crypto::Subtle.constant_time_compare(full_tag[0, tag.size], tag)
       SecretWiping.wipe(full_tag)
       tags_match
-    end
-
-    private def self.open_short_message(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
-                                        associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
-      accumulator_storage = StaticArray(UInt8, 16).new(0_u8)
-      accumulator = accumulator_storage.to_slice
-      tag_mask_storage = StaticArray(UInt8, 16).new(0_u8)
-      tag_mask = tag_mask_storage.to_slice
-      keystream_storage = StaticArray(UInt8, 240).new(0_u8)
-      keystream = keystream_storage.to_slice[0, ciphertext.size]
-      encrypt_after_tag_mask(round_keys, round_count, counter_block, keystream, keystream, tag_mask)
-      absorb_closing_blocks(accumulator, hash_key_powers, associated_data, ciphertext, associated_data.size, ciphertext.size)
-      full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
-      full_tag = full_tag_storage.to_slice
-      write_masked_digest(accumulator, tag_mask, full_tag)
-      SecretWiping.wipe(tag_mask)
-      SecretWiping.wipe(accumulator)
-      is_authentic = Declassification.reveal(compare_tags(full_tag, tag))
-      if is_authentic
-        ciphertext.size.times { |index| plaintext.to_unsafe[index] = ciphertext.to_unsafe[index] ^ keystream.to_unsafe[index] }
-      end
-      SecretWiping.wipe(keystream_storage.to_slice)
-      is_authentic
     end
 
     private def self.open_through_scratch(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
