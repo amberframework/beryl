@@ -126,6 +126,7 @@ module Beryl::Crypto::V1
         {% end %}
       {% end %}
       {% lines << "mov $$0, %r12" %}
+      {% lines << "mov %r12, 32(%r13)" if is_unrolled %}
       {% if !square && !is_unrolled %}
         {% for k in 0...n %}
           {% lines << "mov %r12, #{t_offset + 8 * k}(%r13)" %}
@@ -134,7 +135,11 @@ module Beryl::Crypto::V1
       {% lines << "mov %r12, #{t_offset + 16 * n}(%r13)" %}
 
       {% if square %}
-        {% lines << "mov 8($0), $0" %}
+        {%
+          lines << "mov 8($0), $0"
+          lines << "mov $$0, %r14"
+          zero = "%r14"
+        %}
         {% for chunk in 0...(n // 8) %}
           {% window = initial_window %}
           {% for index in 0...8 %}
@@ -154,9 +159,9 @@ module Beryl::Crypto::V1
               {%
                 lines << "mulx #{8 * (8 * chunk + 7)}($0), %r11, %#{window[8].id}"
                 lines << "adcx %r11, %#{window[7].id}"
-                lines << "mov $$0, %r11"
-                lines << "adox %r11, %#{window[8].id}"
-                lines << "adcx %r11, %#{window[8].id}"
+                lines << "mov $$0, %r11" if zero == "%r11"
+                lines << "adox #{zero.id}, %#{window[8].id}"
+                lines << "adcx #{zero.id}, %#{window[8].id}"
               %}
             {% else %}
               {% lines << "mov $$0, %#{window[8].id}" %}
@@ -168,10 +173,9 @@ module Beryl::Crypto::V1
                   {% lines << "adcx %r11, %#{window[i].id}" %}
                   {% lines << "adox %r12, %#{window[i + 1].id}" %}
                 {% end %}
-                {% lines << "mov $$0, %r11" %}
-                {% lines << "adcx %r11, %#{window[count].id}" %}
-                {% lines << "adox %r11, %#{window[count + 1].id}" %}
-                {% lines << "adcx %r11, %#{window[count + 1].id}" %}
+                {% lines << "adcx %r14, %#{window[count].id}" %}
+                {% lines << "adox %r14, %#{window[count + 1].id}" %}
+                {% lines << "adcx %r14, %#{window[count + 1].id}" %}
               {% end %}
             {% end %}
             {% if chunk > 0 && count == 0 %}
@@ -204,6 +208,7 @@ module Beryl::Crypto::V1
         {% end %}
       {% elsif is_unrolled %}
         {%
+          zero = "32(%r13)"
           lines << "mov 16($0), %r14"
           lines << "mov 8($0), $0"
         %}
@@ -224,9 +229,9 @@ module Beryl::Crypto::V1
             {%
               lines << "mulx #{8 * (8 * chunk + 7)}($0), %r11, %#{window[8].id}"
               lines << "adcx %r11, %#{window[7].id}"
-              lines << "mov $$0, %r11"
-              lines << "adox %r11, %#{window[8].id}"
-              lines << "adcx %r11, %#{window[8].id}"
+              lines << "mov $$0, %r11" if zero == "%r11"
+              lines << "adox #{zero.id}, %#{window[8].id}"
+              lines << "adcx #{zero.id}, %#{window[8].id}"
             %}
             {% lines << "mov %#{window[0].id}, #{t_operand.id}" %}
             {% window = window[1..-1] + [window[0]] %}
@@ -238,6 +243,7 @@ module Beryl::Crypto::V1
           {% end %}
         {% end %}
       {% else %}
+        {% zero = "%r11" %}
         {% lines << "mov 16($0), $0" %}
         {% lines << "mov $$#{n // 8}, %r14" %}
         {% lines << "1:" %}
@@ -257,9 +263,9 @@ module Beryl::Crypto::V1
           {%
             lines << "mulx #{a_offset + 56}(%r13), %r11, %#{window[8].id}"
             lines << "adcx %r11, %#{window[7].id}"
-            lines << "mov $$0, %r11"
-            lines << "adox %r11, %#{window[8].id}"
-            lines << "adcx %r11, %#{window[8].id}"
+            lines << "mov $$0, %r11" if zero == "%r11"
+            lines << "adox #{zero.id}, %#{window[8].id}"
+            lines << "adcx #{zero.id}, %#{window[8].id}"
             lines << "mov %#{window[0].id}, #{t_operand.id}"
           %}
           {% window = window[1..-1] + [window[0]] %}
@@ -283,6 +289,7 @@ module Beryl::Crypto::V1
       # time.
       {% if is_unrolled %}
         {%
+          zero = "32(%r13)"
           lines << "mov 24(%r13), %r14"
           scratch_base = "%r13"
           block_count = n // 8
@@ -290,6 +297,7 @@ module Beryl::Crypto::V1
         %}
       {% else %}
         {%
+          zero = "%r11"
           lines << "mov %r13, $0"
           scratch_base = "$0"
           block_count = 1
@@ -329,9 +337,9 @@ module Beryl::Crypto::V1
           {%
             lines << "mulx #{m_operands[7].id}, %r11, %#{window[8].id}"
             lines << "adcx %r11, %#{window[7].id}"
-            lines << "mov $$0, %r11"
-            lines << "adox %r11, %#{window[8].id}"
-            lines << "adcx %r11, %#{window[8].id}"
+            lines << "mov $$0, %r11" if zero == "%r11"
+            lines << "adox #{zero.id}, %#{window[8].id}"
+            lines << "adcx #{zero.id}, %#{window[8].id}"
           %}
           {% window = window[1..-1] + [window[0]] %}
         {% end %}
@@ -347,9 +355,9 @@ module Beryl::Crypto::V1
           {%
             lines << "mulx #{u_offset + 56}(%r13), %r11, %#{window[8].id}"
             lines << "adcx %r11, %#{window[7].id}"
-            lines << "mov $$0, %r11"
-            lines << "adox %r11, %#{window[8].id}"
-            lines << "adcx %r11, %#{window[8].id}"
+            lines << "mov $$0, %r11" if zero == "%r11"
+            lines << "adox #{zero.id}, %#{window[8].id}"
+            lines << "adcx #{zero.id}, %#{window[8].id}"
             lines << "mov %#{window[0].id}, #{t_operand.id}"
           %}
           {% window = window[1..-1] + [window[0]] %}
