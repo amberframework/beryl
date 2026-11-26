@@ -297,6 +297,48 @@ describe "Beryl::Crypto::V1::MontgomeryMultiplicationWithIntegerFusedMultiplyAdd
   end
 
   {% for word_count in [16, 24, 32] %}
+    it "squares as it multiplies a number by itself, digit for digit, {{ word_count }} words" do
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+        # The path needs AVX-512 IFMA; on a processor without it there is nothing to compare.
+        next unless Beryl::Crypto::ProcessorFeatures::HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD
+
+        random = Random::PCG32.new({{ word_count }}_u64 + 2)
+        padded = IntegerFusedMultiplyAdd.padded_digit_count_for({{ word_count }})
+        40.times do |trial|
+          moduli = Slice(UInt64).new(2 * padded)
+          a = Slice(UInt64).new(2 * padded)
+          negated_inverses = [] of UInt64
+          2.times do |half|
+            prime = random_modulus(random, {{ word_count }})
+            prime.map! { |word| word | 0xffffffff00000000_u64 } if trial % 3 == 1
+            negated_inverses << MontgomeryArithmetic.negated_inverse_of_low_word(prime[0])
+            IntegerFusedMultiplyAdd.write_digits(prime, moduli[half * padded, padded])
+            # Below twice the prime, as the exponentiation's numbers are: the
+            # prime with its top word's bits spread, or (every fourth trial)
+            # every digit at its largest below the prime's length.
+            value = random_below(random, prime)
+            value.fill(~0_u64) if trial % 4 == 0
+            value[{{ word_count }} - 1] = prime[{{ word_count }} - 1] - 1 if trial % 4 == 0
+            IntegerFusedMultiplyAdd.write_digits(value, a[half * padded, padded])
+          end
+          squared = Slice(UInt64).new(2 * padded)
+          doubled = Slice(UInt64).new(2 * padded)
+          multiplied = Slice(UInt64).new(2 * padded)
+          IntegerFusedMultiplyAdd.dual_square_{{ word_count }}(squared.to_unsafe, a.to_unsafe, moduli.to_unsafe,
+            doubled.to_unsafe, negated_inverses[0], negated_inverses[1])
+          IntegerFusedMultiplyAdd.dual_multiply_{{ word_count }}(multiplied.to_unsafe, a.to_unsafe, a.to_unsafe,
+            moduli.to_unsafe, negated_inverses[0], negated_inverses[1])
+          squared.should eq(multiplied)
+          # In place, as the exponentiation squares.
+          IntegerFusedMultiplyAdd.dual_square_{{ word_count }}(a.to_unsafe, a.to_unsafe, moduli.to_unsafe,
+            doubled.to_unsafe, negated_inverses[0], negated_inverses[1])
+          a.should eq(multiplied)
+        end
+      {% end %}
+    end
+  {% end %}
+
+  {% for word_count in [16, 24, 32] %}
     it "exponentiates by both primes' exponents as the 64-bit code does, {{ word_count }} words" do
       {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
         # The path needs AVX-512 IFMA; on a processor without it there is nothing to compare.
