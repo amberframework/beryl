@@ -298,12 +298,29 @@ module Beryl::Crypto::FieldArithmetic
     # so a destination may be one of its own operands. The statement writes
     # the flags, so it names the x86-64 clobber "flags" (see the module
     # comment).
-    macro p256_x86_64_sequence_statement(steps, pointers)
+    #
+    # An addition, subtraction, halving or selection whose a is the
+    # previous step's result takes a from the registers that step left it
+    # in. With *scratch* (the name of a pointer operand, such as "$0"), a
+    # result written to that pointer is not stored when no later step
+    # reads it from memory before it is written again: the memory there is
+    # the statement's own, and nothing reads it after the statement.
+    macro p256_x86_64_sequence_statement(steps, pointers, scratch = nil)
       {%
         product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
         lines = [] of StringLiteral
+        previous_destination = nil
+        previous_result = product
+        chained_steps = [] of BoolLiteral
+        last_destination = nil
       %}
       {% for step in steps %}
+        {%
+          chained_steps << (step[2] == last_destination && %w(add sub half csel).includes?(step[0]))
+          last_destination = step[1]
+        %}
+      {% end %}
+      {% for step, step_position in steps %}
         {%
           operation = step[0]
           destination = step[1]
@@ -312,7 +329,27 @@ module Beryl::Crypto::FieldArithmetic
           a_words = (0..3).map { |index| "#{first[1] + 8 * index}(#{first[0].id})" }
           b_words = (0..3).map { |index| "#{second[1] + 8 * index}(#{second[0].id})" }
           destination_words = (0..3).map { |index| "#{destination[1] + 8 * index}(#{destination[0].id})" }
+          result = product
         %}
+        {% if first == previous_destination && %w(add sub half csel).includes?(operation) %}
+          {%
+            # The first operand is the previous step's result, still in
+            # registers: it is moved to r8 to r11 (from r12, r13, r8 and
+            # r9 after `mulx`, in an order that overwrites no word still
+            # to be moved) instead of loaded, and so is the second when it
+            # is the same element.
+            if previous_result[0] == "%r12"
+              lines << "movq %r9, %r11"
+              lines << "movq %r8, %r10"
+              lines << "movq %r13, %r9"
+              lines << "movq %r12, %r8"
+            end
+            a_words = [product[0], product[1], product[2], product[3]]
+            if second == first
+              b_words = a_words
+            end
+          %}
+        {% end %}
         {% if operation == "mul" %}
           {%
             lines << "movq #{a_words[0].id}, %rax"
@@ -371,9 +408,10 @@ module Beryl::Crypto::FieldArithmetic
           {% for row in 0..3 %}
             {% if row > 0 %}
               {%
-                lines << "movq $$0, #{ring[(row + 5) % 6].id}"
+                # Zeroes the word the row's top carry lands in, and with it
+                # both carry flags.
                 lines << "movq #{a_words[row].id}, %rdx"
-                lines << "xorl %eax, %eax"
+                lines << "xorl #{ring[(row + 5) % 6].id}d, #{ring[(row + 5) % 6].id}d"
               %}
               {% for column in 0..3 %}
                 {%
@@ -410,7 +448,8 @@ module Beryl::Crypto::FieldArithmetic
           {%
             # Words 4 to 7 (r12, r13, r8, r9) and the carry word 8 (r10):
             # p subtracted, the difference kept unless it borrows; the
-            # result moved to r8 to r11.
+            # result is stored from those four registers.
+            result = %w(%r12 %r13 %r8 %r9)
             lines << "movl $$0xffffffff, %r15d"
             lines << "movq %r12, %rax"
             lines << "movq %r13, %rcx"
@@ -425,10 +464,6 @@ module Beryl::Crypto::FieldArithmetic
             lines << "cmovncq %rcx, %r13"
             lines << "cmovncq %rdx, %r8"
             lines << "cmovncq %r11, %r9"
-            lines << "movq %r8, %r10"
-            lines << "movq %r9, %r11"
-            lines << "movq %r12, %r8"
-            lines << "movq %r13, %r9"
           %}
         {% elsif operation == "mulx_square" %}
           {%
@@ -563,22 +598,43 @@ module Beryl::Crypto::FieldArithmetic
         {% end %}
         {% if operation == "mul" || operation == "mulx_square" %}
           {% low = [product[0], product[1], product[2], product[3]] %}
-          {% for step_index in 0..3 %}
+          {% if operation == "mulx_square" %}
             {%
-              word = low[0]
-              lines << "movq #{word.id}, %rax"
-              lines << "shlq $$32, %rax"
-              lines << "movq #{word.id}, %rdx"
-              lines << "shrq $$32, %rdx"
-              lines << "movq #{word.id}, %rcx"
-              lines << "subq %rax, %rcx"
-              lines << "sbbq %rdx, #{word.id}"
-              lines << "addq %rax, #{low[1].id}"
-              lines << "adcq %rdx, #{low[2].id}"
-              lines << "adcq %rcx, #{low[3].id}"
-              lines << "adcq $$0, #{word.id}"
-              low = [low[1], low[2], low[3], low[0]]
+              # With `mulx`, as OpenSSL's `__ecp_nistz256_sqr_montx`: rdx
+              # holds p's top word, and m·(2^64 - 2^32 + 1) is one `mulx`.
+              lines << "movabsq $$0xffffffff00000001, %rdx"
             %}
+          {% end %}
+          {% for step_index in 0..3 %}
+            {% word = low[0] %}
+            {% if operation == "mulx_square" %}
+              {%
+                lines << "movq #{word.id}, %rax"
+                lines << "shlq $$32, %rax"
+                lines << "movq #{word.id}, %rcx"
+                lines << "shrq $$32, %rcx"
+                lines << "addq %rax, #{low[1].id}"
+                lines << "adcq %rcx, #{low[2].id}"
+                lines << "mulxq #{word.id}, %rax, #{word.id}"
+                lines << "adcq %rax, #{low[3].id}"
+                lines << "adcq $$0, #{word.id}"
+              %}
+            {% else %}
+              {%
+                lines << "movq #{word.id}, %rax"
+                lines << "shlq $$32, %rax"
+                lines << "movq #{word.id}, %rdx"
+                lines << "shrq $$32, %rdx"
+                lines << "movq #{word.id}, %rcx"
+                lines << "subq %rax, %rcx"
+                lines << "sbbq %rdx, #{word.id}"
+                lines << "addq %rax, #{low[1].id}"
+                lines << "adcq %rdx, #{low[2].id}"
+                lines << "adcq %rcx, #{low[3].id}"
+                lines << "adcq $$0, #{word.id}"
+              %}
+            {% end %}
+            {% low = [low[1], low[2], low[3], low[0]] %}
           {% end %}
           {%
             lines << "addq #{product[4].id}, #{product[0].id}"
@@ -604,10 +660,41 @@ module Beryl::Crypto::FieldArithmetic
             {% lines << "cmovncq #{product[index + 4].id}, #{product[index].id}" %}
           {% end %}
         {% end %}
-        {% for index in 0..3 %}
-          {% lines << "movq #{product[index].id}, #{destination_words[index].id}" %}
+        {% store_needed = true %}
+        {% if scratch && destination[0] == scratch %}
+          {%
+            store_needed = false
+            settled = false
+          %}
+          {% for later_index in 0...steps.size %}
+            {% if later_index > step_position && !settled %}
+              {%
+                later = steps[later_index]
+                first_from_registers = chained_steps[later_index] && later_index == step_position + 1
+                reads_memory = (later[2] == destination && !first_from_registers) ||
+                               (later[3] == destination && !(first_from_registers && later[3] == later[2])) ||
+                               (later[0] == "csel" && later[4] == destination)
+                if reads_memory
+                  store_needed = true
+                  settled = true
+                elsif later[1] == destination
+                  settled = true
+                end
+              %}
+            {% end %}
+          {% end %}
         {% end %}
+        {% if store_needed %}
+          {% for index in 0..3 %}
+            {% lines << "movq #{result[index].id}, #{destination_words[index].id}" %}
+          {% end %}
+        {% end %}
+        {%
+          previous_destination = destination
+          previous_result = result
+        %}
       {% end %}
+      {% lines = lines.reject { |line| line.starts_with?("movq %") && line[5..-1].split(", ")[0] == line[5..-1].split(", ")[1] } %}
       asm({{ lines.join("\n") }}
         :: {% for pointer, index in pointers %}{% if index > 0 %}, {% end %}"r"({{ pointer }}){% end %}
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
@@ -660,23 +747,26 @@ module Beryl::Crypto::FieldArithmetic
           x = round == 0 ? {input_name, 0} : state_x
           y = round == 0 ? {input_name, 32} : state_y
           z = round == 0 ? {input_name, 64} : state_z
+          # Nine additions, subtractions and halvings take their first
+          # operand from the step just before them, in registers (see
+          # `p256_x86_64_sequence_statement`).
           steps = steps + [
             {"add", slot[0], y, y},
             {square, slot[1], z, z},
-            {multiply, slot[3], y, z},
-            {square, slot[2], slot[0], slot[0]},
-            {"add", slot[4], x, slot[1]},
+            {"add", slot[4], slot[1], x},
             {"sub", slot[5], x, slot[1]},
-            {"add", state_z, slot[3], slot[3]},
             {multiply, slot[6], slot[4], slot[5]},
-            {multiply, slot[9], slot[2], x},
-            {square, slot[8], slot[2], slot[2]},
             {"add", slot[7], slot[6], slot[6]},
             {"add", slot[7], slot[7], slot[6]},
+            {multiply, slot[3], y, z},
+            {"add", state_z, slot[3], slot[3]},
+            {square, slot[2], slot[0], slot[0]},
+            {multiply, slot[9], slot[2], x},
             {"add", slot[10], slot[9], slot[9]},
-            {"half", slot[8], slot[8], slot[8]},
             {square, slot[11], slot[7], slot[7]},
             {"sub", state_x, slot[11], slot[10]},
+            {square, slot[8], slot[2], slot[2]},
+            {"half", slot[8], slot[8], slot[8]},
             {"sub", slot[12], slot[9], state_x},
             {multiply, slot[12], slot[12], slot[7]},
             {"sub", state_y, slot[12], slot[8]},
@@ -706,30 +796,36 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
         {%
+          # The steps of the two longest chains (through H and through R)
+          # alternate, the products off them (Z1·Z2, S1·H^3, Z3) sit in the
+          # serial tail, and five subtractions and additions take their
+          # first operand from the step just before them, in registers.
+          # The first point is read for the last time before the sum is
+          # written.
           steps = steps + [
             {square, slot[0], z1, z1},
             {square, slot[1], z2, z2},
             {multiply, slot[2], x1, slot[1]},
             {multiply, slot[3], x2, slot[0]},
-            {multiply, slot[4], z2, slot[1]},
-            {multiply, slot[4], y1, slot[4]},
-            {multiply, slot[5], z1, slot[0]},
-            {multiply, slot[5], y2, slot[5]},
             {"sub", slot[6], slot[3], slot[2]},
-            {"sub", slot[7], slot[5], slot[4]},
-            {multiply, slot[8], z1, z2},
+            {multiply, slot[5], z1, slot[0]},
+            {multiply, slot[4], z2, slot[1]},
             {square, slot[9], slot[6], slot[6]},
+            {multiply, slot[4], y1, slot[4]},
+            {multiply, slot[5], y2, slot[5]},
+            {"sub", slot[7], slot[5], slot[4]},
             {multiply, slot[10], slot[6], slot[9]},
             {multiply, slot[11], slot[2], slot[9]},
+            {"add", slot[13], slot[11], slot[11]},
             {square, slot[12], slot[7], slot[7]},
             {"sub", slot[12], slot[12], slot[10]},
-            {"add", slot[13], slot[11], slot[11]},
             {"sub", sum_x, slot[12], slot[13]},
+            {multiply, slot[8], z1, z2},
             {"sub", slot[15], slot[11], sum_x},
-            {multiply, slot[15], slot[7], slot[15]},
             {multiply, slot[13], slot[4], slot[10]},
-            {"sub", sum_y, slot[15], slot[13]},
             {multiply, sum_z, slot[8], slot[6]},
+            {multiply, slot[15], slot[7], slot[15]},
+            {"sub", sum_y, slot[15], slot[13]},
           ]
         %}
         {% if masks %}
@@ -747,7 +843,7 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
       {% end %}
-      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, {{ pointers }})
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, {{ pointers }}, "$0")
     end
 
     # The end of a P-256 point addition on x86-64 in one statement: the

@@ -712,10 +712,11 @@ module Beryl::Crypto::V1
         # into the other, then one statement for the negation of the picked
         # multiple, the addition and both replacements, with the masks of
         # `signed_multiple` and `replace_if` in words 72 to 74 of the
-        # scratch space (76 to 79 stay zero). The doublings are separate
-        # statements: one statement of all five is about 6,500
-        # instructions, and a doubling's code fits the processor's
-        # decoded-instruction cache.
+        # scratch space (76 to 79 stay zero). The doublings run through
+        # `double_into`, one copy of a doubling's code called five times: a
+        # doubling is about 1,250 instructions, and five copies in the loop
+        # (the compiler unrolls `5.times`) are more code than the
+        # processor's decoded-instruction cache holds.
         state = result
         other_state = result
         current = pointerof(state)
@@ -731,14 +732,14 @@ module Beryl::Crypto::V1
           scratch[74] = ConstantTimeSelection.mask_of(is_zero)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
             5.times do
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), spare, 1, input: current)
+              double_into(pointerof(scratch), spare, current, true)
               current, spare = spare, current
             end
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
               pointerof(scratch), current, 0, other: pointerof(selected), masks: true)
           else
             5.times do
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), spare, 1, input: current)
+              double_into(pointerof(scratch), spare, current, false)
               current, spare = spare, current
             end
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
@@ -759,6 +760,21 @@ module Beryl::Crypto::V1
       end
       result.replace_if(is_infinity, Point.neutral)
     end
+
+    {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+      # P-256 on x86-64: doubles the point at *source* into *destination*
+      # in one assembly statement (`mulx` when *wide*), with the scratch
+      # space of `multiply_constant_time`. Never inlined, so that the
+      # window loop runs one copy of the doubling's code.
+      @[NoInline]
+      def self.double_into(scratch : StaticArray(UInt64, 80)*, destination : Point*, source : Point*, wide : Bool) : Nil
+        if wide
+          ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, scratch, destination, 1, input: source)
+        else
+          ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, scratch, destination, 1, input: source)
+        end
+      end
+    {% end %}
 
     # Returns [d]P for the signed digit d of *scalar* at *window_index*,
     # from the 16 points at *multiples* (the multiple picked by reading all
