@@ -85,7 +85,7 @@ module Beryl::Crypto::V1
     end
 
     # Zeroes the expanded round keys and the GHASH key state (the portable
-    # code's words, or the processor code's round key bytes and H to H^8).
+    # code's words, or the processor code's round key bytes and hash key powers).
     protected def wipe_key_material : Nil
       SecretWiping.wipe(@round_keys)
       SecretWiping.wipe(@hash_key_state)
