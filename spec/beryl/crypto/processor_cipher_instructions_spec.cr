@@ -85,6 +85,12 @@ describe "Beryl ciphers on the processor's instructions" do
                 "carry-less multiply: #{Beryl::Crypto::ProcessorFeatures::HAS_CARRYLESS_MULTIPLY_INSTRUCTIONS}, " \
                 "vector instructions: #{Beryl::Crypto::ProcessorFeatures::HAS_VECTOR_INSTRUCTIONS}, " \
                 "three-way exclusive or: #{Beryl::Crypto::ProcessorFeatures::HAS_THREE_WAY_EXCLUSIVE_OR}"
+    STDOUT.puts "AVX2: #{Beryl::Crypto::ProcessorFeatures::HAS_AVX2}, " \
+                "AVX-512: #{Beryl::Crypto::ProcessorFeatures::HAS_AVX512}, " \
+                "AVX-512 IFMA: #{Beryl::Crypto::ProcessorFeatures::HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD}, " \
+                "VAES: #{Beryl::Crypto::ProcessorFeatures::HAS_VECTOR_AES}, " \
+                "VPCLMULQDQ: #{Beryl::Crypto::ProcessorFeatures::HAS_VECTOR_CARRYLESS_MULTIPLY}, " \
+                "MULX and ADX: #{Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS}"
   end
 
   {% for key_bytesize in [16, 24, 32] %}
