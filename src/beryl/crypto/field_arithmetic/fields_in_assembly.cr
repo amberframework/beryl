@@ -312,6 +312,7 @@ module Beryl::Crypto::FieldArithmetic
           a_words = (0..3).map { |index| "#{first[1] + 8 * index}(#{first[0].id})" }
           b_words = (0..3).map { |index| "#{second[1] + 8 * index}(#{second[0].id})" }
           destination_words = (0..3).map { |index| "#{destination[1] + 8 * index}(#{destination[0].id})" }
+          result = product
         %}
         {% if operation == "mul" %}
           {%
@@ -371,9 +372,10 @@ module Beryl::Crypto::FieldArithmetic
           {% for row in 0..3 %}
             {% if row > 0 %}
               {%
-                lines << "movq $$0, #{ring[(row + 5) % 6].id}"
+                # Zeroes the word the row's top carry lands in, and with it
+                # both carry flags.
                 lines << "movq #{a_words[row].id}, %rdx"
-                lines << "xorl %eax, %eax"
+                lines << "xorl #{ring[(row + 5) % 6].id}d, #{ring[(row + 5) % 6].id}d"
               %}
               {% for column in 0..3 %}
                 {%
@@ -410,7 +412,8 @@ module Beryl::Crypto::FieldArithmetic
           {%
             # Words 4 to 7 (r12, r13, r8, r9) and the carry word 8 (r10):
             # p subtracted, the difference kept unless it borrows; the
-            # result moved to r8 to r11.
+            # result is stored from those four registers.
+            result = %w(%r12 %r13 %r8 %r9)
             lines << "movl $$0xffffffff, %r15d"
             lines << "movq %r12, %rax"
             lines << "movq %r13, %rcx"
@@ -425,10 +428,6 @@ module Beryl::Crypto::FieldArithmetic
             lines << "cmovncq %rcx, %r13"
             lines << "cmovncq %rdx, %r8"
             lines << "cmovncq %r11, %r9"
-            lines << "movq %r8, %r10"
-            lines << "movq %r9, %r11"
-            lines << "movq %r12, %r8"
-            lines << "movq %r13, %r9"
           %}
         {% elsif operation == "mulx_square" %}
           {%
@@ -605,7 +604,7 @@ module Beryl::Crypto::FieldArithmetic
           {% end %}
         {% end %}
         {% for index in 0..3 %}
-          {% lines << "movq #{product[index].id}, #{destination_words[index].id}" %}
+          {% lines << "movq #{result[index].id}, #{destination_words[index].id}" %}
         {% end %}
       {% end %}
       asm({{ lines.join("\n") }}
