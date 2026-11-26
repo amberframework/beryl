@@ -407,6 +407,9 @@ module Beryl::Crypto::V1
     # Encrypts the counter block at *counter_block* into *tag_mask* and
     # *plaintext* (shorter than 15 blocks) into *ciphertext* with the counter
     # blocks after it, in one call.
+    # Inlined: `seal` and `open_short` both call it, and the 64-byte seal runs
+    # 3 % slower on AMD Zen 4 through a call.
+    @[AlwaysInline]
     private def self.encrypt_after_tag_mask(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
                                             plaintext : Bytes, ciphertext : Bytes, tag_mask : Bytes) : Nil
       staging_storage = StaticArray(UInt8, 256).new(0_u8)
