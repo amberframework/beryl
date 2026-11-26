@@ -365,17 +365,7 @@ module Beryl::Crypto::V1
       def double : Point
         {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
           # P-256 on x86-64: the same steps in one assembly statement.
-          input = self
-          doubled = uninitialized Point
-          scratch = uninitialized StaticArray(UInt64, 52)
-          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(true,
-              pointerof(scratch), pointerof(input), pointerof(doubled))
-          else
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(false,
-              pointerof(scratch), pointerof(input), pointerof(doubled))
-          end
-          return doubled
+          return Point.x86_64_doubled(self, 1)
         {% end %}
         twice_y = Field.add(@y, @y)
         delta = Field.square(@z)
@@ -392,22 +382,36 @@ module Beryl::Crypto::V1
         Point.new(new_x, new_y, new_z)
       end
 
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+        # *count* doublings of *point* on x86-64, in one assembly statement.
+        @[AlwaysInline]
+        protected def self.x86_64_doubled(point : Point, count : Int32) : Point
+          input = point
+          doubled = uninitialized Point
+          scratch = uninitialized StaticArray(UInt64, 72)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            if count == 5
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+            else
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(input), pointerof(doubled), 1)
+            end
+          else
+            if count == 5
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+            else
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(input), pointerof(doubled), 1)
+            end
+          end
+          doubled
+        end
+      {% end %}
+
       # Five doublings in a row (one window of the variable-point
       # multiplication); on x86-64, P-256 runs them as one assembly
       # statement.
       def double_five_times : Point
         {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
-          input = self
-          doubled = uninitialized Point
-          scratch = uninitialized StaticArray(UInt64, 52)
-          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(true,
-              pointerof(scratch), pointerof(input), pointerof(doubled), 5)
-          else
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_double_statement(false,
-              pointerof(scratch), pointerof(input), pointerof(doubled), 5)
-          end
-          doubled
+          Point.x86_64_doubled(self, 5)
         {% else %}
           point = self
           5.times { point = point.double }
@@ -483,15 +487,17 @@ module Beryl::Crypto::V1
         {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
           # P-256 on x86-64: the same steps in one assembly statement.
           first = self
-          scratch = uninitialized StaticArray(UInt64, 68)
+          second = other
+          sum = uninitialized Point
+          scratch = uninitialized StaticArray(UInt64, 72)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_addition_statement(true,
-              pointerof(scratch), pointerof(first), pointerof(other))
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
+              pointerof(scratch), pointerof(first), pointerof(sum), 0, pointerof(second))
           else
-            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_addition_statement(false,
-              pointerof(scratch), pointerof(first), pointerof(other))
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
+              pointerof(scratch), pointerof(first), pointerof(sum), 0, pointerof(second))
           end
-          return (pointerof(scratch).as(UInt64*) + 56).as(Point*).value
+          return sum
         {% end %}
         z1_squared = Field.square(@z)
         z2_squared = Field.square(other.z)
@@ -719,6 +725,34 @@ module Beryl::Crypto::V1
       multiples_pointer = pointerof(multiples).as(Point*)
       result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
       result = result.replace_if(is_infinity, multiples[15].double)
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+        # P-256 on x86-64: each window (the five doublings, the negation
+        # of the picked multiple, the addition and both replacements) in one
+        # assembly statement on a point only the assembly reads until the
+        # end, with the masks of `signed_multiple` and `replace_if`.
+        state = result
+        masks = StaticArray(UInt64, 8).new(0_u64)
+        scratch = uninitialized StaticArray(UInt64, 72)
+        (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
+          digit, is_negative = booth_digit(scalar, window_index)
+          is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
+          stand_in_index = (window_index & 15).to_u64
+          selected = select_multiple(multiples_pointer, (digit &- 1_u64) &+ (ConstantTimeSelection.mask_of(is_zero) & (stand_in_index &+ 1_u64)))
+          masks[0] = ConstantTimeSelection.mask_of(is_negative)
+          masks[1] = ConstantTimeSelection.mask_of(is_infinity)
+          masks[2] = ConstantTimeSelection.mask_of(is_zero)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
+              pointerof(scratch), pointerof(state), pointerof(state), 5, pointerof(selected), pointerof(masks))
+          else
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
+              pointerof(scratch), pointerof(state), pointerof(state), 5, pointerof(selected), pointerof(masks))
+          end
+          is_infinity &= is_zero
+        end
+        SecretWiping.wipe(scratch.to_slice)
+        return state.replace_if(is_infinity, Point.neutral)
+      {% end %}
       (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
         result = result.double_five_times
         selected, is_zero = signed_multiple(scalar, window_index, multiples_pointer)

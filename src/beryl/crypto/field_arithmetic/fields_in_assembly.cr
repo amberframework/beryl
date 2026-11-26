@@ -288,6 +288,8 @@ module Beryl::Crypto::FieldArithmetic
     #   borrows; "sub": a - b, p added under the mask of its borrow (`sbb`
     #   of a register from itself), p's top word built from the mask as
     #   (mask_low << 32) - mask.
+    # - "csel": b where the mask word at the step's fifth place is all
+    #   ones, else a (`xor` of their difference under the mask).
     # - "half": a/2 for a below p (no fiat-crypto counterpart; see
     #   `half_portable`): p added under the mask of a's low bit, the
     #   five-word sum shifted right one bit with `shrd`.
@@ -522,6 +524,17 @@ module Beryl::Crypto::FieldArithmetic
             lines << "adcq $$0, %r10"
             lines << "adcq %rdx, %r11"
           %}
+        {% elsif operation == "csel" %}
+          {% mask_word = "#{step[4][1]}(#{step[4][0].id})" %}
+          {% for index in 0..3 %}
+            {%
+              lines << "movq #{a_words[index].id}, #{product[index].id}"
+              lines << "movq #{b_words[index].id}, %r12"
+              lines << "xorq #{product[index].id}, %r12"
+              lines << "andq #{mask_word.id}, %r12"
+              lines << "xorq %r12, #{product[index].id}"
+            %}
+          {% end %}
         {% elsif operation == "half" %}
           {% for index in 0..3 %}
             {% lines << "movq #{a_words[index].id}, #{product[index].id}" %}
@@ -600,30 +613,43 @@ module Beryl::Crypto::FieldArithmetic
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "memory", "flags")
     end
 
-    # A P-256 point doubling on x86-64 in one statement: the steps of
-    # `Point#double` (OpenSSL's `ecp_nistz256_point_double`), from the
-    # point at *point* (X, Y, Z, 32 bytes each) into the point at *result*,
-    # with *scratch* (52 words) for the values in between; *wide* picks
-    # `mulx` over `mulq`. Every step reads its operands before it writes,
-    # and the input is read for the last time before the result's X and Y
-    # are written (its Z after Z is read), so *result* may be *point*.
-    # *count* doublings run one after another, each after the first on
-    # *result* in place.
-    macro p256_x86_64_point_double_statement(wide, scratch, point, result, count = 1)
+    # P-256 point arithmetic on x86-64 in one statement
+    # (`p256_x86_64_sequence_statement`), the steps of `Point#double`
+    # (OpenSSL's `ecp_nistz256_point_double`) *doublings* times and then,
+    # when *other* is given, those of `Point#add_unchecked`
+    # (add-1998-cmo-2, 12M + 4S) with the point at *other*. Points are X, Y
+    # and Z, 32 bytes each; *scratch* holds 72 words for the values in
+    # between, and *wide* picks `mulx` over `mulq`.
+    #
+    # The first doubling (or, with no doubling, the addition) reads the
+    # point at *input* and every later step works on the point at *state*,
+    # where the result is left; *input* may be *state*. Each doubling reads
+    # its point for the last time before it writes X, Y and Z (Z after Z
+    # is read), and the addition reads the first point before it writes
+    # the sum, so the work is done in place.
+    #
+    # With *masks* (three words, each all ones or zero, then four zero
+    # words) the statement is one window of `multiply_constant_time`: Y of
+    # *other* is replaced by -Y under the first mask (in place), the sum by
+    # *other* under the second (the running sum was infinity), and the
+    # result by the doubled point under the third (the digit was zero), as
+    # `signed_multiple` and `Point#replace_if` do.
+    macro p256_x86_64_point_statement(wide, scratch, input, state, doublings, other = nil, masks = nil)
       {%
         multiply = wide ? "mulx" : "mul"
         square = wide ? "mulx_square" : "mul"
-        new_x = {"$2", 0}
-        new_y = {"$2", 32}
-        new_z = {"$2", 64}
-        slot = (0..12).map { |index| {"$0", 32 * index} }
+        state_x = {"$1", 0}
+        state_y = {"$1", 32}
+        state_z = {"$1", 64}
+        slot = (0..17).map { |index| {"$0", 32 * index} }
         steps = [] of TupleLiteral
+        pointers = [scratch, state, input]
       %}
-      {% for round in 0...count %}
+      {% for round in 0...doublings %}
         {%
-          x = round == 0 ? {"$1", 0} : new_x
-          y = round == 0 ? {"$1", 32} : new_y
-          z = round == 0 ? {"$1", 64} : new_z
+          x = round == 0 ? {"$2", 0} : state_x
+          y = round == 0 ? {"$2", 32} : state_y
+          z = round == 0 ? {"$2", 64} : state_z
           steps = steps + [
             {"add", slot[0], y, y},
             {square, slot[1], z, z},
@@ -631,7 +657,7 @@ module Beryl::Crypto::FieldArithmetic
             {square, slot[2], slot[0], slot[0]},
             {"add", slot[4], x, slot[1]},
             {"sub", slot[5], x, slot[1]},
-            {"add", new_z, slot[3], slot[3]},
+            {"add", state_z, slot[3], slot[3]},
             {multiply, slot[6], slot[4], slot[5]},
             {multiply, slot[9], slot[2], x},
             {square, slot[8], slot[2], slot[2]},
@@ -640,58 +666,79 @@ module Beryl::Crypto::FieldArithmetic
             {"add", slot[10], slot[9], slot[9]},
             {"half", slot[8], slot[8], slot[8]},
             {square, slot[11], slot[7], slot[7]},
-            {"sub", new_x, slot[11], slot[10]},
-            {"sub", slot[12], slot[9], new_x},
+            {"sub", state_x, slot[11], slot[10]},
+            {"sub", slot[12], slot[9], state_x},
             {multiply, slot[12], slot[12], slot[7]},
-            {"sub", new_y, slot[12], slot[8]},
+            {"sub", state_y, slot[12], slot[8]},
           ]
         %}
       {% end %}
-      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ point }}, {{ result }}])
-    end
-
-    # A P-256 point addition on x86-64 in one statement: the steps of
-    # `Point#add_unchecked` (add-1998-cmo-2, 12M + 4S) on the points at
-    # *first* and *second*, with *scratch* (68 words); the sum's X, Y and Z
-    # are words 56 to 67 of *scratch*.
-    macro p256_x86_64_point_addition_statement(wide, scratch, first, second)
-      {%
-        multiply = wide ? "mulx" : "mul"
-        square = wide ? "mulx_square" : "mul"
-        x1 = {"$1", 0}
-        y1 = {"$1", 32}
-        z1 = {"$1", 64}
-        x2 = {"$2", 0}
-        y2 = {"$2", 32}
-        z2 = {"$2", 64}
-        slot = (0..16).map { |index| {"$0", 32 * index} }
-        steps = [
-          {square, slot[0], z1, z1},
-          {square, slot[1], z2, z2},
-          {multiply, slot[2], x1, slot[1]},
-          {multiply, slot[3], x2, slot[0]},
-          {multiply, slot[4], z2, slot[1]},
-          {multiply, slot[4], y1, slot[4]},
-          {multiply, slot[5], z1, slot[0]},
-          {multiply, slot[5], y2, slot[5]},
-          {"sub", slot[6], slot[3], slot[2]},
-          {"sub", slot[7], slot[5], slot[4]},
-          {multiply, slot[8], z1, z2},
-          {square, slot[9], slot[6], slot[6]},
-          {multiply, slot[10], slot[6], slot[9]},
-          {multiply, slot[11], slot[2], slot[9]},
-          {square, slot[12], slot[7], slot[7]},
-          {"sub", slot[12], slot[12], slot[10]},
-          {"add", slot[13], slot[11], slot[11]},
-          {"sub", slot[14], slot[12], slot[13]},
-          {"sub", slot[15], slot[11], slot[14]},
-          {multiply, slot[15], slot[7], slot[15]},
-          {multiply, slot[13], slot[4], slot[10]},
-          {"sub", slot[15], slot[15], slot[13]},
-          {multiply, slot[16], slot[8], slot[6]},
-        ]
-      %}
-      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ first }}, {{ second }}])
+      {% if other %}
+        {%
+          pointers = pointers + [other]
+          x1 = doublings == 0 ? {"$2", 0} : state_x
+          y1 = doublings == 0 ? {"$2", 32} : state_y
+          z1 = doublings == 0 ? {"$2", 64} : state_z
+          x2 = {"$3", 0}
+          y2 = {"$3", 32}
+          z2 = {"$3", 64}
+          sum_x = masks ? slot[14] : state_x
+          sum_y = masks ? slot[15] : state_y
+          sum_z = masks ? slot[16] : state_z
+        %}
+        {% if masks %}
+          {%
+            pointers = pointers + [masks]
+            negative = {"$4", 0}
+            steps = steps + [
+              {"sub", slot[17], {"$4", 32}, y2},
+              {"csel", y2, y2, slot[17], negative},
+            ]
+          %}
+        {% end %}
+        {%
+          steps = steps + [
+            {square, slot[0], z1, z1},
+            {square, slot[1], z2, z2},
+            {multiply, slot[2], x1, slot[1]},
+            {multiply, slot[3], x2, slot[0]},
+            {multiply, slot[4], z2, slot[1]},
+            {multiply, slot[4], y1, slot[4]},
+            {multiply, slot[5], z1, slot[0]},
+            {multiply, slot[5], y2, slot[5]},
+            {"sub", slot[6], slot[3], slot[2]},
+            {"sub", slot[7], slot[5], slot[4]},
+            {multiply, slot[8], z1, z2},
+            {square, slot[9], slot[6], slot[6]},
+            {multiply, slot[10], slot[6], slot[9]},
+            {multiply, slot[11], slot[2], slot[9]},
+            {square, slot[12], slot[7], slot[7]},
+            {"sub", slot[12], slot[12], slot[10]},
+            {"add", slot[13], slot[11], slot[11]},
+            {"sub", sum_x, slot[12], slot[13]},
+            {"sub", slot[15], slot[11], sum_x},
+            {multiply, slot[15], slot[7], slot[15]},
+            {multiply, slot[13], slot[4], slot[10]},
+            {"sub", sum_y, slot[15], slot[13]},
+            {multiply, sum_z, slot[8], slot[6]},
+          ]
+        %}
+        {% if masks %}
+          {%
+            infinity = {"$4", 8}
+            zero_digit = {"$4", 16}
+            steps = steps + [
+              {"csel", slot[14], slot[14], x2, infinity},
+              {"csel", slot[15], slot[15], y2, infinity},
+              {"csel", slot[16], slot[16], z2, infinity},
+              {"csel", state_x, slot[14], state_x, zero_digit},
+              {"csel", state_y, slot[15], state_y, zero_digit},
+              {"csel", state_z, slot[16], state_z, zero_digit},
+            ]
+          %}
+        {% end %}
+      {% end %}
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, {{ pointers }})
     end
 
     # The end of a P-256 point addition on x86-64 in one statement: the
