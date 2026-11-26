@@ -49,9 +49,9 @@ module Beryl::Crypto
   # end with `vzeroupper`, so the legacy SSE code around them never pays for
   # a dirty upper half. On these registers the GHASH product is the
   # schoolbook one (four carry-less multiplies, no Karatsuba operand), the
-  # products of all the blocks of a group are summed lane by lane, the lanes
-  # are folded into one, and that sum is reduced once, with the same
-  # shifts as `REDUCTION_LINES` written in three-operand form.
+  # products of all the blocks of a group are summed lane by lane, each
+  # lane is reduced with two carry-less multiplies
+  # (`VECTOR_LANE_REDUCTION_LINES`), and the lanes are summed.
   #
   # The table of hash key powers has two parts:
   #
@@ -103,31 +103,6 @@ module Beryl::Crypto
   .quad 0x0000000000000001\n  .quad 0xc200000000000000
   .quad 0x0000000000000001\n  .quad 0xc200000000000000
 9:
-"
-
-    # `REDUCTION_LINES` in the three-operand VEX form, on xmm registers:
-    # reduces the 256-bit product with its low half in `@L` and its high
-    # half in `@H` to 128 bits in `@L`, with `@A` and `@B` as scratch. With
-    # T the low half shifted left by 57, 62 and 63 in each 64-bit lane and
-    # summed, and L' the low half XORed with T moved up 64 bits, the result
-    # is H, T moved down 64 bits, L', and L' shifted right by 1, 2 and 7 in
-    # each 64-bit lane, all summed.
-    VECTOR_REDUCTION_LINES = "  vpsllq $$57, @L, @A
-  vpsllq $$62, @L, @B
-  vpxor @B, @A, @A
-  vpsllq $$63, @L, @B
-  vpxor @B, @A, @A
-  vpslldq $$8, @A, @B
-  vpsrldq $$8, @A, @A
-  vpxor @B, @L, @L
-  vpxor @A, @H, @H
-  vpxor @L, @H, @H
-  vpsrlq $$1, @L, @A
-  vpxor @A, @H, @H
-  vpsrlq $$2, @L, @A
-  vpxor @A, @H, @H
-  vpsrlq $$7, @L, @A
-  vpxor @A, @H, @L
 "
 
     # The constants each statement reads after its code: the mask that
