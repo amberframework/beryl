@@ -190,11 +190,10 @@ module Beryl::Crypto
     # The statement uses every general register: rdi and rsi bring the
     # state and the message and are put back as they came. Its table lies
     # below the red zone of the function around it, aligned to 64 bytes, and
-    # rsp is put back before the statement ends. Its two loops (four passes
-    # of sixteen rounds with the schedule, then for the second block ten
-    # passes of eight rounds) count down in rbp from constants, and every
-    # address is a register plus a constant, so the timing does not depend
-    # on the message or the state.
+    # rsp is put back before the statement ends. Its loop (four passes of
+    # sixteen rounds with the schedule) counts down in rbp from a constant,
+    # and every address is a register plus a constant, so the timing does
+    # not depend on the message or the state.
     #
     # Registers: rax, rbx, rcx, rdx, r8, r9, r10, r11 the working variables
     # (a to h in the first round); r12 and r13 for Σ0 and Σ1; r14 and r15
@@ -361,17 +360,14 @@ module Beryl::Crypto
         {% lines << "add #{index * 8}(%rdi), %#{names[index].id}" %}
         {% lines << "mov %#{names[index].id}, #{index * 8}(%rdi)" %}
       {% end %}
-      # The second block: eighty rounds from the table, eight per pass.
+      # The second block: eighty rounds from the table, written out in full
+      # (a loop's counting costs about one percent here).
       {% if second_block %}
         {%
-          lines << "lea 16(%rsp), %rdi"
           lines << "mov %rbx, %r14"
           lines << "xor %rcx, %r14"
-          lines << "mov $$10, %rbp"
-          lines << ".p2align 5"
-          lines << "1:"
         %}
-        {% for round in 0...8 %}
+        {% for round in 0...80 %}
           {%
             a = names[(8 - round % 8) % 8]
             b = names[(9 - round % 8) % 8]
@@ -382,7 +378,7 @@ module Beryl::Crypto
             h = names[(15 - round % 8) % 8]
             maj = round % 2 == 0 ? "r14" : "r15"
             term = round % 2 == 0 ? "r15" : "r14"
-            lines << "add #{(round // 2) * 32 + (round % 2) * 8}(%rdi), %#{h.id}"
+            lines << "add #{16 + (round // 2) * 32 + (round % 2) * 8}(%rsp), %#{h.id}"
             lines << "mov %#{f.id}, %#{term.id}"
             lines << "rorx $$41, %#{e.id}, %r12"
             lines << "rorx $$18, %#{e.id}, %r13"
@@ -408,12 +404,7 @@ module Beryl::Crypto
             lines << "add %r12, %#{h.id}"
           %}
         {% end %}
-        {%
-          lines << "add $$128, %rdi"
-          lines << "dec %rbp"
-          lines << "jnz 1b"
-          lines << "mov #{saved_state.id}, %rdi"
-        %}
+        {% lines << "mov #{saved_state.id}, %rdi" %}
         {% for index in 0...8 %}
           {% lines << "add #{index * 8}(%rdi), %#{names[index].id}" %}
           {% lines << "mov %#{names[index].id}, #{index * 8}(%rdi)" %}
