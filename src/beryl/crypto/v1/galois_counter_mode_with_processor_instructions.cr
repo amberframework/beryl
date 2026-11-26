@@ -87,6 +87,11 @@ module Beryl::Crypto::V1
     # The bytes one pass of the stitched 512-bit loop encrypts and hashes.
     STITCHED_GROUP_BYTESIZE = BLOCK_BYTESIZE * VECTOR_HASH_BLOCKS_PER_GROUP
 
+    # The longest message the stitched opening decrypts into a scratch
+    # buffer on the stack: a TLS record's 16 KiB with room to spare. A longer
+    # one is hashed first and decrypted after.
+    OPENING_SCRATCH_BYTESIZE = 17 * 1024
+
     # The bytes of the GHASH accumulator.
     ACCUMULATOR_BYTESIZE = 16
 
@@ -171,6 +176,108 @@ module Beryl::Crypto::V1
       {% else %}
         raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
       {% end %}
+    end
+
+    # Checks *tag* against the first `tag.size` bytes of the full tag of
+    # *ciphertext* and *associated_data*, and only when it is right writes
+    # the plaintext into *plaintext*; returns false, leaving *plaintext*
+    # untouched, otherwise. *counter_block* is the first counter block (J0).
+    #
+    # - A short message (fewer than 15 blocks) has its keystream and the tag
+    #   mask encrypted in one call into a staging buffer, and is XORed out
+    #   of it once the tag is right.
+    # - On the stitched 512-bit loop, a message of two groups up to
+    #   `OPENING_SCRATCH_BYTESIZE` is decrypted into a scratch buffer on the
+    #   stack while it is hashed, in one pass, and copied out once the tag
+    #   is right (as ChaCha20-Poly1305 opens on AArch64).
+    # - Otherwise the tag is computed first and the message decrypted after.
+    #
+    # The staging and scratch buffers are wiped.
+    def self.open(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
+                  associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      raise OutputSizeMismatch.new("counter mode writes as many bytes as it reads") unless plaintext.size == ciphertext.size
+
+      if ciphertext.size < GROUP_BYTESIZE - BLOCK_BYTESIZE
+        return open_short_message(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext)
+      end
+      if VECTOR_REGISTER_BITSIZE == 512 && ciphertext.size >= STITCHED_GROUP_BYTESIZE * 2 && ciphertext.size <= OPENING_SCRATCH_BYTESIZE
+        return open_through_scratch(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, tag, plaintext)
+      end
+
+      full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
+      full_tag = full_tag_storage.to_slice
+      write_tag(round_keys, round_count, hash_key_powers, counter_block, associated_data, ciphertext, full_tag)
+      return false unless Declassification.reveal(compare_tags(full_tag, tag))
+
+      xor_counter_keystream(round_keys, round_count, counter_block, ciphertext, plaintext)
+      true
+    end
+
+    # Compares *tag* with the first `tag.size` bytes of *full_tag* in
+    # constant time and wipes *full_tag*. The verdict is still secret: each
+    # caller passes it through `Declassification.reveal`.
+    private def self.compare_tags(full_tag : Bytes, tag : Bytes) : Bool
+      tags_match = ::Crypto::Subtle.constant_time_compare(full_tag[0, tag.size], tag)
+      SecretWiping.wipe(full_tag)
+      tags_match
+    end
+
+    private def self.open_short_message(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
+                                        associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      accumulator_storage = StaticArray(UInt8, 16).new(0_u8)
+      accumulator = accumulator_storage.to_slice
+      tag_mask_storage = StaticArray(UInt8, 16).new(0_u8)
+      tag_mask = tag_mask_storage.to_slice
+      keystream_storage = StaticArray(UInt8, 240).new(0_u8)
+      keystream = keystream_storage.to_slice[0, ciphertext.size]
+      encrypt_after_tag_mask(round_keys, round_count, counter_block, keystream, keystream, tag_mask)
+      absorb_closing_blocks(accumulator, hash_key_powers, associated_data, ciphertext, associated_data.size, ciphertext.size)
+      full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
+      full_tag = full_tag_storage.to_slice
+      write_masked_digest(accumulator, tag_mask, full_tag)
+      SecretWiping.wipe(tag_mask)
+      SecretWiping.wipe(accumulator)
+      is_authentic = Declassification.reveal(compare_tags(full_tag, tag))
+      if is_authentic
+        ciphertext.size.times { |index| plaintext.to_unsafe[index] = ciphertext.to_unsafe[index] ^ keystream.to_unsafe[index] }
+      end
+      SecretWiping.wipe(keystream_storage.to_slice)
+      is_authentic
+    end
+
+    private def self.open_through_scratch(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
+                                          associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      accumulator_storage = StaticArray(UInt8, 16).new(0_u8)
+      accumulator = accumulator_storage.to_slice
+      tag_mask_storage = StaticArray(UInt8, 16).new(0_u8)
+      tag_mask = tag_mask_storage.to_slice
+      scratch_storage = uninitialized UInt8[OPENING_SCRATCH_BYTESIZE]
+      scratch = scratch_storage.to_slice[0, ciphertext.size]
+      encrypt_counter_blocks(round_keys, round_count, counter_block, tag_mask, tag_mask)
+      absorb(accumulator, hash_key_powers, associated_data)
+      group_count = ciphertext.size // STITCHED_GROUP_BYTESIZE
+      {% if flag?(:x86_64) %}
+        vector_powers = hash_key_powers.to_unsafe + X8664CipherInstructions::VECTOR_HASH_KEY_POWERS_OFFSET
+        decrypt_counter_groups_and_hash_with_vector_aes(round_keys, round_count, counter_block, ciphertext.to_unsafe, scratch.to_unsafe,
+          group_count.to_u64, accumulator, vector_powers)
+      {% end %}
+      offset = group_count * STITCHED_GROUP_BYTESIZE
+      last_ciphertext = ciphertext[offset, ciphertext.size - offset]
+      last_whole_bytesize = last_ciphertext.size - last_ciphertext.size % GROUP_BYTESIZE
+      absorb_whole_blocks(accumulator, hash_key_powers, last_ciphertext[0, last_whole_bytesize])
+      absorb_closing_blocks(accumulator, hash_key_powers, Bytes.empty, last_ciphertext[last_whole_bytesize, last_ciphertext.size - last_whole_bytesize],
+        associated_data.size, ciphertext.size)
+      xor_counter_keystream(round_keys, round_count, counter_block, last_ciphertext, scratch[offset, scratch.size - offset])
+
+      full_tag_storage = StaticArray(UInt8, 16).new(0_u8)
+      full_tag = full_tag_storage.to_slice
+      write_masked_digest(accumulator, tag_mask, full_tag)
+      SecretWiping.wipe(tag_mask)
+      SecretWiping.wipe(accumulator)
+      is_authentic = Declassification.reveal(compare_tags(full_tag, tag))
+      scratch.copy_to(plaintext) if is_authentic
+      SecretWiping.wipe(scratch)
+      is_authentic
     end
 
     # Writes into *full_tag* the full tag of *ciphertext* and
@@ -456,11 +563,13 @@ module Beryl::Crypto::V1
       end
     {% end %}
 
-    # The stitched 512-bit loop, once per round count: each pass hashes the
-    # 512 bytes before its *output*. *first_hash_key_power* is the vector
-    # part of the table.
+    # The stitched 512-bit loops, once per round count: each pass of the
+    # sealing one hashes the 512 bytes before its *output*, each pass of the
+    # opening one the 512 bytes of its *input*. *first_hash_key_power* is
+    # the vector part of the table.
+    {% for kind in [{"encrypt_counter_groups_and_hash_with_vector_aes", false}, {"decrypt_counter_groups_and_hash_with_vector_aes", true}] %}
     @[NoInline]
-    private def self.encrypt_counter_groups_and_hash_with_vector_aes(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
+    private def self.{{ kind[0].id }}(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
                                                                      input : Pointer(UInt8), output : Pointer(UInt8), group_count : UInt64,
                                                                      accumulator : Bytes, first_hash_key_power : Pointer(UInt8)) : Nil
       raise OutputSizeMismatch.new("the round keys take #{BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE} bytes") unless round_keys.size == BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE
@@ -474,7 +583,7 @@ module Beryl::Crypto::V1
         {% for round_count in [10, 12, 14] %}
           if round_count == {{ round_count }}
             X8664CipherInstructions.encrypt_counter_blocks_and_hash_with_vector_aes(round_keys_pointer, counter_block_pointer, input, output, group_count,
-              {{ round_count }}, accumulator_pointer, first_hash_key_power)
+              {{ round_count }}, accumulator_pointer, first_hash_key_power, {{ kind[1] }})
             return
           end
         {% end %}
@@ -483,6 +592,7 @@ module Beryl::Crypto::V1
         raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
       {% end %}
     end
+    {% end %}
 
     # The vector GHASH loops, once per register width: groups of 32 blocks,
     # or single registers. *first_hash_key_power* points into the vector

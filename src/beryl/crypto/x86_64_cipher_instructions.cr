@@ -447,11 +447,14 @@ module Beryl::Crypto
     # into the accumulator at *accumulator* as
     # `absorb_hash_blocks_with_vector_carryless_multiply` does in groups
     # (*hash_key_powers* is the vector part of the table): the ciphertext
-    # the pass before wrote, the 512 bytes before *output*. The AES rounds
-    # and the carry-less multiplies go to different execution ports, so the
-    # two overlap; the AES and GHASH sides share no register. The first
-    # register of the group is hashed last, after the eighth round, since it
-    # alone waits for the accumulator the pass before left.
+    # the pass before wrote, the 512 bytes before *output* (a seal), or
+    # with *is_hashing_input* the pass's own 512 bytes of *input* (an
+    # opening; every load of a pass comes before its stores, so *output* may
+    # be *input*). The AES rounds and the carry-less multiplies go to
+    # different execution ports, so the two overlap; the AES and GHASH sides
+    # share no register. The first register of the group is hashed last,
+    # after the eighth round, since it alone waits for the accumulator the
+    # pass before left.
     #
     # Registers: r10 input, r11 output, rcx passes left; the round keys, the
     # counter block, the accumulator and the hash key powers are read where
@@ -462,7 +465,7 @@ module Beryl::Crypto
     # sums, xmm25 the accumulator, zmm26 and zmm27 scratch. Registers 16 and
     # up exist only in the EVEX encoding, so that side writes `vpxorq` and
     # `vmovdqu64`.
-    macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers)
+    macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers, is_hashing_input = false)
       {% template = "  mov $2, %r10\n  mov $3, %r11\n  mov $4, %rcx
   vbroadcasti32x4 8f+16(%rip), %zmm13
   vbroadcasti32x4 ($1), %zmm11
@@ -484,7 +487,8 @@ module Beryl::Crypto
       {% list_of_hash_lines = [] of String %}
       {% for register, position in [1, 2, 3, 4, 5, 6, 7, 0] %}
         {% set = position % 2 == 0 ? [16, 17, 18, 19, 20, 21] : [26, 27, 28, 29, 30, 31] %}
-        {% lines = "  vmovdqu64 #{register * 64 - 512}(%r11), %zmm#{set[0]}\n  vpshufb %zmm15, %zmm#{set[0]}, %zmm#{set[0]}\n" %}
+        {% hash_source = is_hashing_input ? "#{register * 64}(%r10)" : "#{register * 64 - 512}(%r11)" %}
+        {% lines = "  vmovdqu64 #{hash_source.id}, %zmm#{set[0]}\n  vpshufb %zmm15, %zmm#{set[0]}, %zmm#{set[0]}\n" %}
         {% if register == 0 %}
           {% lines = lines + "  vpxorq %zmm25, %zmm#{set[0]}, %zmm#{set[0]}\n" %}
         {% end %}

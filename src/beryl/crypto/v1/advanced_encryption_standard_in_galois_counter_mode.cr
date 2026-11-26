@@ -126,6 +126,21 @@ module Beryl::Crypto::V1
       SecretWiping.wipe(counter_block)
     end
 
+    # Checks the tag and decrypts on the processor's instructions, in one
+    # pass where they allow it (`GaloisCounterModeWithProcessorInstructions.open`);
+    # *plaintext* is written only when the tag is right.
+    protected def open(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
+      return super unless ProcessorFeatures::HAS_GALOIS_COUNTER_MODE_INSTRUCTIONS
+
+      counter_block_storage = uninitialized UInt8[16]
+      counter_block = counter_block_storage.to_slice
+      write_first_counter_block(nonce, counter_block)
+      is_authentic = GaloisCounterModeWithProcessorInstructions.open(@round_key_bytes, @round_count, @hash_key_powers, counter_block,
+        associated_data, ciphertext, tag, plaintext)
+      SecretWiping.wipe(counter_block)
+      is_authentic
+    end
+
     protected def compute_tag(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, full_tag : Bytes) : Nil
       counter_block_storage = uninitialized UInt8[16]
       counter_block = counter_block_storage.to_slice

@@ -236,6 +236,35 @@ describe "Beryl ciphers on the processor's instructions" do
     end
   {% end %}
 
+  it "opens AES-GCM on every opening path, in place too, and leaves the buffer untouched on a wrong tag" do
+    generator = Random.new(0x6f70_656e)
+    [16, 32].each do |key_bytesize|
+      cipher = Beryl::Crypto::V1::AESGCM.new(generator.random_bytes(key_bytesize))
+      [0, 1, 64, 239, 240, 1023, 1024, 1025, 2048 + 16 * 3 + 1, 16_384, 16_384 + 256, 17 * 1024, 17 * 1024 + 1, 40_000].each do |message_bytesize|
+        nonce = generator.random_bytes(12)
+        associated_data = generator.random_bytes(13)
+        plaintext = generator.random_bytes(message_bytesize)
+        sealed = cipher.encrypt(plaintext, nonce: nonce, associated_data: associated_data)
+
+        opened = Bytes.new(message_bytesize)
+        cipher.decrypt(sealed, into: opened, nonce: nonce, associated_data: associated_data).should be_true
+        opened.should eq(plaintext)
+
+        in_place = sealed.dup
+        cipher.decrypt(in_place, into: in_place[0, message_bytesize], nonce: nonce, associated_data: associated_data).should be_true
+        in_place[0, message_bytesize].should eq(plaintext)
+
+        sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
+        untouched = Bytes.new(message_bytesize, 0x5a_u8)
+        cipher.decrypt(sealed, into: untouched, nonce: nonce, associated_data: associated_data).should be_false
+        untouched.all?(0x5a_u8).should be_true
+        in_place = sealed.dup
+        cipher.decrypt(in_place, into: in_place[0, message_bytesize], nonce: nonce, associated_data: associated_data).should be_false
+        in_place.should eq(sealed)
+      end
+    end
+  end
+
   it "runs the AES-GCM counter across the end of its 32-bit word as the portable code does, on every path" do
     generator = Random.new(0x6374_7277)
     [16, 32].each do |key_bytesize|
