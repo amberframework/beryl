@@ -562,22 +562,43 @@ module Beryl::Crypto::FieldArithmetic
         {% end %}
         {% if operation == "mul" || operation == "mulx_square" %}
           {% low = [product[0], product[1], product[2], product[3]] %}
-          {% for step_index in 0..3 %}
+          {% if operation == "mulx_square" %}
             {%
-              word = low[0]
-              lines << "movq #{word.id}, %rax"
-              lines << "shlq $$32, %rax"
-              lines << "movq #{word.id}, %rdx"
-              lines << "shrq $$32, %rdx"
-              lines << "movq #{word.id}, %rcx"
-              lines << "subq %rax, %rcx"
-              lines << "sbbq %rdx, #{word.id}"
-              lines << "addq %rax, #{low[1].id}"
-              lines << "adcq %rdx, #{low[2].id}"
-              lines << "adcq %rcx, #{low[3].id}"
-              lines << "adcq $$0, #{word.id}"
-              low = [low[1], low[2], low[3], low[0]]
+              # With `mulx`, as OpenSSL's `__ecp_nistz256_sqr_montx`: rdx
+              # holds p's top word, and m·(2^64 - 2^32 + 1) is one `mulx`.
+              lines << "movabsq $$0xffffffff00000001, %rdx"
             %}
+          {% end %}
+          {% for step_index in 0..3 %}
+            {% word = low[0] %}
+            {% if operation == "mulx_square" %}
+              {%
+                lines << "movq #{word.id}, %rax"
+                lines << "shlq $$32, %rax"
+                lines << "movq #{word.id}, %rcx"
+                lines << "shrq $$32, %rcx"
+                lines << "addq %rax, #{low[1].id}"
+                lines << "adcq %rcx, #{low[2].id}"
+                lines << "mulxq #{word.id}, %rax, #{word.id}"
+                lines << "adcq %rax, #{low[3].id}"
+                lines << "adcq $$0, #{word.id}"
+              %}
+            {% else %}
+              {%
+                lines << "movq #{word.id}, %rax"
+                lines << "shlq $$32, %rax"
+                lines << "movq #{word.id}, %rdx"
+                lines << "shrq $$32, %rdx"
+                lines << "movq #{word.id}, %rcx"
+                lines << "subq %rax, %rcx"
+                lines << "sbbq %rdx, #{word.id}"
+                lines << "addq %rax, #{low[1].id}"
+                lines << "adcq %rdx, #{low[2].id}"
+                lines << "adcq %rcx, #{low[3].id}"
+                lines << "adcq $$0, #{word.id}"
+              %}
+            {% end %}
+            {% low = [low[1], low[2], low[3], low[0]] %}
           {% end %}
           {%
             lines << "addq #{product[4].id}, #{product[0].id}"
