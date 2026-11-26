@@ -99,12 +99,12 @@ module Beryl::Crypto::V1
           {offset: 0, accumulator: "r8", first: "r10", second: "r11", third: "rbp",
            broadcast_b: "zmm1", broadcast_y: "zmm2", sums: (5...(5 + register_count)).to_a.map { |index| "zmm#{index}" },
            carries: (15...(15 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 32,
-           carries_or_kept: (15...20).to_a.map { |index| "zmm#{index}" },
+           carries_or_kept: (15...20).to_a.map { |index| "zmm#{index}" }, first_columns: "zmm29",
            greater: half_count == 1 ? ["r10", "r12"] : ["r10"], equal: half_count == 1 ? ["r11", "r13"] : ["r11"]},
           {offset: 8 * padded_digit_count, accumulator: "r9", first: "r12", second: "r13", third: "r14",
            broadcast_b: "zmm3", broadcast_y: "zmm4", sums: (10...(10 + register_count)).to_a.map { |index| "zmm#{index}" },
            carries: (20...(20 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 40,
-           carries_or_kept: (20...25).to_a.map { |index| "zmm#{index}" },
+           carries_or_kept: (20...25).to_a.map { |index| "zmm#{index}" }, first_columns: "zmm30",
            greater: ["r12"], equal: ["r13"]},
         ]
         halves = halves[0...half_count]
@@ -126,8 +126,10 @@ module Beryl::Crypto::V1
         # The diagonal D = sum of (a_k² + t_(k-1)·a_k)·B^(2k), where t_k is
         # the top bit of a_k (the carry of 2a_k): column 2k takes the low
         # half of a_k² and t_(k-1)·a_k, column 2k + 1 the high half. Its
-        # columns below d start the sums; the rest are kept (in the
-        # registers the carries use later) and added at the end.
+        # columns 8 to d - 1 start the sums; the first eight are added at
+        # the second digit (the first digit takes a_0² from mulx, as a
+        # multiplication does, so it need not wait for them); the rest are
+        # kept (in the registers the carries use later) and added at the end.
         {%
           lines << "movabsq $$0x0b030a0209010800, %rdx"
           lines << "vmovq %rdx, %xmm1"
@@ -147,17 +149,19 @@ module Beryl::Crypto::V1
               lines << "vpmadd52luq %zmm27, %zmm27, %zmm26"
               lines << "vpxorq %zmm28, %zmm28, %zmm28"
               lines << "vpmadd52huq %zmm27, %zmm27, %zmm28"
-              lines << "vpsrlq $$51, %zmm27, %zmm29"
-              lines << "valignq $$7, %zmm31, %zmm29, %zmm30"
-              lines << "vmovdqa64 %zmm29, %zmm31"
-              lines << "vpsubq %zmm30, %zmm0, %zmm30"
-              lines << "vpandq %zmm27, %zmm30, %zmm30"
-              lines << "vpaddq %zmm30, %zmm26, %zmm26"
+              lines << "vpsrlq $$51, %zmm27, %zmm3"
+              lines << "valignq $$7, %zmm31, %zmm3, %zmm4"
+              lines << "vmovdqa64 %zmm3, %zmm31"
+              lines << "vpsubq %zmm4, %zmm0, %zmm4"
+              lines << "vpandq %zmm27, %zmm4, %zmm4"
+              lines << "vpaddq %zmm4, %zmm26, %zmm26"
             %}
             {% for part in [0, 1] %}
               {% column_register = 2 * index + part %}
               {% index_vector = part == 0 ? "zmm1" : "zmm2" %}
-              {% if column_register < whole_register_count %}
+              {% if column_register == 0 %}
+                {% target = half[:first_columns] %}
+              {% elsif column_register < whole_register_count %}
                 {% target = half[:sums][column_register] %}
               {% else %}
                 {% target = half[:carries_or_kept][column_register - whole_register_count] %}
@@ -191,6 +195,10 @@ module Beryl::Crypto::V1
               lines << "add %#{first.id}, %#{first.id}"
               lines << "and %rax, %#{first.id}"
             %}
+            {% if digit == 1 %}
+              {% lines << "valignq $$1, %#{half[:first_columns].id}, %zmm0, %zmm26" %}
+              {% lines << "vpaddq %zmm26, %#{half[:sums][0].id}, %#{half[:sums][0].id}" %}
+            {% end %}
             {% if digit > 0 %}
               {%
                 lines << "mov #{half[:offset] + 8 * (digit - 1)}(%rsi), %#{third.id}"
@@ -209,17 +217,14 @@ module Beryl::Crypto::V1
             third = half[:third]
             offset = half[:offset]
           %}
-          {% if !square %}
+          {% if !square || digit == 0 %}
+            {% lines << "vpbroadcastq #{offset + 8 * digit}(%rdi), %#{half[:broadcast_b].id}" if !square %}
             {%
-              lines << "vpbroadcastq #{offset + 8 * digit}(%rdi), %#{half[:broadcast_b].id}"
               lines << "mov #{offset}(%rsi), %rdx"
               lines << "mulx #{offset + 8 * digit}(%rdi), %#{first.id}, %#{second.id}"
               lines << "add %#{first.id}, %#{accumulator.id}"
               lines << "adc $$0, %#{second.id}"
             %}
-          {% elsif digit == 0 %}
-            {% lines << "vmovq %#{half[:sums][0].gsub(/zmm/, "xmm").id}, %#{accumulator.id}" %}
-            {% lines << "xor %#{second.id}, %#{second.id}" %}
           {% else %}
             {% lines << "xor %#{second.id}, %#{second.id}" %}
           {% end %}
