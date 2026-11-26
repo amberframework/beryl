@@ -618,23 +618,26 @@ module Beryl::Crypto::FieldArithmetic
     # (OpenSSL's `ecp_nistz256_point_double`) *doublings* times and then,
     # when *other* is given, those of `Point#add_unchecked`
     # (add-1998-cmo-2, 12M + 4S) with the point at *other*. Points are X, Y
-    # and Z, 32 bytes each; *scratch* holds 72 words for the values in
-    # between, and *wide* picks `mulx` over `mulq`.
+    # and Z, 32 bytes each; *scratch* holds 80 words for the values in
+    # between (and the masks, below), and *wide* picks `mulx` over `mulq`.
+    # A statement takes three pointers at most: with 11 registers named
+    # as clobbered, a build that keeps the frame pointer has three left.
     #
-    # The first doubling (or, with no doubling, the addition) reads the
-    # point at *input* and every later step works on the point at *state*,
-    # where the result is left; *input* may be *state*. Each doubling reads
+    # The first doubling reads the point at *input*, if given, and every
+    # later step works on the point at *state*, where the result is left.
+    # Each doubling reads
     # its point for the last time before it writes X, Y and Z (Z after Z
     # is read), and the addition reads the first point before it writes
     # the sum, so the work is done in place.
     #
-    # With *masks* (three words, each all ones or zero, then four zero
-    # words) the statement is one window of `multiply_constant_time`: Y of
+    # With *masks* true, words 72 to 74 of *scratch* hold three masks
+    # (each all ones or zero) and words 76 to 79 zero, and the statement is
+    # one window of `multiply_constant_time`: Y of
     # *other* is replaced by -Y under the first mask (in place), the sum by
     # *other* under the second (the running sum was infinity), and the
     # result by the doubled point under the third (the digit was zero), as
     # `signed_multiple` and `Point#replace_if` do.
-    macro p256_x86_64_point_statement(wide, scratch, input, state, doublings, other = nil, masks = nil)
+    macro p256_x86_64_point_statement(wide, scratch, state, doublings, input = nil, other = nil, masks = false)
       {%
         multiply = wide ? "mulx" : "mul"
         square = wide ? "mulx_square" : "mul"
@@ -643,13 +646,20 @@ module Beryl::Crypto::FieldArithmetic
         state_z = {"$1", 64}
         slot = (0..17).map { |index| {"$0", 32 * index} }
         steps = [] of TupleLiteral
-        pointers = [scratch, state, input]
+        pointers = [scratch, state]
+        input_name = "$1"
+        other_name = "$2"
+        if input
+          pointers = pointers + [input]
+          input_name = "$2"
+          other_name = "$3"
+        end
       %}
       {% for round in 0...doublings %}
         {%
-          x = round == 0 ? {"$2", 0} : state_x
-          y = round == 0 ? {"$2", 32} : state_y
-          z = round == 0 ? {"$2", 64} : state_z
+          x = round == 0 ? {input_name, 0} : state_x
+          y = round == 0 ? {input_name, 32} : state_y
+          z = round == 0 ? {input_name, 64} : state_z
           steps = steps + [
             {"add", slot[0], y, y},
             {square, slot[1], z, z},
@@ -676,22 +686,21 @@ module Beryl::Crypto::FieldArithmetic
       {% if other %}
         {%
           pointers = pointers + [other]
-          x1 = doublings == 0 ? {"$2", 0} : state_x
-          y1 = doublings == 0 ? {"$2", 32} : state_y
-          z1 = doublings == 0 ? {"$2", 64} : state_z
-          x2 = {"$3", 0}
-          y2 = {"$3", 32}
-          z2 = {"$3", 64}
+          x1 = doublings == 0 ? {input_name, 0} : state_x
+          y1 = doublings == 0 ? {input_name, 32} : state_y
+          z1 = doublings == 0 ? {input_name, 64} : state_z
+          x2 = {other_name, 0}
+          y2 = {other_name, 32}
+          z2 = {other_name, 64}
           sum_x = masks ? slot[14] : state_x
           sum_y = masks ? slot[15] : state_y
           sum_z = masks ? slot[16] : state_z
         %}
         {% if masks %}
           {%
-            pointers = pointers + [masks]
-            negative = {"$4", 0}
+            negative = {"$0", 576}
             steps = steps + [
-              {"sub", slot[17], {"$4", 32}, y2},
+              {"sub", slot[17], {"$0", 608}, y2},
               {"csel", y2, y2, slot[17], negative},
             ]
           %}
@@ -725,8 +734,8 @@ module Beryl::Crypto::FieldArithmetic
         %}
         {% if masks %}
           {%
-            infinity = {"$4", 8}
-            zero_digit = {"$4", 16}
+            infinity = {"$0", 584}
+            zero_digit = {"$0", 592}
             steps = steps + [
               {"csel", slot[14], slot[14], x2, infinity},
               {"csel", slot[15], slot[15], y2, infinity},

@@ -388,18 +388,18 @@ module Beryl::Crypto::V1
         protected def self.x86_64_doubled(point : Point, count : Int32) : Point
           input = point
           doubled = uninitialized Point
-          scratch = uninitialized StaticArray(UInt64, 72)
+          scratch = uninitialized StaticArray(UInt64, 80)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
             if count == 5
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(doubled), 5, input: pointerof(input))
             else
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(input), pointerof(doubled), 1)
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true, pointerof(scratch), pointerof(doubled), 1, input: pointerof(input))
             end
           else
             if count == 5
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(input), pointerof(doubled), 5)
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(doubled), 5, input: pointerof(input))
             else
-              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(input), pointerof(doubled), 1)
+              ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false, pointerof(scratch), pointerof(doubled), 1, input: pointerof(input))
             end
           end
           doubled
@@ -486,16 +486,15 @@ module Beryl::Crypto::V1
       def add_unchecked(other : Point) : Point
         {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
           # P-256 on x86-64: the same steps in one assembly statement.
-          first = self
+          sum = self
           second = other
-          sum = uninitialized Point
-          scratch = uninitialized StaticArray(UInt64, 72)
+          scratch = uninitialized StaticArray(UInt64, 80)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
-              pointerof(scratch), pointerof(first), pointerof(sum), 0, pointerof(second))
+              pointerof(scratch), pointerof(sum), 0, other: pointerof(second))
           else
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
-              pointerof(scratch), pointerof(first), pointerof(sum), 0, pointerof(second))
+              pointerof(scratch), pointerof(sum), 0, other: pointerof(second))
           end
           return sum
         {% end %}
@@ -729,24 +728,24 @@ module Beryl::Crypto::V1
         # P-256 on x86-64: each window (the five doublings, the negation
         # of the picked multiple, the addition and both replacements) in one
         # assembly statement on a point only the assembly reads until the
-        # end, with the masks of `signed_multiple` and `replace_if`.
+        # end, with the masks of `signed_multiple` and `replace_if` in words
+        # 72 to 74 of the scratch space (76 to 79 stay zero).
         state = result
-        masks = StaticArray(UInt64, 8).new(0_u64)
-        scratch = uninitialized StaticArray(UInt64, 72)
+        scratch = StaticArray(UInt64, 80).new(0_u64)
         (GENERATOR_WINDOW_COUNT - 2).downto(0) do |window_index|
           digit, is_negative = booth_digit(scalar, window_index)
           is_zero = ConstantTimeSelection.equal_bit(digit, 0_u64)
           stand_in_index = (window_index & 15).to_u64
           selected = select_multiple(multiples_pointer, (digit &- 1_u64) &+ (ConstantTimeSelection.mask_of(is_zero) & (stand_in_index &+ 1_u64)))
-          masks[0] = ConstantTimeSelection.mask_of(is_negative)
-          masks[1] = ConstantTimeSelection.mask_of(is_infinity)
-          masks[2] = ConstantTimeSelection.mask_of(is_zero)
+          scratch[72] = ConstantTimeSelection.mask_of(is_negative)
+          scratch[73] = ConstantTimeSelection.mask_of(is_infinity)
+          scratch[74] = ConstantTimeSelection.mask_of(is_zero)
           if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(true,
-              pointerof(scratch), pointerof(state), pointerof(state), 5, pointerof(selected), pointerof(masks))
+              pointerof(scratch), pointerof(state), 5, other: pointerof(selected), masks: true)
           else
             ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_point_statement(false,
-              pointerof(scratch), pointerof(state), pointerof(state), 5, pointerof(selected), pointerof(masks))
+              pointerof(scratch), pointerof(state), 5, other: pointerof(selected), masks: true)
           end
           is_infinity &= is_zero
         end
