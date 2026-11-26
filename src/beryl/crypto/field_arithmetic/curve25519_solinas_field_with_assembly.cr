@@ -4,7 +4,7 @@ module Beryl::Crypto::FieldArithmetic
   # :nodoc:
   #
   # Arithmetic modulo p = 2^255 - 19 on four saturated 64-bit words, for the
-  # X25519 ladder: any 256-bit value stands for itself modulo p, and every
+  # X25519 ladder and Ed25519 verification: any 256-bit value stands for itself modulo p, and every
   # function takes any four words and returns four words, reduced modulo
   # 2^256 - 38 = 2·p but not below p. This is the representation of
   # OpenSSL's `x25519-x86_64` (radix 2^64) rather than fiat-crypto's five
