@@ -84,6 +84,9 @@ module Beryl::Crypto::V1
     # H and reduces once.
     VECTOR_HASH_BLOCKS_PER_GROUP = 32
 
+    # The bytes one pass of the stitched 512-bit loop encrypts and hashes.
+    STITCHED_GROUP_BYTESIZE = BLOCK_BYTESIZE * VECTOR_HASH_BLOCKS_PER_GROUP
+
     # The bytes of the GHASH accumulator.
     ACCUMULATOR_BYTESIZE = 16
 
@@ -129,6 +132,9 @@ module Beryl::Crypto::V1
         encrypt_counter_blocks(round_keys, round_count, counter_block, tag_mask, tag_mask)
         absorb(accumulator, hash_key_powers, associated_data)
         offset = 0
+        if VECTOR_REGISTER_BITSIZE == 512 && plaintext.size >= STITCHED_GROUP_BYTESIZE * 2
+          offset = seal_stitched_groups(round_keys, round_count, hash_key_powers, counter_block, accumulator, plaintext, ciphertext)
+        end
         while plaintext.size - offset > SEALING_CHUNK_BYTESIZE
           chunk_ciphertext = ciphertext[offset, SEALING_CHUNK_BYTESIZE]
           encrypt_counter_blocks(round_keys, round_count, counter_block, plaintext[offset, SEALING_CHUNK_BYTESIZE], chunk_ciphertext)
@@ -146,6 +152,25 @@ module Beryl::Crypto::V1
 
       SecretWiping.wipe(tag_mask)
       SecretWiping.wipe(accumulator)
+    end
+
+    # Seals the whole 512-byte groups at the start of *plaintext* (at least
+    # two) on the stitched 512-bit loop: the first group in counter mode
+    # alone, then each further group encrypted while the one before it is
+    # hashed, then the last group hashed alone. Returns the bytes sealed.
+    private def self.seal_stitched_groups(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
+                                          accumulator : Bytes, plaintext : Bytes, ciphertext : Bytes) : Int32
+      {% if flag?(:x86_64) %}
+        group_count = plaintext.size // STITCHED_GROUP_BYTESIZE
+        vector_powers = hash_key_powers.to_unsafe + X8664CipherInstructions::VECTOR_HASH_KEY_POWERS_OFFSET
+        encrypt_counter_groups_with_vector_aes(round_keys, round_count, counter_block, plaintext.to_unsafe, ciphertext.to_unsafe, 1_u64)
+        encrypt_counter_groups_and_hash_with_vector_aes(round_keys, round_count, counter_block, plaintext.to_unsafe + STITCHED_GROUP_BYTESIZE,
+          ciphertext.to_unsafe + STITCHED_GROUP_BYTESIZE, (group_count - 1).to_u64, accumulator, vector_powers)
+        absorb_groups_with_vector_carryless_multiply(accumulator, vector_powers, ciphertext.to_unsafe + (group_count - 1) * STITCHED_GROUP_BYTESIZE, 1_u64)
+        group_count * STITCHED_GROUP_BYTESIZE
+      {% else %}
+        raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
+      {% end %}
     end
 
     # Writes into *full_tag* the full tag of *ciphertext* and
@@ -430,6 +455,34 @@ module Beryl::Crypto::V1
         raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
       end
     {% end %}
+
+    # The stitched 512-bit loop, once per round count: each pass hashes the
+    # 512 bytes before its *output*. *first_hash_key_power* is the vector
+    # part of the table.
+    @[NoInline]
+    private def self.encrypt_counter_groups_and_hash_with_vector_aes(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
+                                                                     input : Pointer(UInt8), output : Pointer(UInt8), group_count : UInt64,
+                                                                     accumulator : Bytes, first_hash_key_power : Pointer(UInt8)) : Nil
+      raise OutputSizeMismatch.new("the round keys take #{BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE} bytes") unless round_keys.size == BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE
+      raise OutputSizeMismatch.new("a counter block is #{BLOCK_BYTESIZE} bytes") unless counter_block.size == BLOCK_BYTESIZE
+      raise OutputSizeMismatch.new("the GHASH accumulator is #{ACCUMULATOR_BYTESIZE} bytes") unless accumulator.size == ACCUMULATOR_BYTESIZE
+
+      {% if flag?(:x86_64) %}
+        round_keys_pointer = round_keys.to_unsafe
+        counter_block_pointer = counter_block.to_unsafe
+        accumulator_pointer = accumulator.to_unsafe
+        {% for round_count in [10, 12, 14] %}
+          if round_count == {{ round_count }}
+            X8664CipherInstructions.encrypt_counter_blocks_and_hash_with_vector_aes(round_keys_pointer, counter_block_pointer, input, output, group_count,
+              {{ round_count }}, accumulator_pointer, first_hash_key_power)
+            return
+          end
+        {% end %}
+        raise KeySizeMismatch.new("AES runs 10, 12 or 14 rounds, not #{round_count}")
+      {% else %}
+        raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
+      {% end %}
+    end
 
     # The vector GHASH loops, once per register width: groups of 32 blocks,
     # or single registers. *first_hash_key_power* points into the vector

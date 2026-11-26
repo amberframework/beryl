@@ -439,6 +439,109 @@ module Beryl::Crypto
           "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "memory", "flags")
     end
 
+    # Counter mode and GHASH in one loop on 512-bit registers (the stitched
+    # arrangement of OpenSSL's `aes-gcm-avx512` and Linux's
+    # `aes-gcm-avx10-x86_64.S`): each of *group_count* passes (at least 1)
+    # encrypts 32 counter blocks as `encrypt_counter_blocks_with_vector_aes`
+    # does with eight registers, and between its AES rounds hashes the 32
+    # blocks at *hash_input* into the accumulator at *accumulator* as
+    # `absorb_hash_blocks_with_vector_carryless_multiply` does in groups
+    # (*hash_key_powers* is the vector part of the table). Both move on by
+    # 512 bytes a pass. The AES rounds and the carry-less multiplies go to
+    # different execution ports, so the two overlap. A seal hashes the
+    # ciphertext the pass before wrote, *hash_input* trailing *output* by
+    # one pass; the AES and GHASH sides share no register.
+    #
+    # Registers: as `encrypt_counter_blocks_with_vector_aes` for the AES side
+    # (r8 to r11, rcx, rax, zmm0 to zmm14); rdx the accumulator, rsi hash key
+    # powers, rdi the blocks to hash; zmm15 the mask that reverses sixteen
+    # bytes, zmm16 a register of blocks to hash, zmm17 its powers, zmm18 to
+    # zmm21 the partial products, zmm22 to zmm24 their sums, xmm25 the
+    # accumulator, zmm26 and zmm27 scratch. Registers 16 and up exist only
+    # in the EVEX encoding, so that side writes `vpxorq` and `vmovdqu64`.
+    macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers)
+      {% template = "  mov $2, %r10\n  mov $3, %r11\n  mov $4, %rcx
+  vbroadcasti32x4 8f+16(%rip), %zmm13
+  vbroadcasti32x4 ($1), %zmm11
+  vpshufb %zmm13, %zmm11, %zmm11
+  vpaddd 8f+32(%rip), %zmm11, %zmm11
+  vbroadcasti32x4 8f+96(%rip), %zmm12
+  vbroadcasti32x4 ($0), %zmm14
+  vbroadcasti32x4 #{round_count * 16}($0), %zmm10
+  vbroadcasti32x4 8f(%rip), %zmm15
+  vmovdqu64 ($5), %xmm25
+1:
+  vpxorq %xmm22, %xmm22, %xmm22
+  vpxorq %xmm23, %xmm23, %xmm23
+  vpxorq %xmm24, %xmm24, %xmm24
+" %}
+      {% for register in 0...8 %}
+        {% template = template + "  vpshufb %zmm13, %zmm11, %zmm#{register}
+  vpaddd %zmm12, %zmm11, %zmm11
+  vpxord %zmm14, %zmm#{register}, %zmm#{register}
+" %}
+      {% end %}
+      {% list_of_hash_lines = [] of String %}
+      {% for register in 0...8 %}
+        {% lines = "  vmovdqu64 #{register * 64 - 512}(%r11), %zmm16\n  vpshufb %zmm15, %zmm16, %zmm16\n" %}
+        {% if register == 0 %}
+          {% lines = lines + "  vpxorq %zmm25, %zmm16, %zmm16\n" %}
+        {% end %}
+        {% lines = lines + "  vmovdqu64 #{register * 64}($6), %zmm17
+  vpclmulqdq $$0x00, %zmm17, %zmm16, %zmm18
+  vpclmulqdq $$0x11, %zmm17, %zmm16, %zmm19
+  vpclmulqdq $$0x01, %zmm17, %zmm16, %zmm20
+  vpclmulqdq $$0x10, %zmm17, %zmm16, %zmm21
+  vpxorq %zmm18, %zmm22, %zmm22
+  vpxorq %zmm19, %zmm23, %zmm23
+  vpternlogq $$0x96, %zmm21, %zmm20, %zmm24
+" %}
+        {% list_of_hash_lines = list_of_hash_lines + [lines] %}
+      {% end %}
+      {% reduction_lines = "  vextracti64x4 $$1, %zmm22, %ymm26\n  vpxorq %ymm26, %ymm22, %ymm22\n  vextracti32x4 $$1, %ymm22, %xmm26\n  vpxorq %xmm26, %xmm22, %xmm22
+  vextracti64x4 $$1, %zmm23, %ymm26\n  vpxorq %ymm26, %ymm23, %ymm23\n  vextracti32x4 $$1, %ymm23, %xmm26\n  vpxorq %xmm26, %xmm23, %xmm23
+  vextracti64x4 $$1, %zmm24, %ymm26\n  vpxorq %ymm26, %ymm24, %ymm24\n  vextracti32x4 $$1, %ymm24, %xmm26\n  vpxorq %xmm26, %xmm24, %xmm24
+  vpslldq $$8, %xmm24, %xmm26
+  vpsrldq $$8, %xmm24, %xmm24
+  vpxorq %xmm26, %xmm22, %xmm22
+  vpxorq %xmm24, %xmm23, %xmm23
+" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_REDUCTION_LINES.gsub(/vpxor /, "vpxorq ").gsub(/@L/, "%xmm22").gsub(/@H/, "%xmm23").gsub(/@A/, "%xmm26").gsub(/@B/, "%xmm27") + "  vmovdqa64 %xmm22, %xmm25\n" %}
+      {% for round in 1...round_count %}
+        {% template = template + "  vbroadcasti32x4 #{round * 16}($0), %zmm8\n" %}
+        {% for register in 0...8 %}
+          {% template = template + "  vaesenc %zmm8, %zmm#{register}, %zmm#{register}\n" %}
+        {% end %}
+        {% if round <= 8 %}
+          {% template = template + list_of_hash_lines[round - 1] %}
+        {% end %}
+        {% if round == 9 %}
+          {% template = template + reduction_lines %}
+        {% end %}
+      {% end %}
+      {% for register in 0...8 %}
+        {% template = template + "  vmovdqu64 #{register * 64}(%r10), %zmm9
+  vpxord %zmm10, %zmm9, %zmm9
+  vaesenclast %zmm9, %zmm#{register}, %zmm#{register}
+  vmovdqu64 %zmm#{register}, #{register * 64}(%r11)
+" %}
+      {% end %}
+      {% template = template + "  add $$512, %r10
+  add $$512, %r11
+  dec %rcx
+  jnz 1b
+  vpshufb %xmm13, %xmm11, %xmm11
+  vmovdqu %xmm11, ($1)
+  vmovdqu64 %xmm25, ($5)
+  vzeroupper
+" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_CONSTANT_LINES %}
+      asm({{ template }} :: "r"({{ round_keys }}), "r"({{ counter_block }}), "r"({{ input }}), "r"({{ output }}), "r"({{ group_count }}),
+        "r"({{ accumulator }}), "r"({{ hash_key_powers }})
+        : "rcx", "r10", "r11",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
+          "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "xmm16", "xmm17", "xmm18", "xmm19",
+          "xmm20", "xmm21", "xmm22", "xmm23", "xmm24", "xmm25", "xmm26", "xmm27", "memory", "flags")
+    end
+
     # GHASH on VPCLMULQDQ: what `absorb_hash_blocks` does, with the blocks of
     # a register multiplied by their powers in one instruction per partial
     # product. *register_bitsize* is 512 (four blocks a register) or 256
