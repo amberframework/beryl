@@ -494,8 +494,12 @@ module Beryl::Crypto
     # opening; every load of a pass comes before its stores, so *output* may
     # be *input*). The AES rounds and the carry-less multiplies go to
     # different execution ports, so the two overlap; the AES and GHASH sides
-    # share no register. The first register of the group is hashed last,
-    # after the eighth round, since it alone waits for the accumulator the
+    # share no register. The nine pieces of hash work (eight registers, then
+    # the reduction) are spread evenly over the rounds before the last (after
+    # rounds 1 to 9 for AES-128, 1, 2, 4, 5, 7, 8, 10, 11 and 13 for
+    # AES-256), so that the shared port never has more work in a stretch
+    # than the AES port has rounds to cover it. The first register of the
+    # group is hashed last, since it alone waits for the accumulator the
     # pass before left.
     #
     # With *is_counter_aligned*, the caller guarantees that the counter word
@@ -577,11 +581,10 @@ module Beryl::Crypto
         {% for register in 0...8 %}
           {% template = template + "  vaesenc %zmm8, %zmm#{register}, %zmm#{register}\n" %}
         {% end %}
-        {% if round <= 8 %}
-          {% template = template + list_of_hash_lines[round - 1] %}
-        {% end %}
-        {% if round == 9 %}
-          {% template = template + reduction_lines %}
+        {% for chunk in 0..8 %}
+          {% if round == 1 + chunk * (round_count - 2) // 8 %}
+            {% template = template + (chunk < 8 ? list_of_hash_lines[chunk] : reduction_lines) %}
+          {% end %}
         {% end %}
       {% end %}
       {% for register in 0...8 %}
