@@ -85,8 +85,10 @@ module Beryl::Crypto
     # The constants the vector statements read after their code: the mask
     # that reverses sixteen bytes (offset 0); the mask that reverses only the
     # last four, the counter word (16); the numbers 0, 1, 2 and 3 in the last
-    # word of four blocks, the offsets of the lanes' counters (32); and 4
-    # (96) and 2 (112) in the last word, the step of a register's counters.
+    # word of four blocks, the offsets of the lanes' counters (32); 4 (96)
+    # and 2 (112) in the last word, the step of a register's counters; and
+    # four copies of the reduction constant of `CONSTANT_LINES`, 0xc2 in the
+    # highest byte, one for each lane (128).
     VECTOR_CONSTANT_LINES = "  jmp 9f\n  .p2align 6\n8:
   .quad 0x08090a0b0c0d0e0f\n  .quad 0x0001020304050607
   .quad 0x0706050403020100\n  .quad 0x0c0d0e0f0b0a0908
@@ -96,6 +98,10 @@ module Beryl::Crypto
   .quad 0x0000000000000000\n  .quad 0x0000000300000000
   .quad 0x0000000000000000\n  .quad 0x0000000400000000
   .quad 0x0000000000000000\n  .quad 0x0000000200000000
+  .quad 0x0000000000000001\n  .quad 0xc200000000000000
+  .quad 0x0000000000000001\n  .quad 0xc200000000000000
+  .quad 0x0000000000000001\n  .quad 0xc200000000000000
+  .quad 0x0000000000000001\n  .quad 0xc200000000000000
 9:
 "
 
@@ -128,6 +134,25 @@ module Beryl::Crypto
     # reverses sixteen bytes, then the twisting polynomial (1 in the lowest
     # byte, 0xc2 in the highest).
     CONSTANT_LINES = "  jmp 9f\n  .p2align 4\n8:\n  .quad 0x08090a0b0c0d0e0f\n  .quad 0x0001020304050607\n  .quad 0x0000000000000001\n  .quad 0xc200000000000000\n9:\n"
+
+    # Reduces, lane by lane, the 256-bit products whose low, middle and high
+    # 128-bit parts are summed in `@LO`, `@MI` and `@HI` (the full product
+    # being HI x^128 + MI x^64 + LO), leaving the result in `@HI`, with `@T`
+    # as scratch; `@C` is a register or memory operand holding the reduction
+    # constant in the high 64 bits of each lane. This is `REDUCTION_LINES`
+    # written with carry-less multiplies: the left shifts by 57, 62 and 63
+    # there are the low half of a multiply by that constant, the right
+    # shifts by 1, 2 and 7 its high half, so two multiplies (each folding
+    # 64 bits) and two swaps of halves replace the twenty shifts and
+    # exclusive ors, and the middle part folds in on the way (the method of
+    # Linux's `aes-gcm-avx10-x86_64.S`). `@X3` names the three-way
+    # exclusive or (`vpternlogq $$0x96`, or two `vpxor`). Linear, so the
+    # lanes can be summed after it.
+    VECTOR_LANE_REDUCTION_LINES = "  vpclmulqdq $$0x10, @C, @LO, @T
+  vpshufd $$0x4e, @LO, @LO
+@X3(@T, @LO, @MI)  vpclmulqdq $$0x10, @C, @MI, @T
+  vpshufd $$0x4e, @MI, @MI
+@X3(@T, @MI, @HI)"
 
     # Reduces the 256-bit product with its low half in register `@L` and its
     # high half in `@H` to 128 bits in `@L` (OpenSSL's `reduction_alg9`),
@@ -474,9 +499,6 @@ module Beryl::Crypto
   vbroadcasti32x4 8f(%rip), %zmm15
   vmovdqu64 ($5), %xmm25
 1:
-  vpxorq %xmm22, %xmm22, %xmm22
-  vpxorq %xmm23, %xmm23, %xmm23
-  vpxorq %xmm24, %xmm24, %xmm24
 " %}
       {% for register in 0...8 %}
         {% template = template + "  vpshufb %zmm13, %zmm11, %zmm#{register}
@@ -485,30 +507,27 @@ module Beryl::Crypto
 " %}
       {% end %}
       {% list_of_hash_lines = [] of String %}
-      {% for register in [1, 2, 3, 4, 5, 6, 7, 0] %}
-        {% lines = "  vmovdqu64 #{register * 64 - 512}(%r11), %zmm16\n  vpshufb %zmm15, %zmm16, %zmm16\n" %}
+      {% for register, position in [1, 2, 3, 4, 5, 6, 7, 0] %}
+        {% set = position % 2 == 0 ? [16, 17, 18, 19, 20, 21] : [26, 27, 28, 29, 30, 31] %}
+        {% lines = "  vmovdqu64 #{register * 64 - 512}(%r11), %zmm#{set[0]}\n  vpshufb %zmm15, %zmm#{set[0]}, %zmm#{set[0]}\n" %}
         {% if register == 0 %}
-          {% lines = lines + "  vpxorq %zmm25, %zmm16, %zmm16\n" %}
+          {% lines = lines + "  vpxorq %zmm25, %zmm#{set[0]}, %zmm#{set[0]}\n" %}
         {% end %}
-        {% lines = lines + "  vmovdqu64 #{register * 64}($6), %zmm17
-  vpclmulqdq $$0x00, %zmm17, %zmm16, %zmm18
-  vpclmulqdq $$0x11, %zmm17, %zmm16, %zmm19
-  vpclmulqdq $$0x01, %zmm17, %zmm16, %zmm20
-  vpclmulqdq $$0x10, %zmm17, %zmm16, %zmm21
-  vpxorq %zmm18, %zmm22, %zmm22
-  vpxorq %zmm19, %zmm23, %zmm23
-  vpternlogq $$0x96, %zmm21, %zmm20, %zmm24
+        {% lines = lines + "  vmovdqu64 #{register * 64}($6), %zmm#{set[1]}
+  vpclmulqdq $$0x00, %zmm#{set[1]}, %zmm#{set[0]}, %zmm#{set[2]}
+  vpclmulqdq $$0x11, %zmm#{set[1]}, %zmm#{set[0]}, %zmm#{set[3]}
+  vpclmulqdq $$0x01, %zmm#{set[1]}, %zmm#{set[0]}, %zmm#{set[4]}
+  vpclmulqdq $$0x10, %zmm#{set[1]}, %zmm#{set[0]}, %zmm#{set[5]}
 " %}
+        {% if position == 1 %}
+          {% lines = lines + "  vpxorq %zmm28, %zmm18, %zmm22\n  vpxorq %zmm29, %zmm19, %zmm23\n  vpternlogq $$0x96, %zmm21, %zmm20, %zmm30\n  vpxorq %zmm31, %zmm30, %zmm24\n" %}
+        {% elsif position % 2 == 1 %}
+          {% lines = lines + "  vpternlogq $$0x96, %zmm28, %zmm18, %zmm22\n  vpternlogq $$0x96, %zmm29, %zmm19, %zmm23\n  vpternlogq $$0x96, %zmm21, %zmm20, %zmm30\n  vpternlogq $$0x96, %zmm31, %zmm30, %zmm24\n" %}
+        {% end %}
         {% list_of_hash_lines = list_of_hash_lines + [lines] %}
       {% end %}
-      {% reduction_lines = "  vextracti64x4 $$1, %zmm22, %ymm26\n  vpxorq %ymm26, %ymm22, %ymm22\n  vextracti32x4 $$1, %ymm22, %xmm26\n  vpxorq %xmm26, %xmm22, %xmm22
-  vextracti64x4 $$1, %zmm23, %ymm26\n  vpxorq %ymm26, %ymm23, %ymm23\n  vextracti32x4 $$1, %ymm23, %xmm26\n  vpxorq %xmm26, %xmm23, %xmm23
-  vextracti64x4 $$1, %zmm24, %ymm26\n  vpxorq %ymm26, %ymm24, %ymm24\n  vextracti32x4 $$1, %ymm24, %xmm26\n  vpxorq %xmm26, %xmm24, %xmm24
-  vpslldq $$8, %xmm24, %xmm26
-  vpsrldq $$8, %xmm24, %xmm24
-  vpxorq %xmm26, %xmm22, %xmm22
-  vpxorq %xmm24, %xmm23, %xmm23
-" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_REDUCTION_LINES.gsub(/vpxor /, "vpxorq ").gsub(/@L/, "%xmm22").gsub(/@H/, "%xmm23").gsub(/@A/, "%xmm26").gsub(/@B/, "%xmm27") + "  vmovdqa64 %xmm22, %xmm25\n" %}
+      {% reduction_lines = ::Beryl::Crypto::X8664CipherInstructions::VECTOR_LANE_REDUCTION_LINES.gsub(/@X3\(@T, @LO, @MI\)/, "  vpternlogq $$0x96, %zmm16, %zmm22, %zmm24\n").gsub(/@X3\(@T, @MI, @HI\)/, "  vpternlogq $$0x96, %zmm16, %zmm24, %zmm23\n").gsub(/@C/, "8f+128(%rip)").gsub(/@LO/, "%zmm22").gsub(/@MI/, "%zmm24").gsub(/@HI/, "%zmm23").gsub(/@T/, "%zmm16") +
+                           "  vextracti64x4 $$1, %zmm23, %ymm16\n  vpxorq %ymm16, %ymm23, %ymm23\n  vextracti32x4 $$1, %ymm23, %xmm16\n  vpxorq %xmm16, %xmm23, %xmm25\n" %}
       {% for round in 1...round_count %}
         {% template = template + "  vbroadcasti32x4 #{round * 16}($0), %zmm8\n" %}
         {% for register in 0...8 %}
@@ -542,7 +561,8 @@ module Beryl::Crypto
         : "rcx", "r10", "r11",
           "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
           "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "xmm16", "xmm17", "xmm18", "xmm19",
-          "xmm20", "xmm21", "xmm22", "xmm23", "xmm24", "xmm25", "xmm26", "xmm27", "memory", "flags")
+          "xmm20", "xmm21", "xmm22", "xmm23", "xmm24", "xmm25", "xmm26", "xmm27", "xmm28", "xmm29",
+          "xmm30", "xmm31", "memory", "flags")
     end
 
     # GHASH on VPCLMULQDQ: what `absorb_hash_blocks` does, with the blocks of
@@ -562,6 +582,9 @@ module Beryl::Crypto
     # instructions that write it clear the bits above.
     # In a group of 32 the first register is multiplied last, since it
     # alone waits for the accumulator the group before left.
+    #
+    # The sums are reduced lane by lane (`VECTOR_LANE_REDUCTION_LINES`) and
+    # the lanes then summed into the accumulator.
     #
     # Registers: r8 the accumulator, r9 hash key powers, r10 input, r11
     # groups (or registers) left, rax constants; 0 a register of blocks, 1
@@ -608,18 +631,12 @@ module Beryl::Crypto
           {% register_lines = register_lines + "  vpxor %ymm4, %ymm13, %ymm13\n  vpxor %ymm5, %ymm13, %ymm13\n" %}
         {% end %}
       {% end %}
-      {% folding_lines = "" %}
-      {% for sum in [11, 12, 13] %}
-        {% if register_bitsize == 512 %}
-          {% folding_lines = folding_lines + "  vextracti64x4 $$1, %zmm#{sum}, %ymm2\n  vpxor %ymm2, %ymm#{sum}, %ymm#{sum}\n" %}
-        {% end %}
-        {% folding_lines = folding_lines + "  vextracti128 $$1, %ymm#{sum}, %xmm2\n  vpxor %xmm2, %xmm#{sum}, %xmm#{sum}\n" %}
+      {% three_way = register_bitsize == 512 ? "  vpternlogq $$0x96, @A, @B, @D\n" : "  vpxor @A, @D, @D\n  vpxor @B, @D, @D\n" %}
+      {% folding_lines = ::Beryl::Crypto::X8664CipherInstructions::VECTOR_LANE_REDUCTION_LINES.gsub(/@X3\(@T, @LO, @MI\)/, three_way.gsub(/@A/, "@T").gsub(/@B/, "@LO").gsub(/@D/, "@MI")).gsub(/@X3\(@T, @MI, @HI\)/, three_way.gsub(/@A/, "@T").gsub(/@B/, "@MI").gsub(/@D/, "@HI")).gsub(/@C/, "128(%rax)").gsub(/@LO/, "%#{vector.id}11").gsub(/@MI/, "%#{vector.id}13").gsub(/@HI/, "%#{vector.id}12").gsub(/@T/, "%#{vector.id}2") %}
+      {% if register_bitsize == 512 %}
+        {% folding_lines = folding_lines + "  vextracti64x4 $$1, %zmm12, %ymm2\n  vpxor %ymm2, %ymm12, %ymm12\n" %}
       {% end %}
-      {% folding_lines = folding_lines + "  vpslldq $$8, %xmm13, %xmm2
-  vpsrldq $$8, %xmm13, %xmm13
-  vpxor %xmm2, %xmm11, %xmm11
-  vpxor %xmm13, %xmm12, %xmm12
-" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_REDUCTION_LINES.gsub(/@L/, "%xmm11").gsub(/@H/, "%xmm12").gsub(/@A/, "%xmm1").gsub(/@B/, "%xmm2") + "  vmovdqa %xmm11, %xmm14\n" %}
+      {% folding_lines = folding_lines + "  vextracti128 $$1, %ymm12, %xmm2\n  vpxor %xmm2, %xmm12, %xmm14\n" %}
       {% zeroing_lines = "  vpxor %xmm11, %xmm11, %xmm11\n  vpxor %xmm12, %xmm12, %xmm12\n  vpxor %xmm13, %xmm13, %xmm13\n" %}
       {% if is_grouped %}
         {% template = template + "1:\n" + zeroing_lines + register_lines + folding_lines + "  add $$512, %r10\n  dec %r11\n  jnz 1b\n" %}
