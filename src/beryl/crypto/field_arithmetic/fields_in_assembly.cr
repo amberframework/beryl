@@ -637,6 +637,38 @@ module Beryl::Crypto::FieldArithmetic
       ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ first }}, {{ second }}])
     end
 
+    # The end of a P-256 point addition on x86-64 in one statement: the
+    # steps of `Point#finish_addition` from *inputs*, five field elements
+    # (U1, S1, H, R and Z1·Z2) in a row, with *scratch* (32 words); the
+    # sum's X, Y and Z are words 20 to 31 of *scratch*.
+    macro p256_x86_64_finish_addition_statement(wide, scratch, inputs)
+      {%
+        multiply = wide ? "mulx" : "mul"
+        square = wide ? "mulx_square" : "mul"
+        u1 = {"$1", 0}
+        s1 = {"$1", 32}
+        h = {"$1", 64}
+        r = {"$1", 96}
+        z1_z2 = {"$1", 128}
+        slot = (0..7).map { |index| {"$0", 32 * index} }
+        steps = [
+          {square, slot[0], h, h},
+          {multiply, slot[1], h, slot[0]},
+          {multiply, slot[2], u1, slot[0]},
+          {square, slot[3], r, r},
+          {"sub", slot[3], slot[3], slot[1]},
+          {"add", slot[4], slot[2], slot[2]},
+          {"sub", slot[5], slot[3], slot[4]},
+          {"sub", slot[6], slot[2], slot[5]},
+          {multiply, slot[6], r, slot[6]},
+          {multiply, slot[4], s1, slot[1]},
+          {"sub", slot[6], slot[6], slot[4]},
+          {multiply, slot[7], z1_z2, h},
+        ]
+      %}
+      ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_sequence_statement({{ steps }}, [{{ scratch }}, {{ inputs }}])
+    end
+
     # One P-256 field operation on x86-64 (`p256_x86_64_sequence_statement`):
     # *result* = *operation*(*a*, *b*), all three `Limbs` variables.
     macro p256_x86_64_statement(operation, result, a, b)

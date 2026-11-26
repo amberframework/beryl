@@ -493,6 +493,19 @@ module Beryl::Crypto::V1
       # R = S2 - S1.
       @[AlwaysInline]
       private def finish_addition(u1 : Limbs, s1 : Limbs, h : Limbs, r : Limbs, z1_z2 : Limbs) : Point
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
+          # P-256 on x86-64: the same steps in one assembly statement.
+          inputs = StaticArray[u1, s1, h, r, z1_z2]
+          scratch = uninitialized StaticArray(UInt64, 32)
+          if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_finish_addition_statement(true,
+              pointerof(scratch), pointerof(inputs))
+          else
+            ::Beryl::Crypto::FieldArithmetic::FieldsInAssembly.p256_x86_64_finish_addition_statement(false,
+              pointerof(scratch), pointerof(inputs))
+          end
+          return (pointerof(scratch).as(UInt64*) + 20).as(Point*).value
+        {% end %}
         h_squared = Field.square(h)
         h_cubed = Field.mul(h, h_squared)
         v = Field.mul(u1, h_squared)
