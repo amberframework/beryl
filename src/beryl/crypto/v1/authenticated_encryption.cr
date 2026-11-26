@@ -22,10 +22,11 @@ module Beryl::Crypto::V1
   # tag. *associated_data* is authenticated and left readable; both sides
   # must supply the same bytes. A nonce must never repeat under one key.
   #
-  # Decryption checks the tag before it produces a single byte of plaintext:
-  # a message that fails the check returns `nil` (or `false`) and leaves the
-  # caller's buffer exactly as it was. The check takes the same time
-  # whatever the key, the message and the tag hold.
+  # Decryption checks the tag before it returns a single byte of plaintext:
+  # a message that fails the check returns `nil` (or `false`), and the
+  # caller's `into:` buffer is overwritten with zeros, whatever its length
+  # and whichever code ran (a cipher may decrypt while it checks). The check
+  # takes the same time whatever the key, the message and the tag hold.
   #
   # `wipe` zeroes every buffer derived from the key; after it, every
   # encryption, decryption and tag check raises `KeyWiped`.
@@ -65,7 +66,8 @@ module Beryl::Crypto::V1
 
     # Writes the plaintext of *ciphertext* into *plaintext* and returns true
     # when *tag* (the received tag, `tag_bytesize` bytes) is right; returns
-    # false and leaves *plaintext* untouched otherwise. A cipher whose
+    # false otherwise, and may have written into *plaintext* by then
+    # (`decrypt` zeroes it). A cipher whose
     # keystream also gives its authentication key overrides this to make
     # both from one pass.
     protected def open(nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
@@ -133,12 +135,16 @@ module Beryl::Crypto::V1
 
     # Decrypts *ciphertext_and_tag* into *plaintext*, which must be
     # `tag_bytesize` bytes shorter, and returns true; or returns false and
-    # leaves *plaintext* untouched when the message fails authentication.
+    # overwrites all of *plaintext* with zeros when the message fails
+    # authentication.
     def decrypt(ciphertext_and_tag : Bytes, *, into plaintext : Bytes, nonce : Bytes,
                 associated_data : Bytes | String = Bytes.empty) : Bool
       ensure_key_is_not_wiped
       ensure_nonce_is_accepted(nonce)
-      return false if ciphertext_and_tag.size < @tag_bytesize
+      if ciphertext_and_tag.size < @tag_bytesize
+        SecretWiping.wipe(plaintext)
+        return false
+      end
       unless plaintext.size == ciphertext_and_tag.size - @tag_bytesize
         raise OutputSizeMismatch.new(
           "the plaintext is #{ciphertext_and_tag.size - @tag_bytesize} bytes, the buffer holds #{plaintext.size}"
@@ -147,10 +153,13 @@ module Beryl::Crypto::V1
 
       # `open` reveals its verdict where it computes it; revealing it again
       # here tells the secret-flow check that the caller sees a public value.
-      Declassification.reveal(DataIndependentTiming.run do
+      is_authentic = Declassification.reveal(DataIndependentTiming.run do
         open(nonce, associated_data.to_slice, ciphertext_and_tag[0, plaintext.size],
           ciphertext_and_tag[plaintext.size, @tag_bytesize], plaintext)
       end)
+      # The same buffer on a failure from every cipher and every path: zeros.
+      SecretWiping.wipe(plaintext) unless is_authentic
+      is_authentic
     end
 
     # Returns whether *ciphertext_and_tag* carries the right tag for *nonce*

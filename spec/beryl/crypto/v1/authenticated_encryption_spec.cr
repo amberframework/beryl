@@ -72,7 +72,7 @@ describe Beryl::Crypto::V1::AuthenticatedEncryption do
       end
     end
 
-    it "leaves the caller's buffer untouched when the tag is wrong" do
+    it "overwrites the caller's buffer with zeros when the tag is wrong" do
       each_cipher do |name, cipher, nonce|
         {1, 15, 16, 17, 64, 65, 1000}.each do |bytesize|
           sealed = cipher.encrypt(Random::Secure.random_bytes(bytesize), nonce: nonce, associated_data: "header")
@@ -82,9 +82,13 @@ describe Beryl::Crypto::V1::AuthenticatedEncryption do
             altered[position] ^= 0x80_u8
             buffer = Bytes.new(bytesize, MARKER_BYTE)
             cipher.decrypt(altered, into: buffer, nonce: nonce, associated_data: "header").should be_false
-            buffer.all?(MARKER_BYTE).should be_true
+            buffer.all?(0_u8).should be_true
           end
         end
+        short = Bytes.new(cipher.tag_bytesize - 1, 0x11_u8)
+        buffer = Bytes.new(7, MARKER_BYTE)
+        cipher.decrypt(short, into: buffer, nonce: nonce, associated_data: "header").should be_false
+        buffer.all?(0_u8).should be_true
       end
     end
 

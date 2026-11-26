@@ -110,6 +110,48 @@ module Beryl::Crypto
     # byte, 0xc2 in the highest).
     CONSTANT_LINES = "  jmp 9f\n  .p2align 4\n8:\n  .quad 0x08090a0b0c0d0e0f\n  .quad 0x0001020304050607\n  .quad 0x0000000000000001\n  .quad 0xc200000000000000\n9:\n"
 
+    # The constants of the aligned counters of
+    # `encrypt_counter_blocks_and_hash_with_vector_aes`: for each of the
+    # 32 blocks of a pass, its offset from the pass's first counter in the
+    # last byte of a block (0 to 511), then 32 in the counter word, the step
+    # of a pass (512).
+    ALIGNED_COUNTER_CONSTANT_LINES = "  jmp 9f\n  .p2align 6\n7:
+  .quad 0x0000000000000000\n  .quad 0x0000000000000000
+  .quad 0x0000000000000000\n  .quad 0x0100000000000000
+  .quad 0x0000000000000000\n  .quad 0x0200000000000000
+  .quad 0x0000000000000000\n  .quad 0x0300000000000000
+  .quad 0x0000000000000000\n  .quad 0x0400000000000000
+  .quad 0x0000000000000000\n  .quad 0x0500000000000000
+  .quad 0x0000000000000000\n  .quad 0x0600000000000000
+  .quad 0x0000000000000000\n  .quad 0x0700000000000000
+  .quad 0x0000000000000000\n  .quad 0x0800000000000000
+  .quad 0x0000000000000000\n  .quad 0x0900000000000000
+  .quad 0x0000000000000000\n  .quad 0x0a00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0b00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0c00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0d00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0e00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0f00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1000000000000000
+  .quad 0x0000000000000000\n  .quad 0x1100000000000000
+  .quad 0x0000000000000000\n  .quad 0x1200000000000000
+  .quad 0x0000000000000000\n  .quad 0x1300000000000000
+  .quad 0x0000000000000000\n  .quad 0x1400000000000000
+  .quad 0x0000000000000000\n  .quad 0x1500000000000000
+  .quad 0x0000000000000000\n  .quad 0x1600000000000000
+  .quad 0x0000000000000000\n  .quad 0x1700000000000000
+  .quad 0x0000000000000000\n  .quad 0x1800000000000000
+  .quad 0x0000000000000000\n  .quad 0x1900000000000000
+  .quad 0x0000000000000000\n  .quad 0x1a00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1b00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1c00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1d00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1e00000000000000
+  .quad 0x0000000000000000\n  .quad 0x1f00000000000000
+  .quad 0x0000000000000000\n  .quad 0x0000002000000000
+9:
+"
+
     # Reduces, lane by lane, the 256-bit products whose low, middle and high
     # 128-bit parts are summed in `@LO`, `@MI` and `@HI` (the full product
     # being HI x^128 + MI x^64 + LO), leaving the result in `@HI`, with `@T`
@@ -456,6 +498,17 @@ module Beryl::Crypto
     # after the eighth round, since it alone waits for the accumulator the
     # pass before left.
     #
+    # With *is_counter_aligned*, the caller guarantees that the counter word
+    # of the counter block is a multiple of 32 when the loop starts (a
+    # 12-byte nonce, whose first message counter is 2, after 30 blocks), so
+    # the 32 counters of a pass differ from the first only in the low five
+    # bits of the last byte: each block is the first counter block, already
+    # XORed with the first round key, XORed with its offset (one
+    # instruction a register instead of a shuffle, an add and an XOR), and
+    # the counter word is byte-swapped and stepped once a pass. The
+    # alignment is a fact about positions in the message, not about its
+    # contents, and the statement still has its one branch.
+    #
     # Registers: r10 input, r11 output, rcx passes left; the round keys, the
     # counter block, the accumulator and the hash key powers are read where
     # the operands put them, and the constants relative to rip. zmm0 to
@@ -465,24 +518,36 @@ module Beryl::Crypto
     # sums, xmm25 the accumulator, zmm26 and zmm27 scratch. Registers 16 and
     # up exist only in the EVEX encoding, so that side writes `vpxorq` and
     # `vmovdqu64`.
-    macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers, is_hashing_input = false)
+    macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers, is_hashing_input = false, is_counter_aligned = false)
       {% template = "  mov $2, %r10\n  mov $3, %r11\n  mov $4, %rcx
   vbroadcasti32x4 8f+16(%rip), %zmm13
   vbroadcasti32x4 ($1), %zmm11
   vpshufb %zmm13, %zmm11, %zmm11
-  vpaddd 8f+32(%rip), %zmm11, %zmm11
-  vbroadcasti32x4 8f+96(%rip), %zmm12
+" %}
+      {% if is_counter_aligned %}
+        {% template = template + "  vbroadcasti32x4 7f+512(%rip), %zmm12\n" %}
+      {% else %}
+        {% template = template + "  vpaddd 8f+32(%rip), %zmm11, %zmm11\n  vbroadcasti32x4 8f+96(%rip), %zmm12\n" %}
+      {% end %}
+      {% template = template + "
   vbroadcasti32x4 ($0), %zmm14
   vbroadcasti32x4 #{round_count * 16}($0), %zmm10
   vbroadcasti32x4 8f(%rip), %zmm15
   vmovdqu64 ($5), %xmm25
 1:
 " %}
-      {% for register in 0...8 %}
-        {% template = template + "  vpshufb %zmm13, %zmm11, %zmm#{register}
+      {% if is_counter_aligned %}
+        {% template = template + "  vpshufb %zmm13, %zmm11, %zmm9\n  vpxord %zmm14, %zmm9, %zmm9\n  vpaddd %zmm12, %zmm11, %zmm11\n" %}
+        {% for register in 0...8 %}
+          {% template = template + "  vpxord 7f+#{register * 64}(%rip), %zmm9, %zmm#{register}\n" %}
+        {% end %}
+      {% else %}
+        {% for register in 0...8 %}
+          {% template = template + "  vpshufb %zmm13, %zmm11, %zmm#{register}
   vpaddd %zmm12, %zmm11, %zmm11
   vpxord %zmm14, %zmm#{register}, %zmm#{register}
 " %}
+        {% end %}
       {% end %}
       {% list_of_hash_lines = [] of String %}
       {% for register, position in [1, 2, 3, 4, 5, 6, 7, 0] %}
@@ -535,6 +600,9 @@ module Beryl::Crypto
   vmovdqu64 %xmm25, ($5)
   vzeroupper
 " + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_CONSTANT_LINES %}
+      {% if is_counter_aligned %}
+        {% template = template + ::Beryl::Crypto::X8664CipherInstructions::ALIGNED_COUNTER_CONSTANT_LINES %}
+      {% end %}
       asm({{ template }} :: "r"({{ round_keys }}), "r"({{ counter_block }}), "r"({{ input }}), "r"({{ output }}), "r"({{ group_count }}),
         "r"({{ accumulator }}), "r"({{ hash_key_powers }})
         : "rcx", "r10", "r11",

@@ -141,10 +141,10 @@ describe "Beryl ciphers on the processor's instructions" do
       expected = PortableCipherReference.seal_with_chacha20_and_poly1305(key, nonce, associated_data, plaintext)
       fail "ChaCha20-Poly1305 differs from the portable code at #{message_bytesize} bytes" unless sealed == expected
       cipher.decrypt(sealed, nonce: nonce, associated_data: associated_data).should eq(plaintext)
-      untouched = Bytes.new(message_bytesize, 0x5a_u8)
+      zeroed = Bytes.new(message_bytesize, 0x5a_u8)
       sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
-      cipher.decrypt(sealed, into: untouched, nonce: nonce, associated_data: associated_data).should be_false
-      untouched.all?(0x5a_u8).should be_true
+      cipher.decrypt(sealed, into: zeroed, nonce: nonce, associated_data: associated_data).should be_false
+      zeroed.all?(0_u8).should be_true
 
       extended_nonce = generator.random_bytes(24)
       subkey = Bytes.new(32)
@@ -236,7 +236,7 @@ describe "Beryl ciphers on the processor's instructions" do
     end
   {% end %}
 
-  it "opens AES-GCM on every opening path, in place too, and leaves the buffer untouched on a wrong tag" do
+  it "opens AES-GCM on every opening path, in place too, and leaves the buffer all zeros on a wrong tag" do
     generator = Random.new(0x6f70_656e)
     [16, 32].each do |key_bytesize|
       cipher = Beryl::Crypto::V1::AESGCM.new(generator.random_bytes(key_bytesize))
@@ -255,12 +255,13 @@ describe "Beryl ciphers on the processor's instructions" do
         in_place[0, message_bytesize].should eq(plaintext)
 
         sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
-        untouched = Bytes.new(message_bytesize, 0x5a_u8)
-        cipher.decrypt(sealed, into: untouched, nonce: nonce, associated_data: associated_data).should be_false
-        untouched.all?(0x5a_u8).should be_true
+        zeroed = Bytes.new(message_bytesize, 0x5a_u8)
+        cipher.decrypt(sealed, into: zeroed, nonce: nonce, associated_data: associated_data).should be_false
+        zeroed.all?(0_u8).should be_true
         in_place = sealed.dup
         cipher.decrypt(in_place, into: in_place[0, message_bytesize], nonce: nonce, associated_data: associated_data).should be_false
-        in_place.should eq(sealed)
+        in_place[0, message_bytesize].all?(0_u8).should be_true
+        in_place[message_bytesize, in_place.size - message_bytesize].should eq(sealed[message_bytesize, sealed.size - message_bytesize])
       end
     end
   end
