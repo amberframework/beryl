@@ -443,22 +443,25 @@ module Beryl::Crypto
     # arrangement of OpenSSL's `aes-gcm-avx512` and Linux's
     # `aes-gcm-avx10-x86_64.S`): each of *group_count* passes (at least 1)
     # encrypts 32 counter blocks as `encrypt_counter_blocks_with_vector_aes`
-    # does with eight registers, and between its AES rounds hashes the 32
-    # blocks at *hash_input* into the accumulator at *accumulator* as
+    # does with eight registers, and between its AES rounds hashes 32 blocks
+    # into the accumulator at *accumulator* as
     # `absorb_hash_blocks_with_vector_carryless_multiply` does in groups
-    # (*hash_key_powers* is the vector part of the table). Both move on by
-    # 512 bytes a pass. The AES rounds and the carry-less multiplies go to
-    # different execution ports, so the two overlap. A seal hashes the
-    # ciphertext the pass before wrote, *hash_input* trailing *output* by
-    # one pass; the AES and GHASH sides share no register.
+    # (*hash_key_powers* is the vector part of the table): the ciphertext
+    # the pass before wrote, the 512 bytes before *output*. The AES rounds
+    # and the carry-less multiplies go to different execution ports, so the
+    # two overlap; the AES and GHASH sides share no register. The first
+    # register of the group is hashed last, after the eighth round, since it
+    # alone waits for the accumulator the pass before left.
     #
-    # Registers: as `encrypt_counter_blocks_with_vector_aes` for the AES side
-    # (r8 to r11, rcx, rax, zmm0 to zmm14); rdx the accumulator, rsi hash key
-    # powers, rdi the blocks to hash; zmm15 the mask that reverses sixteen
-    # bytes, zmm16 a register of blocks to hash, zmm17 its powers, zmm18 to
-    # zmm21 the partial products, zmm22 to zmm24 their sums, xmm25 the
-    # accumulator, zmm26 and zmm27 scratch. Registers 16 and up exist only
-    # in the EVEX encoding, so that side writes `vpxorq` and `vmovdqu64`.
+    # Registers: r10 input, r11 output, rcx passes left; the round keys, the
+    # counter block, the accumulator and the hash key powers are read where
+    # the operands put them, and the constants relative to rip. zmm0 to
+    # zmm14 as in `encrypt_counter_blocks_with_vector_aes`; zmm15 the mask
+    # that reverses sixteen bytes, zmm16 a register of blocks to hash, zmm17
+    # its powers, zmm18 to zmm21 the partial products, zmm22 to zmm24 their
+    # sums, xmm25 the accumulator, zmm26 and zmm27 scratch. Registers 16 and
+    # up exist only in the EVEX encoding, so that side writes `vpxorq` and
+    # `vmovdqu64`.
     macro encrypt_counter_blocks_and_hash_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, accumulator, hash_key_powers)
       {% template = "  mov $2, %r10\n  mov $3, %r11\n  mov $4, %rcx
   vbroadcasti32x4 8f+16(%rip), %zmm13
@@ -482,7 +485,7 @@ module Beryl::Crypto
 " %}
       {% end %}
       {% list_of_hash_lines = [] of String %}
-      {% for register in 0...8 %}
+      {% for register in [1, 2, 3, 4, 5, 6, 7, 0] %}
         {% lines = "  vmovdqu64 #{register * 64 - 512}(%r11), %zmm16\n  vpshufb %zmm15, %zmm16, %zmm16\n" %}
         {% if register == 0 %}
           {% lines = lines + "  vpxorq %zmm25, %zmm16, %zmm16\n" %}
@@ -557,6 +560,8 @@ module Beryl::Crypto
     # The accumulator joins the lowest lane of the first register of a
     # group: it sits in the low 128 bits of register 14 (or 10) and the VEX
     # instructions that write it clear the bits above.
+    # In a group of 32 the first register is multiplied last, since it
+    # alone waits for the accumulator the group before left.
     #
     # Registers: r8 the accumulator, r9 hash key powers, r10 input, r11
     # groups (or registers) left, rax constants; 0 a register of blocks, 1
@@ -578,7 +583,8 @@ module Beryl::Crypto
 " %}
       {% joined = is_grouped ? "14" : "10" %}
       {% register_lines = "" %}
-      {% for register in 0...registers_per_group %}
+      {% for position in 0...registers_per_group %}
+        {% register = (position + 1) % registers_per_group %}
         {% register_lines = register_lines + "  #{move.id} #{register * register_bytesize}(%r10), %#{vector.id}0
   vpshufb %#{vector.id}15, %#{vector.id}0, %#{vector.id}0
 " %}
