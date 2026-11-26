@@ -58,7 +58,8 @@ describe "Beryl hashes on the processor's SHA instructions" do
     has_sha1 = Beryl::Crypto::ProcessorFeatures::HAS_SHA1_INSTRUCTIONS
     has_sha256 = Beryl::Crypto::ProcessorFeatures::HAS_SHA256_INSTRUCTIONS
     has_sha512 = Beryl::Crypto::ProcessorFeatures::HAS_SHA512_INSTRUCTIONS
-    STDOUT.puts "SHA instructions in use: SHA-1 #{has_sha1}, SHA-256 #{has_sha256}, SHA-512 #{has_sha512}"
+    STDOUT.puts "SHA instructions in use: SHA-1 #{has_sha1}, SHA-256 #{has_sha256}, SHA-512 #{has_sha512}; " \
+                "SHA-512 compression: #{Beryl::Crypto::V1::SecureHashWith64BitWords.compression_in_use}"
     {% if flag?(:beryl_portable_hashes) %}
       has_sha1.should be_false
       has_sha256.should be_false
@@ -68,7 +69,42 @@ describe "Beryl hashes on the processor's SHA instructions" do
       has_sha256.should be_true
       has_sha512.should be_true
     {% end %}
+    {% if flag?(:beryl_portable_hashes) || flag?(:beryl_without_avx2) || !flag?(:x86_64) %}
+      Beryl::Crypto::V1::SecureHashWith64BitWords::HAS_VECTOR_MESSAGE_SCHEDULE.should be_false
+    {% end %}
   end
+
+  # The x86-64 SHA-512 code mixes two blocks per statement and the last one
+  # alone, so every count of blocks from 1 to 33, and every length one or
+  # two bytes either side of a block boundary, takes a different mix of the
+  # two statements and of the padding block.
+  {% for pair in [{"SHA-384", "Beryl::Crypto::V1::SHA384", "PortableSHA384"},
+                  {"SHA-512", "Beryl::Crypto::V1::SHA512", "PortableSHA512"},
+                  {"SHA-512/256", "Beryl::Crypto::V1::SHA512_256", "PortableSHA512With256BitDigest"}] %}
+    it "gives {{ pair[0].id }} the digest of the portable code at every length around the block multiples up to 33 blocks" do
+      generator = Random.new(20_261_126)
+      (1..33).each do |block_count|
+        (-2..2).each do |offset|
+          message = generator.random_bytes(block_count * 128 + offset)
+          {{ pair[1].id }}.digest(message).should eq({{ pair[2].id }}.new.update(message).final)
+        end
+      end
+    end
+
+    it "gives {{ pair[0].id }} the digest of the portable code when whole runs of blocks go to one update" do
+      generator = Random.new(20_261_127)
+      message = generator.random_bytes(40 * 128 + 3)
+      (0..40).each do |block_count|
+        chosen_hash = {{ pair[1].id }}.new
+        portable_hash = {{ pair[2].id }}.new
+        chosen_hash.update(message[0, 3])
+        portable_hash.update(message[0, 3])
+        chosen_hash.update(message[3, block_count * 128])
+        portable_hash.update(message[3, block_count * 128])
+        chosen_hash.final.should eq(portable_hash.final)
+      end
+    end
+  {% end %}
 
   {% for pair in [{"SHA-1", "Beryl::Crypto::Compatibility::SHA1", "PortableSHA1"},
                   {"SHA-224", "Beryl::Crypto::V1::SHA224", "PortableSHA224"},

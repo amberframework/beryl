@@ -103,7 +103,8 @@ end
 # processor's features are whatever Valgrind reports to the program).
 STDOUT.puts "SHA instructions in use: SHA-1 #{Beryl::Crypto::ProcessorFeatures::HAS_SHA1_INSTRUCTIONS}, " \
             "SHA-256 #{Beryl::Crypto::ProcessorFeatures::HAS_SHA256_INSTRUCTIONS}, " \
-            "SHA-512 #{Beryl::Crypto::ProcessorFeatures::HAS_SHA512_INSTRUCTIONS}"
+            "SHA-512 #{Beryl::Crypto::ProcessorFeatures::HAS_SHA512_INSTRUCTIONS} " \
+            "(compression: #{Beryl::Crypto::V1::SecureHashWith64BitWords.compression_in_use})"
 
 result_storage = Bytes.new(16_384)
 public_message = "a message everyone may read".to_slice
