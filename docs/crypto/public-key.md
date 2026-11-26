@@ -130,6 +130,23 @@ After the x86-64 P-256 multiplication moved into assembly (#13), the x86-64 timi
 
 Before milestone F3, P-256 ran 2.5 to 3 times slower and P-384 verification 1.35 times slower. F3 put the field in assembly and moved to Jacobian coordinates and Booth windows, which left P-256 signing (1.074 times slower), ECDH (1.1 times slower) and X25519 key agreement (1.013 times slower) behind OpenSSL. Milestone F3b closed those gaps: inversion by divsteps (signing went from 1.087 times slower to 1.28 times as fast, measured in the same run against main), the P-256 field code written for the flag-limited M4 (point doubling 59 to 52 ns), table selection on the vector registers, and ECDH computing only x. Every row is now at least as fast as OpenSSL.
 
+On the build Mac (Apple M1 Max, Homebrew OpenSSL 4.1.0) the four-word X25519 field and the Ed25519 verification windows took X25519 key agreement from 0.986 to 1.23 times OpenSSL's speed and Ed25519 verification from 1.73 to 3.48; every other row stayed at 1.08 or more.
+
+On Linux the comparison is against the distribution's OpenSSL 3.0.13 (Ubuntu 24.04, `libssl3t64` 3.0.13-0ubuntu3.16), with the same bench, on GitHub's `ubuntu-24.04` runners (the processor model varies per job and each log names it) and in Colima on m4-mini-01 (Linux on Apple M4). Each cell is Beryl against OpenSSL, before (commit f22d290; in Colima e7a0765) → after this change; on Zen 4 and Zen 5 only the after was measured. P-256 ECDH remains behind OpenSSL on Zen 5 (0.870) and, by 1%, on Zen 3 (0.990); see below.
+
+| Processor | X25519 shared secret | P-256 ECDH | P-256 ECDSA verify | Ed25519 verify |
+|---|---|---|---|---|
+| Intel Xeon 6975P-C | 0.870 → 1.06 | 0.800 → 1.11 | 0.990 → 1.17 | 1.68 → 2.55 |
+| AMD EPYC 7763 (Zen 3) | 0.741 → 1.04 | 0.654 → 0.990 | 0.820 → 1.05 | 1.53 → 2.29 |
+| AMD EPYC 9V74 (Zen 4) | 1.06 | 1.05 | 1.08 | 2.23 |
+| AMD EPYC 9V45 (Zen 5) | 1.24 | 0.870 | 1.08 | 1.94 |
+| Arm Neoverse-N2 (GitHub `ubuntu-24.04-arm`) | 0.982 → 1.36 | 1.05 → 1.05 | 1.26 → 1.27 | 1.35 → 2.75 |
+| Apple M4 in Colima (OpenSSL 3.0.13) | 0.901 → 1.27 | 1.14 → 1.16 | 1.40 → 1.42 | 1.31 → 2.71 |
+
+What moved the x86-64 rows, as measured along the way: as separate statements, the four-word X25519 field ran slower than fiat-crypto's five limbs (47 against 32 µs on Xeon 6975P-C), because compiled code copied each result with loads wider than the assembly's 8-byte stores, which the processor cannot forward; a whole ladder step in one statement took it to 33 µs, and the step's independent operations side by side to 26 µs. With each window's steps as statements on a point only the assembly touches, the P-256 variable-point multiplication takes less than its doublings and additions measured apart on Zen 4 (38.5 against 41.1 µs on EPYC 9V74). With the field operations alone in assembly (af1596c), P-256 ECDH on Xeon 6975P-C stood at 0.89 times OpenSSL's speed; the point doubling and addition as statements and the `mulx` multiplication reducing after each row (in the order of OpenSSL's `mul_montx`) took it to 1.07, and the doubling's operations side by side with the window statements to 1.11.
+
+On Zen 5 the window's assembly statements take about 570 ns where its five doublings and addition measured one by one take 504 ns (EPYC 9V45; on Zen 4 the window takes less than its parts), and a doubling takes as long as its eight multiplications and squarings one after another (75 ns), about four instructions per cycle by its instruction count; OpenSSL's `ecp_nistz256`, which keeps its values in registers between field operations, is about 15% faster there. Closing it would take field operations that pass their results in registers within the doubling instead of through memory, or a P-256 field on AVX-512 IFMA, which Zen 4 and Zen 5 have.
+
 ## RSA
 
 `Beryl::Crypto::V1::RivestShamirAdleman` (`RSA` for short) implements RFC 8017: PKCS #1 v1.5 signatures (§8.2), PSS signatures (§8.1) and OAEP encryption (§7.1). TLS and certificates need the signatures; MySQL's `caching_sha2_password` encrypts the password with OAEP over SHA-1.

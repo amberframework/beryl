@@ -706,20 +706,16 @@ module Beryl::Crypto::V1
       result, is_infinity = signed_multiple(scalar, GENERATOR_WINDOW_COUNT - 1, multiples_pointer)
       result = result.replace_if(is_infinity, multiples[15].double)
       {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) && bytesize == 32 %}
-        # P-256 on x86-64: each window in assembly statements on a point
-        # only the assembly reads until the end (compiled code copying the
-        # points between steps, with loads wider than the assembly's 8-byte
-        # stores, cost about 6 of 32 µs on EPYC 9V45): five doublings, each
-        # from one of two points into the other (in place, a doubling read
-        # the point the one before had just stored, and five of them took
-        # about 13% longer on EPYC 9V45 than the doublings measured apart),
-        # then one statement for the negation of the picked
+        # P-256 on x86-64: each window in assembly statements on points
+        # only the assembly reads until the end, so compiled code copies
+        # nothing between steps: five doublings, each from one of two points
+        # into the other, then one statement for the negation of the picked
         # multiple, the addition and both replacements, with the masks of
         # `signed_multiple` and `replace_if` in words 72 to 74 of the
-        # scratch space (76 to 79 stay zero). The doublings stay separate
-        # statements: one statement of all five (about 6,500 instructions)
-        # ran slower on Zen 5 than five of one, and a doubling's code fits
-        # the processor's decoded-instruction cache.
+        # scratch space (76 to 79 stay zero). The doublings are separate
+        # statements: one statement of all five is about 6,500
+        # instructions, and a doubling's code fits the processor's
+        # decoded-instruction cache.
         state = result
         other_state = result
         current = pointerof(state)
