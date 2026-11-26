@@ -162,9 +162,9 @@ module Beryl::Crypto::V1
         ladder(Field::AArch64, clamped, x1, factor)
       {% elsif flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
         if ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
-          ladder(Field::X86WithWideMultiply, clamped, x1, factor)
+          ladder_with_wide_multiply(Field::X86WithWideMultiply, clamped, x1, factor)
         else
-          ladder(Field::X86WithMultiply, clamped, x1, factor)
+          ladder_with_multiply(Field::X86WithMultiply, clamped, x1, factor)
         end
       {% else %}
         ladder(Field::Portable, clamped, x1, factor)
@@ -223,6 +223,49 @@ module Beryl::Crypto::V1
       affine_u = field.mul(x2, invert(Field.canonical(z2)))
       Field.to_bytes(Field.canonical(affine_u))
     end
+
+    {% if flag?(:x86_64) %}
+      {% for name, wide in {ladder_with_multiply: false, ladder_with_wide_multiply: true} %}
+        # `ladder` on x86-64 with each step (the conditional swap included)
+        # one assembly statement
+        # (`Curve25519SolinasFieldWithAssembly.x86_64_ladder_step_statement`,
+        # {{ wide ? "`mulx`".id : "`mulq`".id }}): the same operations in the
+        # same order on the same representation, so the same result, with
+        # the state in memory only the assembly writes and reads. Compiled
+        # code copying each result with wider loads than the assembly's
+        # 8-byte stores made the processor wait on every such copy (the
+        # ladder of separate statements took 47 µs on Xeon 6975P-C, against
+        # 32 µs for fiat-crypto's 51-bit limbs).
+        @[NoInline]
+        private def self.{{ name.id }}(field : F.class, clamped : StaticArray(UInt8, 32), x1 : Field::Limbs, factor : Field::Limbs) : StaticArray(UInt8, 32) forall F
+          x3 = field.mul(x1, factor)
+          state = StaticArray(UInt64, 20).new(0_u64)
+          4.times do |index|
+            state[index] = x1[index]
+            state[4 + index] = factor[index]
+            state[12 + index] = x3[index]
+            state[16 + index] = factor[index]
+          end
+          scratch = StaticArray(UInt64, 40).new(0_u64)
+          swap = 0_u64
+          254.downto(0) do |bit_index|
+            bit = (clamped[bit_index >> 3].to_u64 >> (bit_index & 7)) & 1_u64
+            swap ^= bit
+            mask = Beryl::Crypto::FieldArithmetic::Curve25519SolinasField.value_barrier(0_u64 &- swap)
+            Field.x86_64_ladder_step_statement({{ wide }}, pointerof(scratch), pointerof(state), mask)
+            swap = bit
+          end
+          mask = Beryl::Crypto::FieldArithmetic::Curve25519SolinasField.value_barrier(0_u64 &- swap)
+          Field.x86_64_ladder_swap_statement(pointerof(state), mask)
+          x2 = Field::Limbs.new { |index| state[4 + index] }
+          z2 = Field::Limbs.new { |index| state[8 + index] }
+          SecretWiping.wipe(scratch.to_slice)
+          affine_u = field.mul(x2, invert(Field.canonical(z2)))
+          SecretWiping.wipe(state.to_slice)
+          Field.to_bytes(Field.canonical(affine_u))
+        end
+      {% end %}
+    {% end %}
 
     # p = 2^255 - 19 for `DivstepInversion`.
     private DIVSTEP_MODULUS = Beryl::Crypto::FieldArithmetic::DivstepInversion.modulus_of(Field::PRIME_WORDS)
