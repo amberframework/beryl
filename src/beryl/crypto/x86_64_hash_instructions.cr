@@ -190,15 +190,17 @@ module Beryl::Crypto
     # The statement uses every general register: rdi and rsi bring the
     # state and the message and are put back as they came. Its table lies
     # below the red zone of the function around it, aligned to 64 bytes, and
-    # rsp is put back before the statement ends. Its loop (four passes of
-    # sixteen rounds with the schedule) counts down in rbp from a constant,
-    # and every address is a register plus a constant, so the timing does
-    # not depend on the message or the state.
+    # rsp is put back before the statement ends. Its two loops (four passes
+    # of sixteen rounds with the schedule, then for the second block ten
+    # passes of eight rounds) count down in rbp from constants, and every
+    # address is a register plus a constant, so the timing does not depend
+    # on the message or the state.
     #
     # Registers: rax, rbx, rcx, rdx, r8, r9, r10, r11 the working variables
     # (a to h in the first round); r12 and r13 for Σ0 and Σ1; r14 and r15
     # in turn for Maj and for the Ch terms; rdi the table position; rsi the
-    # round constants (rax until the state is loaded); rbp the passes left.
+    # round constants (rax until the state is loaded), and in the second
+    # block's rounds with AVX-512 the old d; rbp the passes left.
     # ymm0 to ymm7 hold sixteen message words of each block, ymm8 to ymm11
     # are scratch and ymm12 holds the byte order mask.
     macro compress_sha512_blocks(state_pointer, block_pointer, round_constants, second_block, avx512)
@@ -360,14 +362,25 @@ module Beryl::Crypto
         {% lines << "add #{index * 8}(%rdi), %#{names[index].id}" %}
         {% lines << "mov %#{names[index].id}, #{index * 8}(%rdi)" %}
       {% end %}
-      # The second block: eighty rounds from the table, written out in full
-      # (a loop's counting costs about one percent here).
+      # The second block: eighty rounds from the table, eight per pass (a
+      # loop small enough for the micro-op cache measured faster on Zen 3
+      # than the eighty written out). With AVX-512, which here means one of
+      # the wider cores (Intel since Ice Lake, AMD since Zen 4), each round
+      # first adds h + K + W to d, then the Ch terms and Σ1, so the
+      # dependence from e to the next e is four additions deep instead of
+      # five; T1 is then the new e less the old d (one subtraction more).
+      # That measured 1 to 2 percent faster on those cores and slower on
+      # Zen 3, which has four integer units for 22 operations a round.
       {% if second_block %}
         {%
+          lines << "lea 16(%rsp), %rdi"
           lines << "mov %rbx, %r14"
           lines << "xor %rcx, %r14"
+          lines << "mov $$10, %rbp"
+          lines << ".p2align 5"
+          lines << "1:"
         %}
-        {% for round in 0...80 %}
+        {% for round in 0...8 %}
           {%
             a = names[(8 - round % 8) % 8]
             b = names[(9 - round % 8) % 8]
@@ -378,32 +391,66 @@ module Beryl::Crypto
             h = names[(15 - round % 8) % 8]
             maj = round % 2 == 0 ? "r14" : "r15"
             term = round % 2 == 0 ? "r15" : "r14"
-            lines << "add #{16 + (round // 2) * 32 + (round % 2) * 8}(%rsp), %#{h.id}"
-            lines << "mov %#{f.id}, %#{term.id}"
-            lines << "rorx $$41, %#{e.id}, %r12"
-            lines << "rorx $$18, %#{e.id}, %r13"
-            lines << "and %#{e.id}, %#{term.id}"
-            lines << "xor %r13, %r12"
-            lines << "rorx $$14, %#{e.id}, %r13"
-            lines << "add %#{term.id}, %#{h.id}"
-            lines << "andn %#{g.id}, %#{e.id}, %#{term.id}"
-            lines << "xor %r13, %r12"
-            lines << "add %#{term.id}, %#{h.id}"
-            lines << "mov %#{a.id}, %#{term.id}"
-            lines << "add %r12, %#{h.id}"
-            lines << "rorx $$39, %#{a.id}, %r12"
-            lines << "xor %#{b.id}, %#{term.id}"
-            lines << "rorx $$34, %#{a.id}, %r13"
-            lines << "add %#{h.id}, %#{d.id}"
-            lines << "and %#{term.id}, %#{maj.id}"
-            lines << "xor %r13, %r12"
-            lines << "rorx $$28, %#{a.id}, %r13"
-            lines << "xor %#{b.id}, %#{maj.id}"
-            lines << "xor %r13, %r12"
-            lines << "add %#{maj.id}, %#{h.id}"
-            lines << "add %r12, %#{h.id}"
+            lines << "add #{(round // 2) * 32 + (round % 2) * 8}(%rdi), %#{h.id}"
           %}
+          {% if avx512 %}
+            {%
+              lines << "mov %#{d.id}, %rsi"
+              lines << "add %#{h.id}, %#{d.id}"
+              lines << "mov %#{f.id}, %#{term.id}"
+              lines << "and %#{e.id}, %#{term.id}"
+              lines << "rorx $$41, %#{e.id}, %r12"
+              lines << "rorx $$18, %#{e.id}, %r13"
+              lines << "add %#{term.id}, %#{d.id}"
+              lines << "andn %#{g.id}, %#{e.id}, %#{term.id}"
+              lines << "xor %r13, %r12"
+              lines << "rorx $$14, %#{e.id}, %r13"
+              lines << "add %#{term.id}, %#{d.id}"
+              lines << "xor %r13, %r12"
+              lines << "add %r12, %#{d.id}"
+              lines << "mov %#{d.id}, %#{h.id}"
+              lines << "sub %rsi, %#{h.id}"
+              lines << "mov %#{a.id}, %#{term.id}"
+              lines << "rorx $$39, %#{a.id}, %r12"
+              lines << "xor %#{b.id}, %#{term.id}"
+              lines << "rorx $$34, %#{a.id}, %r13"
+              lines << "and %#{term.id}, %#{maj.id}"
+              lines << "xor %r13, %r12"
+              lines << "rorx $$28, %#{a.id}, %r13"
+              lines << "xor %#{b.id}, %#{maj.id}"
+              lines << "xor %r13, %r12"
+              lines << "add %#{maj.id}, %#{h.id}"
+              lines << "add %r12, %#{h.id}"
+            %}
+          {% else %}
+            {%
+              lines << "mov %#{f.id}, %#{term.id}"
+              lines << "rorx $$41, %#{e.id}, %r12"
+              lines << "rorx $$18, %#{e.id}, %r13"
+              lines << "and %#{e.id}, %#{term.id}"
+              lines << "xor %r13, %r12"
+              lines << "rorx $$14, %#{e.id}, %r13"
+              lines << "add %#{term.id}, %#{h.id}"
+              lines << "andn %#{g.id}, %#{e.id}, %#{term.id}"
+              lines << "xor %r13, %r12"
+              lines << "add %#{term.id}, %#{h.id}"
+              lines << "mov %#{a.id}, %#{term.id}"
+              lines << "add %r12, %#{h.id}"
+              lines << "rorx $$39, %#{a.id}, %r12"
+              lines << "xor %#{b.id}, %#{term.id}"
+              lines << "rorx $$34, %#{a.id}, %r13"
+              lines << "add %#{h.id}, %#{d.id}"
+              lines << "and %#{term.id}, %#{maj.id}"
+              lines << "xor %r13, %r12"
+              lines << "rorx $$28, %#{a.id}, %r13"
+              lines << "xor %#{b.id}, %#{maj.id}"
+              lines << "xor %r13, %r12"
+              lines << "add %#{maj.id}, %#{h.id}"
+              lines << "add %r12, %#{h.id}"
+            %}
+          {% end %}
         {% end %}
+        {% lines = lines + ["add $$128, %rdi", "dec %rbp", "jnz 1b"] %}
         {% lines << "mov #{saved_state.id}, %rdi" %}
         {% for index in 0...8 %}
           {% lines << "add #{index * 8}(%rdi), %#{names[index].id}" %}
