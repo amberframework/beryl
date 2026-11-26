@@ -142,7 +142,21 @@ end
     ]
   {% end %}
 
-  LIST_OF_CASES = SOLINAS_CASES + [
+  # The x86-64 P-256 multiplication's two forms, each against fiat-crypto's
+  # C whichever one `mul` picks on this processor.
+  {% if flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
+    P256_FORM_CASES = [
+      equality_case(P256FieldWithAssembly, mul_with_multiply, p256_64_mul, 4, 2),
+      {% if !flag?(:beryl_without_mulx) %}
+        equality_case(P256FieldWithAssembly, mul_with_wide_multiply, p256_64_mul, 4, 2),
+        equality_case(P256FieldWithAssembly, square_with_wide_multiply, p256_64_square, 4, 1),
+      {% end %}
+    ]
+  {% else %}
+    P256_FORM_CASES = [] of {String, String, Proc(Int64, InputDraw, Int64)}
+  {% end %}
+
+  LIST_OF_CASES = SOLINAS_CASES + P256_FORM_CASES + [
     halving_case,
     equality_case(P256FieldWithAssembly, mul, p256_64_mul, 4, 2),
     equality_case(P256FieldWithAssembly, square, p256_64_square, 4, 1),

@@ -1,3 +1,4 @@
+require "../processor_features"
 require "./p256_field"
 require "./p256_scalar_field"
 require "./p384_field"
@@ -268,10 +269,101 @@ module Beryl::Crypto::FieldArithmetic
     # words live in r8 to r15; rax, rdx and rcx are scratch. The reduction
     # is the one described for AArch64. The statement writes the flags, so
     # it names the x86-64 clobber "flags" (see the module comment).
-    macro p256_x86_64_statement(result, a, b)
+    #
+    # *product* picks how the 512-bit product is formed: "mulq" (every
+    # x86-64 processor), "mulx" (BMI2 and ADX: each row after the first adds
+    # its low halves on the `adcx` chain and its high halves on the `adox`
+    # chain, both cleared by `xorl`, as OpenSSL's `ecp_nistz256` does with
+    # ADX), or "mulx_square" (a squaring with `mulx`: the six cross products
+    # once, doubled on the `adcx` chain while the four squares come in on
+    # the `adox` chain; it reads only $1).
+    macro p256_x86_64_statement(result, a, b, product_kind = "mulq")
       {%
         product = %w(%r8 %r9 %r10 %r11 %r12 %r13 %r14 %r15)
         lines = [] of StringLiteral
+      %}
+      {% if product_kind == "mulx" %}
+        {%
+          lines << "movq 0($1), %rdx"
+          lines << "mulxq 0($2), %r8, %r9"
+          lines << "mulxq 8($2), %rax, %r10"
+          lines << "addq %rax, %r9"
+          lines << "mulxq 16($2), %rax, %r11"
+          lines << "adcq %rax, %r10"
+          lines << "mulxq 24($2), %rax, %r12"
+          lines << "adcq %rax, %r11"
+          lines << "adcq $$0, %r12"
+        %}
+        {% for row in 1..3 %}
+          {%
+            lines << "movq #{8 * row}($1), %rdx"
+            lines << "xorl %eax, %eax"
+          %}
+          {% for column in 0..2 %}
+            {%
+              lines << "mulxq #{8 * column}($2), %rax, %rcx"
+              lines << "adcxq %rax, #{product[row + column].id}"
+              lines << "adoxq %rcx, #{product[row + column + 1].id}"
+            %}
+          {% end %}
+          {%
+            lines << "mulxq 24($2), %rax, #{product[row + 4].id}"
+            lines << "adcxq %rax, #{product[row + 3].id}"
+            lines << "movl $$0, %ecx"
+            lines << "adoxq %rcx, #{product[row + 4].id}"
+            lines << "adcxq %rcx, #{product[row + 4].id}"
+          %}
+        {% end %}
+      {% elsif product_kind == "mulx_square" %}
+        {%
+          lines << "movq 0($1), %rdx"
+          lines << "mulxq 8($1), %r9, %r10"
+          lines << "mulxq 16($1), %rax, %r11"
+          lines << "mulxq 24($1), %rcx, %r12"
+          lines << "addq %rax, %r10"
+          lines << "adcq %rcx, %r11"
+          lines << "adcq $$0, %r12"
+          lines << "movq 8($1), %rdx"
+          lines << "xorl %eax, %eax"
+          lines << "mulxq 16($1), %rax, %rcx"
+          lines << "adcxq %rax, %r11"
+          lines << "adoxq %rcx, %r12"
+          lines << "mulxq 24($1), %rax, %r13"
+          lines << "adcxq %rax, %r12"
+          lines << "movl $$0, %ecx"
+          lines << "adoxq %rcx, %r13"
+          lines << "adcxq %rcx, %r13"
+          lines << "movq 16($1), %rdx"
+          lines << "mulxq 24($1), %rax, %r14"
+          lines << "addq %rax, %r13"
+          lines << "adcq $$0, %r14"
+          lines << "movq 0($1), %rdx"
+          lines << "xorl %ecx, %ecx"
+          lines << "mulxq %rdx, %r8, %rax"
+          lines << "adcxq %r9, %r9"
+          lines << "adoxq %rax, %r9"
+          lines << "movq 8($1), %rdx"
+          lines << "mulxq %rdx, %rax, %rcx"
+          lines << "adcxq %r10, %r10"
+          lines << "adoxq %rax, %r10"
+          lines << "adcxq %r11, %r11"
+          lines << "adoxq %rcx, %r11"
+          lines << "movq 16($1), %rdx"
+          lines << "mulxq %rdx, %rax, %rcx"
+          lines << "adcxq %r12, %r12"
+          lines << "adoxq %rax, %r12"
+          lines << "adcxq %r13, %r13"
+          lines << "adoxq %rcx, %r13"
+          lines << "movq 24($1), %rdx"
+          lines << "mulxq %rdx, %rax, %r15"
+          lines << "adcxq %r14, %r14"
+          lines << "adoxq %rax, %r14"
+          lines << "movl $$0, %ecx"
+          lines << "adcxq %rcx, %r15"
+          lines << "adoxq %rcx, %r15"
+        %}
+      {% else %}
+      {%
         lines << "movq 0($1), %rax"
         lines << "mulq 0($2)"
         lines << "movq %rax, #{product[0].id}"
@@ -306,6 +398,7 @@ module Beryl::Crypto::FieldArithmetic
           %}
         {% end %}
         {% lines << "movq %rcx, #{product[row + 4].id}" %}
+      {% end %}
       {% end %}
       {% low = [product[0], product[1], product[2], product[3]] %}
       {% for step in 0..3 %}
@@ -658,15 +751,42 @@ module Beryl::Crypto::FieldArithmetic
         StaticArray[half_0, half_1, half_2, half_3]
       end
     {% elsif flag?(:x86_64) && !flag?(:beryl_portable_curves) %}
+      # `mulx` where the processor has BMI2 and ADX (a constant read once
+      # at start-up), else `mulq`.
+      @[AlwaysInline]
       def self.mul(a : Limbs, b : Limbs) : Limbs
+        if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+          mul_with_wide_multiply(a, b)
+        else
+          mul_with_multiply(a, b)
+        end
+      end
+
+      @[AlwaysInline]
+      def self.square(a : Limbs) : Limbs
+        if ::Beryl::Crypto::ProcessorFeatures::HAS_WIDE_MULTIPLY_WITH_TWO_CARRY_CHAINS
+          square_with_wide_multiply(a)
+        else
+          mul_with_multiply(a, a)
+        end
+      end
+
+      def self.mul_with_multiply(a : Limbs, b : Limbs) : Limbs
         result = uninitialized Limbs
         FieldsInAssembly.p256_x86_64_statement(result, a, b)
         result
       end
 
-      @[AlwaysInline]
-      def self.square(a : Limbs) : Limbs
-        mul(a, a)
+      def self.mul_with_wide_multiply(a : Limbs, b : Limbs) : Limbs
+        result = uninitialized Limbs
+        FieldsInAssembly.p256_x86_64_statement(result, a, b, "mulx")
+        result
+      end
+
+      def self.square_with_wide_multiply(a : Limbs) : Limbs
+        result = uninitialized Limbs
+        FieldsInAssembly.p256_x86_64_statement(result, a, a, "mulx_square")
+        result
       end
 
       @[AlwaysInline]
