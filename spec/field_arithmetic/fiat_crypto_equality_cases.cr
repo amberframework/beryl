@@ -17,6 +17,8 @@ lib LibFiatCryptoC
   fun curve25519_64_from_bytes = beryl_fiat_25519_from_bytes(out1 : UInt64*, arg1 : UInt8*) : Void
   fun curve25519_64_relax = beryl_fiat_25519_relax(out1 : UInt64*, arg1 : UInt64*) : Void
   fun curve25519_64_carry_scmul_121666 = beryl_fiat_25519_carry_scmul_121666(out1 : UInt64*, arg1 : UInt64*) : Void
+  fun curve25519_solinas_64_mul = beryl_fiat_curve25519_solinas_mul(out1 : UInt64*, arg1 : UInt64*, arg2 : UInt64*) : Void
+  fun curve25519_solinas_64_square = beryl_fiat_curve25519_solinas_square(out1 : UInt64*, arg1 : UInt64*) : Void
   fun curve25519_scalar_64_mul = beryl_fiat_25519_scalar_mul(out1 : UInt64*, arg1 : UInt64*, arg2 : UInt64*) : Void
   fun curve25519_scalar_64_square = beryl_fiat_25519_scalar_square(out1 : UInt64*, arg1 : UInt64*) : Void
   fun curve25519_scalar_64_add = beryl_fiat_25519_scalar_add(out1 : UInt64*, arg1 : UInt64*, arg2 : UInt64*) : Void
@@ -253,6 +255,38 @@ module FiatCryptoEquality
         translated = Beryl::Crypto::FieldArithmetic::Curve25519Field.carry_scmul_121666(arg1)
         from_c = StaticArray(UInt64, 5).new(0)
         LibFiatCryptoC.curve25519_64_carry_scmul_121666(from_c.to_unsafe, arg1.to_unsafe)
+        differences += 1 unless translated == from_c
+      end
+      differences
+    end},
+    {"Curve25519SolinasField", "mul", ->(count : Int64, draw : InputDraw) do
+      differences = 0_i64
+      lower_arg1 = [0x0_u64, 0x0_u64, 0x0_u64, 0x0_u64]
+      upper_arg1 = [0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64]
+      arg1 = StaticArray(UInt64, 4).new(0)
+      lower_arg2 = [0x0_u64, 0x0_u64, 0x0_u64, 0x0_u64]
+      upper_arg2 = [0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64]
+      arg2 = StaticArray(UInt64, 4).new(0)
+      count.times do
+        arg1.size.times { |index| arg1[index] = draw.next_within(lower_arg1[index], upper_arg1[index]).to_u64 }
+        arg2.size.times { |index| arg2[index] = draw.next_within(lower_arg2[index], upper_arg2[index]).to_u64 }
+        translated = Beryl::Crypto::FieldArithmetic::Curve25519SolinasField.mul(arg1, arg2)
+        from_c = StaticArray(UInt64, 4).new(0)
+        LibFiatCryptoC.curve25519_solinas_64_mul(from_c.to_unsafe, arg1.to_unsafe, arg2.to_unsafe)
+        differences += 1 unless translated == from_c
+      end
+      differences
+    end},
+    {"Curve25519SolinasField", "square", ->(count : Int64, draw : InputDraw) do
+      differences = 0_i64
+      lower_arg1 = [0x0_u64, 0x0_u64, 0x0_u64, 0x0_u64]
+      upper_arg1 = [0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64, 0xffffffffffffffff_u64]
+      arg1 = StaticArray(UInt64, 4).new(0)
+      count.times do
+        arg1.size.times { |index| arg1[index] = draw.next_within(lower_arg1[index], upper_arg1[index]).to_u64 }
+        translated = Beryl::Crypto::FieldArithmetic::Curve25519SolinasField.square(arg1)
+        from_c = StaticArray(UInt64, 4).new(0)
+        LibFiatCryptoC.curve25519_solinas_64_square(from_c.to_unsafe, arg1.to_unsafe)
         differences += 1 unless translated == from_c
       end
       differences
