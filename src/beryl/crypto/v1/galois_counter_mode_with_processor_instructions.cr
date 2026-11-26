@@ -92,9 +92,13 @@ module Beryl::Crypto::V1
     # 29 take counters 2 to 31, so the loop starts at 32.
     ALIGNING_BLOCK_COUNT = 30
 
-    # The shortest message the aligned stitched loop is used for; shorter
-    # ones run the stitched loop from their first block.
-    ALIGNED_MINIMUM_BYTESIZE = 4096
+    # The shortest message the aligned stitched loop is used for, and the
+    # round count it is used with. With AES-128 the loop is bound by all its
+    # vector work together, so the aligned counters (16 fewer instructions a
+    # pass) pay for the head from 32 KiB on; with more rounds it is bound by
+    # the AES instructions alone, and the head only costs time.
+    ALIGNED_MINIMUM_BYTESIZE = 32 * 1024
+    ALIGNED_ROUND_COUNT      = 10
 
     # The bytes of the GHASH accumulator.
     ACCUMULATOR_BYTESIZE = 16
@@ -173,15 +177,15 @@ module Beryl::Crypto::V1
     # Seals the start of *plaintext* (at least two 512-byte groups) on the
     # stitched 512-bit loop: the first group in counter mode alone, then
     # each further group encrypted while the one before it is hashed, then
-    # the last group hashed alone. With *starts_at_counter_two* and a long
-    # message, `ALIGNING_BLOCK_COUNT` blocks go first through the other
+    # the last group hashed alone. With *starts_at_counter_two*, AES-128 and a
+    # long message, `ALIGNING_BLOCK_COUNT` blocks go first through the other
     # vector code, and the loop then runs on aligned counters. Returns the
     # bytes sealed.
     private def self.seal_stitched_groups(round_keys : Bytes, round_count : Int32, hash_key_powers : Bytes, counter_block : Bytes,
                                           accumulator : Bytes, plaintext : Bytes, ciphertext : Bytes, starts_at_counter_two : Bool) : Int32
       {% if flag?(:x86_64) %}
         head_bytesize = 0
-        is_counter_aligned = starts_at_counter_two && plaintext.size >= ALIGNED_MINIMUM_BYTESIZE
+        is_counter_aligned = starts_at_counter_two && round_count == ALIGNED_ROUND_COUNT && plaintext.size >= ALIGNED_MINIMUM_BYTESIZE
         if is_counter_aligned
           head_bytesize = ALIGNING_BLOCK_COUNT * BLOCK_BYTESIZE
           encrypt_counter_blocks(round_keys, round_count, counter_block, plaintext[0, head_bytesize], ciphertext[0, head_bytesize])
@@ -261,7 +265,7 @@ module Beryl::Crypto::V1
       absorb(accumulator, hash_key_powers, associated_data)
       offset = 0
       {% if flag?(:x86_64) %}
-        is_counter_aligned = starts_at_counter_two && ciphertext.size >= ALIGNED_MINIMUM_BYTESIZE
+        is_counter_aligned = starts_at_counter_two && round_count == ALIGNED_ROUND_COUNT && ciphertext.size >= ALIGNED_MINIMUM_BYTESIZE
         if is_counter_aligned
           offset = ALIGNING_BLOCK_COUNT * BLOCK_BYTESIZE
           absorb_whole_blocks(accumulator, hash_key_powers, ciphertext[0, offset])

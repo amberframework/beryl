@@ -90,7 +90,7 @@ LIST_OF_CIPHER_CHECK_BYTESIZES = (0..600).to_a +
 # ones.
 LIST_OF_VECTOR_PATH_CHECK_BYTESIZES = [15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65, 66, 67].flat_map { |block_count|
   [block_count * 16 - 1, block_count * 16, block_count * 16 + 1]
-} + [256 + 32 * 16, 512 * 2 + 48, 512 * 3 + 16 * 3 + 7, 16_384 + 512 + 16, 16_384 + 64 + 48 + 5, 1024 * 1024 + 16 * 35 + 9]
+} + [256 + 32 * 16, 512 * 2 + 48, 512 * 3 + 16 * 3 + 7, 16_384 + 512 + 16, 16_384 + 64 + 48 + 5, 32 * 1024 - 1, 32 * 1024 + 16 * 30 + 3, 1024 * 1024 + 16 * 35 + 9]
 
 describe "Beryl ciphers on the processor's instructions" do
   it "states which instructions this run uses" do
