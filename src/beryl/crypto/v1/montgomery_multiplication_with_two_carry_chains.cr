@@ -318,7 +318,8 @@ module Beryl::Crypto::V1
         {% for j in 0...8 %}
           {%
             lines << "mov %#{window[0].id}, %rdx"
-            lines << "mulx 8(#{scratch_base.id}), %rdx, %r12"
+            lines << "imul 8(#{scratch_base.id}), %rdx"
+            lines << "xor %r12, %r12"
             lines << "mov %rdx, #{u_offset + 8 * j}(%r13)"
           %}
           {% for i in 0...7 %}
