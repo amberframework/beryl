@@ -91,6 +91,7 @@ module Beryl::Crypto::V1
       {%
         register_count = padded_digit_count // 8
         mask_word_count = (register_count + 7) // 8
+        is_last_register_narrow = digit_count - 8 * (register_count - 1) <= 4
         lines = [] of StringLiteral
         halves = [
           {offset: 0, accumulator: "r8", first: "r10", second: "r11", third: "rbp",
@@ -125,10 +126,9 @@ module Beryl::Crypto::V1
             second = half[:second]
             third = half[:third]
             offset = half[:offset]
-            lines << "mov #{offset + 8 * digit}(%rdi), %#{first.id}"
-            lines << "vpbroadcastq %#{first.id}, %#{half[:broadcast_b].id}"
+            lines << "vpbroadcastq #{offset + 8 * digit}(%rdi), %#{half[:broadcast_b].id}"
             lines << "mov #{offset}(%rsi), %rdx"
-            lines << "mulx %#{first.id}, %#{first.id}, %#{second.id}"
+            lines << "mulx #{offset + 8 * digit}(%rdi), %#{first.id}, %#{second.id}"
             lines << "add %#{first.id}, %#{accumulator.id}"
             lines << "adc $$0, %#{second.id}"
             lines << "mov #{half[:inverse]}($0), %#{first.id}"
@@ -146,26 +146,35 @@ module Beryl::Crypto::V1
         {% end %}
         {% for half in halves %}
           {% for index in 0...register_count %}
-            {% lines << "vpmadd52luq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].id}, %#{half[:sums][index].id}" %}
+            {% width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm" %}
+            {% lines << "vpmadd52luq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}" %}
           {% end %}
           {% for index in 0...register_count %}
-            {% lines << "vpmadd52luq #{half[:offset] + 64 * index}(%rcx), %#{half[:broadcast_y].id}, %#{half[:sums][index].id}" %}
+            {% width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm" %}
+            {% lines << "vpmadd52luq #{half[:offset] + 64 * index}(%rcx), %#{half[:broadcast_y].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}" %}
           {% end %}
         {% end %}
         {% for half in halves %}
+          {% lines << "vpextrq $$1, %#{half[:sums][0].gsub(/zmm/, "xmm").id}, %#{half[:first].id}" %}
           {% for index in 0...register_count %}
-            {% higher = index == register_count - 1 ? "zmm0" : half[:sums][index + 1] %}
-            {% lines << "valignq $$1, %#{half[:sums][index].id}, %#{higher.id}, %#{half[:sums][index].id}" %}
+            {% if is_last_register_narrow && index == register_count - 1 %}
+              {% narrow = half[:sums][index].gsub(/zmm/, "ymm") %}
+              {% lines << "valignq $$1, %#{narrow.id}, %ymm0, %#{narrow.id}" %}
+            {% else %}
+              {% higher = index == register_count - 1 ? "zmm0" : half[:sums][index + 1] %}
+              {% lines << "valignq $$1, %#{half[:sums][index].id}, %#{higher.id}, %#{half[:sums][index].id}" %}
+            {% end %}
           {% end %}
-          {% lines << "vmovq %#{half[:sums][0].gsub(/zmm/, "xmm").id}, %#{half[:first].id}" %}
           {% lines << "add %#{half[:first].id}, %#{half[:accumulator].id}" %}
         {% end %}
         {% for half in halves %}
           {% for index in 0...register_count %}
-            {% lines << "vpmadd52huq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].id}, %#{half[:sums][index].id}" %}
+            {% width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm" %}
+            {% lines << "vpmadd52huq #{half[:offset] + 64 * index}(%rsi), %#{half[:broadcast_b].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}" %}
           {% end %}
           {% for index in 0...register_count %}
-            {% lines << "vpmadd52huq #{half[:offset] + 64 * index}(%rcx), %#{half[:broadcast_y].id}, %#{half[:sums][index].id}" %}
+            {% width = is_last_register_narrow && index == register_count - 1 ? "ymm" : "zmm" %}
+            {% lines << "vpmadd52huq #{half[:offset] + 64 * index}(%rcx), %#{half[:broadcast_y].gsub(/zmm/, width).id}, %#{half[:sums][index].gsub(/zmm/, width).id}" %}
           {% end %}
         {% end %}
       {% end %}
@@ -275,8 +284,7 @@ module Beryl::Crypto::V1
         %}
         {% for index in 0...(2 * register_count) %}
           {% mask = index < register_count ? "k1" : "k2" %}
-          {% lines << "vmovdqu64 #{entry * entry_bytesize + 64 * index}(%rsi), %zmm31" %}
-          {% lines << "vpblendmq %zmm31, %zmm#{5 + index}, %zmm#{5 + index}{%#{mask.id}}" %}
+          {% lines << "vpblendmq #{entry * entry_bytesize + 64 * index}(%rsi), %zmm#{5 + index}, %zmm#{5 + index}{%#{mask.id}}" %}
         {% end %}
         {% lines << "vpaddq %zmm4, %zmm3, %zmm3" %}
       {% end %}
