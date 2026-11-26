@@ -275,10 +275,12 @@ module Beryl::Crypto::FieldArithmetic
     # - "mul" (`mulq`, every x86-64 processor) and "mulx" (BMI2 and ADX:
     #   each row after the first adds its low halves on the `adcx` chain and
     #   its high halves on the `adox` chain, both cleared by `xorl`, as
-    #   OpenSSL's `ecp_nistz256` does with ADX): the Montgomery product. The
-    #   512-bit product lives in r8 to r15 (rax, rcx and rdx scratch); the
-    #   reduction is the one described for AArch64, then one conditional
-    #   subtraction of p (`cmovnc`).
+    #   OpenSSL's `ecp_nistz256` does with ADX): the Montgomery product.
+    #   For "mul" the 512-bit product lives in r8 to r15 (rax, rcx and rdx
+    #   scratch) and the reduction is the one described for AArch64; "mulx"
+    #   reduces one word after each row, as OpenSSL's `mul_montx` does, on
+    #   a ring of six registers (the same m, so the same sum (T + m·p)/2^256).
+    #   Then one conditional subtraction of p (`cmovnc`).
     # - "mulx_square": a·a with `mulx`, the six cross products once, doubled
     #   on the `adcx` chain while the four squares come in on the `adox`
     #   chain (b is not read).
@@ -348,6 +350,11 @@ module Beryl::Crypto::FieldArithmetic
           {% end %}
         {% elsif operation == "mulx" %}
           {%
+            # Word i of the running sum lives in ring[i % 6]; after row i
+            # and its reduction step, words i + 1 to i + 5 are live.
+            ring = %w(%r8 %r9 %r10 %r11 %r12 %r13)
+            lines << "movabsq $$0xffffffff00000001, %r14"
+            lines << "xorl %r15d, %r15d"
             lines << "movq #{a_words[0].id}, %rdx"
             lines << "mulxq #{b_words[0].id}, %r8, %r9"
             lines << "mulxq #{b_words[1].id}, %rax, %r10"
@@ -357,27 +364,70 @@ module Beryl::Crypto::FieldArithmetic
             lines << "mulxq #{b_words[3].id}, %rax, %r12"
             lines << "adcq %rax, %r11"
             lines << "adcq $$0, %r12"
+            lines << "movq $$0, %r13"
           %}
-          {% for row in 1..3 %}
-            {%
-              lines << "movq #{a_words[row].id}, %rdx"
-              lines << "xorl %eax, %eax"
-            %}
-            {% for column in 0..2 %}
+          {% for row in 0..3 %}
+            {% if row > 0 %}
               {%
-                lines << "mulxq #{b_words[column].id}, %rax, %rcx"
-                lines << "adcxq %rax, #{product[row + column].id}"
-                lines << "adoxq %rcx, #{product[row + column + 1].id}"
+                lines << "movq $$0, #{ring[(row + 5) % 6].id}"
+                lines << "movq #{a_words[row].id}, %rdx"
+                lines << "xorl %eax, %eax"
+              %}
+              {% for column in 0..3 %}
+                {%
+                  lines << "mulxq #{b_words[column].id}, %rax, %rcx"
+                  lines << "adcxq %rax, #{ring[(row + column) % 6].id}"
+                  lines << "adoxq %rcx, #{ring[(row + column + 1) % 6].id}"
+                %}
+              {% end %}
+              {%
+                lines << "adcxq %r15, #{ring[(row + 4) % 6].id}"
+                lines << "adoxq %r15, #{ring[(row + 5) % 6].id}"
+                lines << "adcxq %r15, #{ring[(row + 5) % 6].id}"
               %}
             {% end %}
             {%
-              lines << "mulxq #{b_words[3].id}, %rax, #{product[row + 4].id}"
-              lines << "adcxq %rax, #{product[row + 3].id}"
-              lines << "movl $$0, %ecx"
-              lines << "adoxq %rcx, #{product[row + 4].id}"
-              lines << "adcxq %rcx, #{product[row + 4].id}"
+              # Montgomery step: m = word row (-p^-1 = 1 modulo 2^64);
+              # m·p = m·2^256 - m·2^224 + m·2^192 + m·2^96 - m, the low
+              # word cancels, m·2^96 is (m << 32, m >> 32) one word up and
+              # m·(2^64 - 2^32 + 1) lands three words up.
+              word = ring[row % 6]
+              lines << "movq #{word.id}, %rax"
+              lines << "shlq $$32, %rax"
+              lines << "movq #{word.id}, %rcx"
+              lines << "shrq $$32, %rcx"
+              lines << "movq #{word.id}, %rdx"
+              lines << "mulxq %r14, #{word.id}, %rdx"
+              lines << "addq %rax, #{ring[(row + 1) % 6].id}"
+              lines << "adcq %rcx, #{ring[(row + 2) % 6].id}"
+              lines << "adcq #{word.id}, #{ring[(row + 3) % 6].id}"
+              lines << "adcq %rdx, #{ring[(row + 4) % 6].id}"
+              lines << "adcq $$0, #{ring[(row + 5) % 6].id}"
             %}
           {% end %}
+          {%
+            # Words 4 to 7 (r12, r13, r8, r9) and the carry word 8 (r10):
+            # p subtracted, the difference kept unless it borrows; the
+            # result moved to r8 to r11.
+            lines << "movl $$0xffffffff, %r15d"
+            lines << "movq %r12, %rax"
+            lines << "movq %r13, %rcx"
+            lines << "movq %r8, %rdx"
+            lines << "movq %r9, %r11"
+            lines << "subq $$-1, %rax"
+            lines << "sbbq %r15, %rcx"
+            lines << "sbbq $$0, %rdx"
+            lines << "sbbq %r14, %r11"
+            lines << "sbbq $$0, %r10"
+            lines << "cmovncq %rax, %r12"
+            lines << "cmovncq %rcx, %r13"
+            lines << "cmovncq %rdx, %r8"
+            lines << "cmovncq %r11, %r9"
+            lines << "movq %r8, %r10"
+            lines << "movq %r9, %r11"
+            lines << "movq %r12, %r8"
+            lines << "movq %r13, %r9"
+          %}
         {% elsif operation == "mulx_square" %}
           {%
             lines << "movq #{a_words[0].id}, %rdx"
@@ -498,7 +548,7 @@ module Beryl::Crypto::FieldArithmetic
         {% else %}
           {% raise "unknown P-256 operation #{operation}" %}
         {% end %}
-        {% if operation == "mul" || operation == "mulx" || operation == "mulx_square" %}
+        {% if operation == "mul" || operation == "mulx_square" %}
           {% low = [product[0], product[1], product[2], product[3]] %}
           {% for step_index in 0..3 %}
             {%
