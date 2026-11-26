@@ -109,6 +109,19 @@ module Beryl::Crypto
 
         processor_identification(7_u32, 0_u32)[register].bit(bit) == 1
       end
+
+      # Whether the processor is AMD's family 19h (Zen 3 and Zen 4): the
+      # vendor string of leaf 0 is "AuthenticAMD", and the family of leaf 1
+      # (its base, 0Fh, plus the extended family) is 19h.
+      private def self.amd_family_19h? : Bool
+        _, ebx, ecx, edx = processor_identification(0_u32, 0_u32)
+        return false unless ebx == 0x68747541_u32 && edx == 0x69746e65_u32 && ecx == 0x444d4163_u32
+
+        signature = processor_identification(1_u32, 0_u32)[0]
+        base_family = (signature >> 8) & 0xf_u32
+        extended_family = (signature >> 20) & 0xff_u32
+        base_family == 0xf_u32 && base_family + extended_family == 0x19_u32
+      end
     {% end %}
 
     {% if flag?(:beryl_portable_hashes) %}
@@ -173,6 +186,10 @@ module Beryl::Crypto
     #   with two independent carry chains.
     # - `HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD`: AVX-512 IFMA (bit 21 of EBX
     #   in leaf 7), 52-bit multiply-add, only set with `HAS_AVX512`.
+    # - `SPLITS_512_BIT_OPERATIONS`: the processor runs each 512-bit
+    #   instruction as two 256-bit halves, as Zen 4 does (AMD family 19h with
+    #   AVX-512; Zen 3, the same family, has no AVX-512). Where a 512-bit
+    #   path saves little, such a processor takes the narrower one.
     #
     # `-Dberyl_without_avx512` keeps every 512-bit path off,
     # `-Dberyl_without_avx2` every 256-bit and 512-bit path (VAES and
@@ -193,9 +210,11 @@ module Beryl::Crypto
       HAS_AVX512 = HAS_AVX2 && saves_512_bit_registers? &&
                    has_leaf7_bit?(1, 16) && has_leaf7_bit?(1, 17) && has_leaf7_bit?(1, 30) && has_leaf7_bit?(1, 31)
       HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD = HAS_AVX512 && has_leaf7_bit?(1, 21)
+      SPLITS_512_BIT_OPERATIONS             = HAS_AVX512 && amd_family_19h?
     {% else %}
       HAS_AVX512                            = false
       HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD = false
+      SPLITS_512_BIT_OPERATIONS             = false
     {% end %}
 
     {% if flag?(:x86_64) %}

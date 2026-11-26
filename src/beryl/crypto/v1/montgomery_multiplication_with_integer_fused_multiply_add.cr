@@ -639,8 +639,12 @@ module Beryl::Crypto::V1
       end
 
       # Squares both numbers of *a* into *result*, with *doubled* (a pair's
-      # size) for the digits of 2a.
+      # size) for the digits of 2a. At 16 words (20 digits) on a processor
+      # that splits 512-bit operations, building the squaring's diagonal
+      # costs about what it saves, and the multiplication is as fast.
       private def square_pair(result : Slice(UInt64), a : Slice(UInt64), doubled : Slice(UInt64)) : Nil
+        return multiply_pair(result, a, a) if @word_count == 16 && ProcessorFeatures::SPLITS_512_BIT_OPERATIONS
+
         {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
           {% begin %}
             case @word_count
