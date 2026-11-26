@@ -334,4 +334,37 @@ describe "Beryl::Crypto::V1::MontgomeryMultiplicationWithIntegerFusedMultiplyAdd
       {% end %}
     end
   {% end %}
+
+  {% for word_count in [32, 48, 64] %}
+    it "raises to the public exponent as the 64-bit code does, {{ word_count }} words" do
+      {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+        # The path needs AVX-512 IFMA; on a processor without it there is nothing to compare.
+        next unless Beryl::Crypto::ProcessorFeatures::HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD
+
+        random = Random::PCG32.new({{ word_count }}_u64 + 65537)
+        {3_u64, 65537_u64, 0xffffffff_u64}.each do |exponent|
+          8.times do |trial|
+            modulus = random_modulus(random, {{ word_count }})
+            modulus.map! { |word| word | 0xffffffff00000000_u64 } if trial % 3 == 1
+            negated_inverse = MontgomeryArithmetic.negated_inverse_of_low_word(modulus[0])
+            r_squared = Slice(UInt64).new({{ word_count }})
+            MontgomeryArithmetic.compute_r_squared(r_squared, modulus, 64 * {{ word_count }}, negated_inverse,
+              Slice(UInt64).new(MontgomeryArithmetic.multiplication_scratch_word_count({{ word_count }})))
+            base = random_below(random, modulus)
+            if trial % 4 == 3
+              base = modulus.dup
+              base[0] -= 1
+            end
+            expected = Slice(UInt64).new({{ word_count }})
+            MontgomeryArithmetic.exponentiate_by_public_exponent(expected, base, exponent, modulus, r_squared, negated_inverse,
+              Slice(UInt64).new(MontgomeryArithmetic.public_exponentiation_scratch_word_count({{ word_count }})))
+            public_modulus = IntegerFusedMultiplyAdd::PublicModulus.new(modulus, r_squared, negated_inverse, exponent)
+            result = Slice(UInt64).new({{ word_count }})
+            public_modulus.exponentiate(result, base)
+            result.should eq(expected)
+          end
+        end
+      {% end %}
+    end
+  {% end %}
 end

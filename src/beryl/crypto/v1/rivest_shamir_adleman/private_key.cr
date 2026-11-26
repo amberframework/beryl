@@ -37,6 +37,9 @@ module Beryl::Crypto::V1::RivestShamirAdleman
     # R^e mod n, so that each private operation's check under the public
     # exponent takes one multiplication fewer.
     @public_exponent_correction : Slice(UInt64)
+    # The modulus in the form of the AVX-512 IFMA path, for that check, where
+    # the processor and the modulus suit it.
+    @modulus_in_digits : MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PublicModulus?
     @first_prime : OddModulus
     @second_prime : OddModulus
     @first_prime_exponent : Bytes
@@ -65,6 +68,10 @@ module Beryl::Crypto::V1::RivestShamirAdleman
       @modulus = PublicKey.read_modulus(modulus, SMALLEST_MODULUS_BIT_COUNT, LARGEST_MODULUS_BIT_COUNT)
       @public_exponent = PublicKey.read_public_exponent(public_exponent)
       @public_exponent_correction = @modulus.public_exponent_correction(@public_exponent)
+      if MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PublicModulus.usable_for?(@modulus.word_count)
+        @modulus_in_digits = MontgomeryMultiplicationWithIntegerFusedMultiplyAdd::PublicModulus.new(@modulus.words,
+          @modulus.r_squared, @modulus.negated_inverse, @public_exponent)
+      end
       @modulus_bytesize = @modulus.bytesize
       @public_key = PublicKey.new(modulus, @public_exponent)
 
@@ -252,7 +259,11 @@ module Beryl::Crypto::V1::RivestShamirAdleman
           @first_prime_exponent, @second_prime_exponent, @coefficient, @modulus, @prime_pair)
 
         check_words = Slice(UInt64).new(word_count)
-        @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent, @public_exponent_correction)
+        if modulus_in_digits = @modulus_in_digits
+          modulus_in_digits.exponentiate(check_words, result_words)
+        else
+          @modulus.exponentiate_by_public_exponent(check_words, result_words, @public_exponent, @public_exponent_correction)
+        end
         is_correct = MontgomeryArithmetic.equal_bit(check_words, input_words) | (is_in_range ^ 1_u64)
         wipe_words(check_words)
         wipe_words(input_words)

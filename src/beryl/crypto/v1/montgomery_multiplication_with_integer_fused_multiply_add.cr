@@ -57,6 +57,10 @@ module Beryl::Crypto::V1
     # and 4,096-bit keys).
     SUPPORTED_WORD_COUNTS = [16, 24, 32]
 
+    # The word counts of the moduli whose public operation takes this path
+    # (2,048, 3,072 and 4,096 bits), one multiplication at a time.
+    PUBLIC_WORD_COUNTS = [32, 48, 64]
+
     # The number of 52-bit digits that hold a number of *word_count* words.
     def self.digit_count_for(word_count : Int32) : Int32
       (64 * word_count + DIGIT_BIT_COUNT - 1) // DIGIT_BIT_COUNT
@@ -67,12 +71,12 @@ module Beryl::Crypto::V1
       (digit_count_for(word_count) + 7) // 8 * 8
     end
 
-    # The text of two almost Montgomery multiplications side by side, each
-    # of numbers of *digit_count* digits in *padded_digit_count* lanes.
-    # Every operand is two numbers, one after the other (the first prime's,
-    # then the second's). $0 points at six words: the result, a, b, m, and
-    # -m^-1 mod 2^64 for each prime. The result may be a or b: it is written
-    # last.
+    # The text of *half_count* (two, or one) almost Montgomery
+    # multiplications side by side, each of numbers of *digit_count* digits
+    # in *padded_digit_count* lanes. With two, every operand is two numbers,
+    # one after the other (the first prime's, then the second's). $0 points
+    # at six words: the result, a, b, m, and -m^-1 mod 2^64 for each
+    # multiplication. The result may be a or b: it is written last.
     #
     # Registers: rsi, rdi and rcx point at a, b and m, rbx at the result;
     # rax holds 2^52 - 1. The first multiplication keeps its lowest digit in
@@ -80,19 +84,25 @@ module Beryl::Crypto::V1
     # and r14. zmm0 is zero; zmm1 and zmm2 hold b_i and y_i broadcast for
     # the first, zmm3 and zmm4 for the second; the running sums are zmm5 on
     # (the first) and zmm10 on (the second), one register per eight lanes;
-    # zmm15 on and zmm25 serve the final carry propagation.
-    macro dual_multiplication_statement(digit_count, padded_digit_count, parameters)
+    # zmm15 on and zmm25 serve the final carry propagation, with the lane
+    # masks in r10 and r11 (the first) and r12 and r13 (the second, or the
+    # high lanes of a single multiplication of more than 64 lanes), and rax.
+    macro multiplication_statement(half_count, digit_count, padded_digit_count, parameters)
       {%
         register_count = padded_digit_count // 8
+        mask_word_count = (register_count + 7) // 8
         lines = [] of StringLiteral
         halves = [
           {offset: 0, accumulator: "r8", first: "r10", second: "r11", third: "rbp",
            broadcast_b: "zmm1", broadcast_y: "zmm2", sums: (5...(5 + register_count)).to_a.map { |index| "zmm#{index}" },
-           carries: (15...(15 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 32},
+           carries: (15...(15 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 32,
+           greater: half_count == 1 ? ["r10", "r12"] : ["r10"], equal: half_count == 1 ? ["r11", "r13"] : ["r11"]},
           {offset: 8 * padded_digit_count, accumulator: "r9", first: "r12", second: "r13", third: "r14",
            broadcast_b: "zmm3", broadcast_y: "zmm4", sums: (10...(10 + register_count)).to_a.map { |index| "zmm#{index}" },
-           carries: (20...(20 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 40},
+           carries: (20...(20 + register_count)).to_a.map { |index| "zmm#{index}" }, inverse: 40,
+           greater: ["r12"], equal: ["r13"]},
         ]
+        halves = halves[0...half_count]
         lines << "mov 8($0), %rsi"
         lines << "mov 16($0), %rdi"
         lines << "mov 24($0), %rcx"
@@ -169,8 +179,8 @@ module Beryl::Crypto::V1
         {%
           sums = half[:sums]
           carries = half[:carries]
-          greater = half[:first]
-          equal = half[:second]
+          greater = half[:greater]
+          equal = half[:equal]
           lines << "vpbroadcastq %#{half[:accumulator].id}, %#{sums[0].id}{%k1}"
         %}
         {% for index in 0...register_count %}
@@ -185,29 +195,37 @@ module Beryl::Crypto::V1
           {% lines << "vpandq %zmm25, %#{sums[index].id}, %#{sums[index].id}" %}
           {% lines << "vpaddq %#{carries[index].id}, %#{sums[index].id}, %#{sums[index].id}" %}
         {% end %}
-        {% lines << "xor %#{greater.id}, %#{greater.id}" %}
-        {% lines << "xor %#{equal.id}, %#{equal.id}" %}
+        {% for word in 0...mask_word_count %}
+          {% lines << "xor %#{greater[word].id}, %#{greater[word].id}" %}
+          {% lines << "xor %#{equal[word].id}, %#{equal[word].id}" %}
+        {% end %}
         {% for index in 0...register_count %}
           {%
             lines << "vpcmpuq $$6, %zmm25, %#{sums[index].id}, %k2"
             lines << "kmovb %k2, %eax"
-            lines << "shl $$#{8 * index}, %rax"
-            lines << "or %rax, %#{greater.id}"
+            lines << "shl $$#{8 * (index % 8)}, %rax"
+            lines << "or %rax, %#{greater[index // 8].id}"
             lines << "vpcmpuq $$0, %zmm25, %#{sums[index].id}, %k2"
             lines << "kmovb %k2, %eax"
-            lines << "shl $$#{8 * index}, %rax"
-            lines << "or %rax, %#{equal.id}"
+            lines << "shl $$#{8 * (index % 8)}, %rax"
+            lines << "or %rax, %#{equal[index // 8].id}"
           %}
         {% end %}
-        {%
-          lines << "add %#{greater.id}, %#{greater.id}"
-          lines << "add %#{equal.id}, %#{greater.id}"
-          lines << "xor %#{equal.id}, %#{greater.id}"
-        %}
+        # Lanes that take a carry: ((greater << 1) + equal) ^ equal, over
+        # all the mask words as one number.
+        {% for word in 0...mask_word_count %}
+          {% lines << "#{(word == 0 ? "add" : "adc").id} %#{greater[word].id}, %#{greater[word].id}" %}
+        {% end %}
+        {% for word in 0...mask_word_count %}
+          {% lines << "#{(word == 0 ? "add" : "adc").id} %#{equal[word].id}, %#{greater[word].id}" %}
+        {% end %}
+        {% for word in 0...mask_word_count %}
+          {% lines << "xor %#{equal[word].id}, %#{greater[word].id}" %}
+        {% end %}
         {% for index in 0...register_count %}
           {%
-            lines << "mov %#{greater.id}, %rax"
-            lines << "shr $$#{8 * index}, %rax"
+            lines << "mov %#{greater[index // 8].id}, %rax"
+            lines << "shr $$#{8 * (index % 8)}, %rax"
             lines << "kmovb %eax, %k2"
             lines << "vpsubq %zmm25, %#{sums[index].id}, %#{sums[index].id}{%k2}"
             lines << "vpandq %zmm25, %#{sums[index].id}, %#{sums[index].id}"
@@ -285,7 +303,7 @@ module Beryl::Crypto::V1
           operands = StaticArray[result.address, a.address, b.address, modulus.address, first_negated_inverse,
                                  second_negated_inverse]
           operands_address = operands.to_unsafe.address
-          dual_multiplication_statement({{ digit_count }}, {{ padded_digit_count }}, operands_address)
+          multiplication_statement(2, {{ digit_count }}, {{ padded_digit_count }}, operands_address)
         end
 
         # Copies entry *first_index* of the table's first numbers and entry
@@ -295,6 +313,19 @@ module Beryl::Crypto::V1
           operands = StaticArray[destination.address, table.address, first_index, second_index]
           operands_address = operands.to_unsafe.address
           dual_select_statement({{ padded_digit_count }}, operands_address)
+        end
+      {% end %}
+
+      {% for word_count in PUBLIC_WORD_COUNTS %}
+        {% digit_count = (64 * word_count + 51) // 52 %}
+        {% padded_digit_count = (digit_count + 7) // 8 * 8 %}
+        # One almost Montgomery multiplication of numbers of
+        # {{ digit_count }} digits ({{ padded_digit_count }} lanes); *result*
+        # may be *a* or *b*.
+        def self.multiply_{{ word_count }}(result : UInt64*, a : UInt64*, b : UInt64*, modulus : UInt64*, negated_inverse : UInt64) : Nil
+          operands = StaticArray[result.address, a.address, b.address, modulus.address, negated_inverse, 0_u64]
+          operands_address = operands.to_unsafe.address
+          multiplication_statement(1, {{ digit_count }}, {{ padded_digit_count }}, operands_address)
         end
       {% end %}
     {% end %}
@@ -498,6 +529,93 @@ module Beryl::Crypto::V1
 
       private def wipe_words(words : Slice(UInt64)) : Nil
         SecretWiping.wipe(Bytes.new(words.to_unsafe.as(UInt8*), words.size * 8))
+      end
+    end
+
+    # A modulus in the form this path works on, for the public operation
+    # (raising to the public exponent e): the modulus in digits, -n^-1
+    # mod 2^64, and R'^e mod n. Built only where `usable_for?` says so. A
+    # struct, as `OddModulus` is, so that a key holds it in place and reads
+    # its sizes at fixed offsets.
+    struct PublicModulus
+      @word_count : Int32
+      @padded_digit_count : Int32
+      @exponent : UInt64
+      @modulus : Slice(UInt64)
+      @negated_inverse : UInt64
+      @digits : Slice(UInt64)
+      @correction : Slice(UInt64)
+
+      # Whether the processor has IFMA and a modulus of *word_count* words
+      # suits this path. Public.
+      def self.usable_for?(word_count : Int32) : Bool
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+          ProcessorFeatures::HAS_AVX512_INTEGER_FUSED_MULTIPLY_ADD && PUBLIC_WORD_COUNTS.includes?(word_count)
+        {% else %}
+          false
+        {% end %}
+      end
+
+      # Takes the modulus's words, R² mod n (with R = 2^(64n)), -n^-1
+      # mod 2^64 and the public exponent. R'^e mod n is found with the
+      # 64-bit arithmetic: R' mod n by doubling R mod n, then its power.
+      def initialize(@modulus : Slice(UInt64), r_squared : Slice(UInt64), @negated_inverse : UInt64, @exponent : UInt64)
+        @word_count = @modulus.size
+        @padded_digit_count = MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.padded_digit_count_for(@word_count)
+        @digits = Slice(UInt64).new(@padded_digit_count)
+        @correction = Slice(UInt64).new(@padded_digit_count)
+        MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_digits(@modulus, @digits)
+        scratch = Slice(UInt64).new(MontgomeryArithmetic.public_exponentiation_scratch_word_count(@word_count))
+        r_modulo_modulus = Slice(UInt64).new(@word_count)
+        one = Slice(UInt64).new(@word_count)
+        one[0] = 1_u64
+        MontgomeryArithmetic.multiply(r_modulo_modulus, one, r_squared, @modulus, @negated_inverse,
+          scratch[0, MontgomeryArithmetic.multiplication_scratch_word_count(@word_count)])
+        extra_bit_count = DIGIT_BIT_COUNT * MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.digit_count_for(@word_count) -
+                          64 * @word_count
+        extra_bit_count.times { MontgomeryArithmetic.double(r_modulo_modulus, @modulus, scratch) }
+        power = Slice(UInt64).new(@word_count)
+        MontgomeryArithmetic.exponentiate_by_public_exponent(power, r_modulo_modulus, @exponent, @modulus, r_squared,
+          @negated_inverse, scratch)
+        MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_digits(power, @correction)
+      end
+
+      # Sets *result* to base^e mod n, for a *base* below n: left to right
+      # square and multiply on the plain base, whose almost Montgomery
+      # products keep the form x^k/R'^(k-1), then one product with R'^e.
+      # The time depends on the exponent's bits, which are public, and not
+      # on the base.
+      def exponentiate(result : Slice(UInt64), base : Slice(UInt64)) : Nil
+        plain_base = Slice(UInt64).new(@padded_digit_count)
+        MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_digits(base, plain_base)
+        power = plain_base.dup
+        highest_bit = 63 - @exponent.leading_zeros_count
+        (highest_bit - 1).downto(0) do |bit_position|
+          multiply(power, power, power)
+          multiply(power, power, plain_base) if (@exponent >> bit_position) & 1_u64 == 1_u64
+        end
+        multiply(power, power, @correction)
+        # Below 2n: one subtraction, kept or dropped by mask, reduces it.
+        unreduced = Slice(UInt64).new(@word_count)
+        MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.write_words(power, unreduced)
+        bit = 64 * @word_count
+        top_bit = (power[bit // DIGIT_BIT_COUNT] >> (bit % DIGIT_BIT_COUNT)) & 1_u64
+        MontgomeryArithmetic.subtract_modulus_when_not_below(result, unreduced, top_bit, @modulus)
+        {plain_base, power, unreduced}.each { |words| SecretWiping.wipe(Bytes.new(words.to_unsafe.as(UInt8*), words.size * 8)) }
+      end
+
+      private def multiply(result : Slice(UInt64), a : Slice(UInt64), b : Slice(UInt64)) : Nil
+        {% if flag?(:x86_64) && !flag?(:beryl_portable_rsa) %}
+          {% begin %}
+            case @word_count
+            {% for word_count in PUBLIC_WORD_COUNTS %}
+            when {{ word_count }}
+              MontgomeryMultiplicationWithIntegerFusedMultiplyAdd.multiply_{{ word_count }}(result.to_unsafe, a.to_unsafe,
+                b.to_unsafe, @digits.to_unsafe, @negated_inverse)
+            {% end %}
+            end
+          {% end %}
+        {% end %}
       end
     end
   end
