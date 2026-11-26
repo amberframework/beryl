@@ -59,6 +59,16 @@ jobs:
         run: crystal spec -Dberyl_portable_ciphers
       - name: Run the quick suite again on the curves' fiat-crypto field arithmetic alone (no assembly)
         run: crystal spec -Dberyl_portable_curves
+      - name: State the x86-64 vector and multiply instructions this runner has
+        run: |
+          lscpu | sed -n 's/^Model name:[[:space:]]*//p'
+          grep -m1 -o -w -E 'avx2|avx512f|avx512vl|avx512bw|avx512dq|avx512ifma|vaes|vpclmulqdq|bmi2|adx' /proc/cpuinfo | sort -u | tr '\n' ' '; echo
+      - name: Run the cipher, hash and public-key vectors again without AVX-512 (AVX2 paths)
+        run: crystal spec -Dberyl_without_avx512 spec/beryl/crypto
+      - name: Run the cipher, hash and public-key vectors again without AVX2 or AVX-512 (SSE paths)
+        run: crystal spec -Dberyl_without_avx2 spec/beryl/crypto
+      - name: Run the public-key vectors again without MULX and ADX
+        run: crystal spec -Dberyl_without_mulx spec/beryl/crypto
       - name: Run the slow vectors (PBKDF2 at 16,777,216 iterations, X25519 iterated 1,000,000 times)
         run: crystal spec --release --tag slow
       - name: "Field arithmetic: every translated function and every one in assembly equals fiat-crypto's C (1,000,000 inputs each)"
