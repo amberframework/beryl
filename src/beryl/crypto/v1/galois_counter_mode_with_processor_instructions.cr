@@ -22,6 +22,16 @@ module Beryl::Crypto::V1
   # and its lengths block, is hashed with a single reduction, and its counter
   # blocks, the one that masks the tag included, are encrypted in one call.
   #
+  # On x86-64 with VAES and VPCLMULQDQ, counter mode and GHASH run on
+  # vector registers instead (`X8664CipherInstructions`, the
+  # `_with_vector_*` macros): 512-bit ones where AVX-512 is there too, 256-bit
+  # ones otherwise. A run of at least `VECTOR_PATH_MINIMUM_BLOCK_COUNT` blocks
+  # goes through their wide loops (32 blocks a pass, see
+  # `VECTOR_COUNTER_REGISTERS_PER_GROUP` and
+  # `VECTOR_HASH_BLOCKS_PER_GROUP`), then single registers, and the last
+  # one to three blocks through the AES-NI code. Shorter runs stay on the
+  # AES-NI code, which starts faster.
+  #
   # Every buffer handed to these methods is treated as secret. Sizes and the
   # round count are public.
   module GaloisCounterModeWithProcessorInstructions
@@ -41,8 +51,38 @@ module Beryl::Crypto::V1
     # The bytes of one table entry of hash key powers.
     HASH_KEY_POWER_BYTESIZE = 32
 
-    # The bytes of the table of hash key powers, H^16 down to H.
-    HASH_KEY_POWERS_BYTESIZE = HASH_KEY_POWER_BYTESIZE * BLOCKS_PER_GROUP
+    {% if flag?(:x86_64) %}
+      # The bytes of the table of hash key powers: H^16 down to H for the
+      # AES-NI code, then H^32 down to H for the vector code (the layout in
+      # `X8664CipherInstructions`).
+      HASH_KEY_POWERS_BYTESIZE = X8664CipherInstructions::HASH_KEY_POWERS_BYTESIZE
+
+      # The width in bits of the vector registers counter mode and GHASH run
+      # on: 512 with AVX-512, VAES and VPCLMULQDQ, 256 with VAES and
+      # VPCLMULQDQ alone, 0 where only the AES-NI code runs.
+      VECTOR_REGISTER_BITSIZE = if ProcessorFeatures::HAS_VECTOR_AES && ProcessorFeatures::HAS_VECTOR_CARRYLESS_MULTIPLY
+                                  ProcessorFeatures::HAS_AVX512 ? 512 : 256
+                                else
+                                  0
+                                end
+    {% else %}
+      # The bytes of the table of hash key powers, H^16 down to H.
+      HASH_KEY_POWERS_BYTESIZE = HASH_KEY_POWER_BYTESIZE * BLOCKS_PER_GROUP
+
+      # No vector registers for these paths outside x86-64.
+      VECTOR_REGISTER_BITSIZE = 0
+    {% end %}
+
+    # The fewest blocks a run must have to go through the vector code.
+    VECTOR_PATH_MINIMUM_BLOCK_COUNT = 16
+
+    # The registers of blocks one pass of the wide vector counter-mode loop
+    # encrypts side by side.
+    VECTOR_COUNTER_REGISTERS_PER_GROUP = 8
+
+    # The blocks one pass of the wide vector GHASH loop multiplies by H^32 to
+    # H and reduces once.
+    VECTOR_HASH_BLOCKS_PER_GROUP = 32
 
     # The bytes of the GHASH accumulator.
     ACCUMULATOR_BYTESIZE = 16
@@ -230,6 +270,11 @@ module Beryl::Crypto::V1
       raise OutputSizeMismatch.new("counter mode writes as many bytes as it reads") unless input.size == output.size
 
       block_count = input.size // BLOCK_BYTESIZE
+      if VECTOR_REGISTER_BITSIZE != 0 && block_count >= VECTOR_PATH_MINIMUM_BLOCK_COUNT
+        encrypt_counter_blocks_with_vector_aes(round_keys, round_count, counter_block, input, output, block_count)
+        return
+      end
+
       group_count = block_count // COUNTER_BLOCKS_PER_GROUP
       pipelined_block_count = 0
       if group_count >= 3
@@ -244,6 +289,29 @@ module Beryl::Crypto::V1
       encrypt_counter_singles(round_keys, round_count, counter_block, input.to_unsafe + offset, output.to_unsafe + offset, single_count)
     end
 
+    # Counter mode for *block_count* whole blocks on the vector registers:
+    # passes of `VECTOR_COUNTER_REGISTERS_PER_GROUP` registers, then single
+    # registers, then the AES-NI code for the blocks left over.
+    private def self.encrypt_counter_blocks_with_vector_aes(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
+                                                            input : Bytes, output : Bytes, block_count : Int32) : Nil
+      blocks_per_register = VECTOR_REGISTER_BITSIZE // 128
+      blocks_per_group = blocks_per_register * VECTOR_COUNTER_REGISTERS_PER_GROUP
+      group_count = block_count // blocks_per_group
+      encrypt_counter_groups_with_vector_aes(round_keys, round_count, counter_block, input.to_unsafe, output.to_unsafe, group_count.to_u64) if group_count > 0
+      done_block_count = group_count * blocks_per_group
+      register_count = (block_count - done_block_count) // blocks_per_register
+      if register_count > 0
+        offset = done_block_count * BLOCK_BYTESIZE
+        encrypt_counter_registers_with_vector_aes(round_keys, round_count, counter_block, input.to_unsafe + offset, output.to_unsafe + offset, register_count.to_u64)
+        done_block_count += register_count * blocks_per_register
+      end
+      single_count = block_count - done_block_count
+      return if single_count == 0
+
+      offset = done_block_count * BLOCK_BYTESIZE
+      encrypt_counter_singles(round_keys, round_count, counter_block, input.to_unsafe + offset, output.to_unsafe + offset, single_count.to_u64)
+    end
+
     # Mixes the whole blocks of *blocks_to_absorb* into the accumulator:
     # each group of sixteen multiplied by H^16 to H and reduced once, then
     # the blocks left over, n of them, multiplied by the powers from H^n down
@@ -253,6 +321,11 @@ module Beryl::Crypto::V1
       raise OutputSizeMismatch.new("the hash key powers take #{HASH_KEY_POWERS_BYTESIZE} bytes") unless hash_key_powers.size == HASH_KEY_POWERS_BYTESIZE
 
       block_count = blocks_to_absorb.size // BLOCK_BYTESIZE
+      if VECTOR_REGISTER_BITSIZE != 0 && block_count >= VECTOR_PATH_MINIMUM_BLOCK_COUNT
+        absorb_whole_blocks_with_vector_carryless_multiply(accumulator, hash_key_powers, blocks_to_absorb, block_count)
+        return
+      end
+
       group_count = (block_count // BLOCKS_PER_GROUP).to_u64
       absorb_groups(accumulator, hash_key_powers.to_unsafe, blocks_to_absorb.to_unsafe, group_count) if group_count > 0
       single_count = block_count % BLOCKS_PER_GROUP
@@ -261,6 +334,37 @@ module Beryl::Crypto::V1
       first_power_offset = (BLOCKS_PER_GROUP - single_count) * HASH_KEY_POWER_BYTESIZE
       absorb_with_one_reduction(accumulator, hash_key_powers.to_unsafe + first_power_offset,
         blocks_to_absorb.to_unsafe + group_count * GROUP_BYTESIZE, single_count.to_u64)
+    end
+
+    # GHASH of *block_count* whole blocks on the vector registers: groups of
+    # `VECTOR_HASH_BLOCKS_PER_GROUP` multiplied by H^32 to H, then the
+    # registers left over, n blocks multiplied by the powers from H^n down,
+    # then the one to three blocks left over through the AES-NI code. Each
+    # step reduces its sum once.
+    private def self.absorb_whole_blocks_with_vector_carryless_multiply(accumulator : Bytes, hash_key_powers : Bytes,
+                                                                        blocks_to_absorb : Bytes, block_count : Int32) : Nil
+      {% if flag?(:x86_64) %}
+        vector_powers = hash_key_powers.to_unsafe + X8664CipherInstructions::VECTOR_HASH_KEY_POWERS_OFFSET
+        blocks_per_register = VECTOR_REGISTER_BITSIZE // 128
+        group_count = block_count // VECTOR_HASH_BLOCKS_PER_GROUP
+        absorb_groups_with_vector_carryless_multiply(accumulator, vector_powers, blocks_to_absorb.to_unsafe, group_count.to_u64) if group_count > 0
+        done_block_count = group_count * VECTOR_HASH_BLOCKS_PER_GROUP
+        register_count = (block_count - done_block_count) // blocks_per_register
+        if register_count > 0
+          first_power_offset = (VECTOR_HASH_BLOCKS_PER_GROUP - register_count * blocks_per_register) * BLOCK_BYTESIZE
+          absorb_registers_with_vector_carryless_multiply(accumulator, vector_powers + first_power_offset,
+            blocks_to_absorb.to_unsafe + done_block_count * BLOCK_BYTESIZE, register_count.to_u64)
+          done_block_count += register_count * blocks_per_register
+        end
+        single_count = block_count - done_block_count
+        return if single_count == 0
+
+        first_power_offset = (BLOCKS_PER_GROUP - single_count) * HASH_KEY_POWER_BYTESIZE
+        absorb_with_one_reduction(accumulator, hash_key_powers.to_unsafe + first_power_offset,
+          blocks_to_absorb.to_unsafe + done_block_count * BLOCK_BYTESIZE, single_count.to_u64)
+      {% else %}
+        raise UnsupportedProcessor.new("this processor has no vector carry-less multiply Beryl can use")
+      {% end %}
     end
 
     # Each method below holds the assembly for one kind of loop, once per
@@ -295,6 +399,55 @@ module Beryl::Crypto::V1
           end
         {% end %}
         raise KeySizeMismatch.new("AES runs 10, 12 or 14 rounds, not #{round_count}")
+      end
+    {% end %}
+
+    # The vector counter-mode loops, once per register width and round
+    # count: eight registers a pass, or one.
+    {% for kind in [{"encrypt_counter_groups_with_vector_aes", 8}, {"encrypt_counter_registers_with_vector_aes", 1}] %}
+      @[NoInline]
+      private def self.{{ kind[0].id }}(round_keys : Bytes, round_count : Int32, counter_block : Bytes,
+                                        input : Pointer(UInt8), output : Pointer(UInt8), group_count : UInt64) : Nil
+        raise OutputSizeMismatch.new("the round keys take #{BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE} bytes") unless round_keys.size == BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE
+        raise OutputSizeMismatch.new("a counter block is #{BLOCK_BYTESIZE} bytes") unless counter_block.size == BLOCK_BYTESIZE
+
+        {% if flag?(:x86_64) %}
+          round_keys_pointer = round_keys.to_unsafe
+          counter_block_pointer = counter_block.to_unsafe
+          {% for register_bitsize in [512, 256] %}
+            if VECTOR_REGISTER_BITSIZE == {{ register_bitsize }}
+              {% for round_count in [10, 12, 14] %}
+                if round_count == {{ round_count }}
+                  X8664CipherInstructions.encrypt_counter_blocks_with_vector_aes(round_keys_pointer, counter_block_pointer, input, output, group_count,
+                    {{ round_count }}, {{ register_bitsize }}, {{ kind[1] }})
+                  return
+                end
+              {% end %}
+              raise KeySizeMismatch.new("AES runs 10, 12 or 14 rounds, not #{round_count}")
+            end
+          {% end %}
+        {% end %}
+        raise UnsupportedProcessor.new("this processor has no vector AES instructions Beryl can use")
+      end
+    {% end %}
+
+    # The vector GHASH loops, once per register width: groups of 32 blocks,
+    # or single registers. *first_hash_key_power* points into the vector
+    # part of the table.
+    {% for kind in [{"absorb_groups_with_vector_carryless_multiply", true}, {"absorb_registers_with_vector_carryless_multiply", false}] %}
+      @[NoInline]
+      private def self.{{ kind[0].id }}(accumulator : Bytes, first_hash_key_power : Pointer(UInt8), input : Pointer(UInt8), group_count : UInt64) : Nil
+        {% if flag?(:x86_64) %}
+          accumulator_pointer = accumulator.to_unsafe
+          {% for register_bitsize in [512, 256] %}
+            if VECTOR_REGISTER_BITSIZE == {{ register_bitsize }}
+              X8664CipherInstructions.absorb_hash_blocks_with_vector_carryless_multiply(accumulator_pointer, first_hash_key_power, input, group_count,
+                {{ register_bitsize }}, {{ kind[1] }})
+              return
+            end
+          {% end %}
+        {% end %}
+        raise UnsupportedProcessor.new("this processor has no vector carry-less multiply Beryl can use")
       end
     {% end %}
 

@@ -39,6 +39,30 @@ module Beryl::Crypto
   # arrangement OpenSSL's `ghash-x86_64` uses; the vectors and the
   # differential against libcrypto check it. The accumulator in memory is
   # the GHASH state with its bytes reversed, as on AArch64.
+  #
+  # Where the processor has VAES and VPCLMULQDQ (`ProcessorFeatures`), the
+  # `_with_vector_*` macros run the same AES rounds and the same carry-less
+  # multiplies on 256-bit registers (two blocks in each, AVX2) or on 512-bit
+  # registers (four blocks in each, AVX-512), one instruction for all the
+  # blocks of a register. They are written in the VEX and EVEX encodings
+  # only, three operands and no alignment demand on a memory operand, and
+  # end with `vzeroupper`, so the legacy SSE code around them never pays for
+  # a dirty upper half. On these registers the GHASH product is the
+  # schoolbook one (four carry-less multiplies, no Karatsuba operand), the
+  # products of all the blocks of a group are summed lane by lane, the lanes
+  # are folded into one, and that sum is reduced once, with the same
+  # shifts as `REDUCTION_LINES` written in three-operand form.
+  #
+  # The table of hash key powers has two parts:
+  #
+  # - bytes 0 to 511, for the AES-NI code: `HASH_KEY_POWER_COUNT` entries of
+  #   `HASH_KEY_POWER_BYTESIZE` bytes, entry j holding H^(16 - j) twisted and
+  #   then its Karatsuba operand;
+  # - bytes 512 to 1023 (`VECTOR_HASH_KEY_POWERS_OFFSET`), for the vector
+  #   code: `VECTOR_HASH_KEY_POWER_COUNT` entries of 16 bytes, entry j
+  #   holding H^(32 - j) twisted, so that one load of 32 or 64 bytes fills
+  #   the lanes of a register with the powers of consecutive blocks, the
+  #   first block in the lowest lane.
   module X8664CipherInstructions
     # Bytes in one table entry of hash key powers: the twisted power, then
     # the exclusive or of its two 64-bit halves in both halves (the middle
@@ -47,6 +71,58 @@ module Beryl::Crypto
 
     # Powers of the hash key kept: H to H^16, one per block of a group.
     HASH_KEY_POWER_COUNT = 16
+
+    # Where the vector code's part of the table starts.
+    VECTOR_HASH_KEY_POWERS_OFFSET = HASH_KEY_POWER_BYTESIZE * HASH_KEY_POWER_COUNT
+
+    # Powers of the hash key the vector code keeps: H to H^32, one per block
+    # of its group.
+    VECTOR_HASH_KEY_POWER_COUNT = 32
+
+    # Bytes of the whole table, both parts.
+    HASH_KEY_POWERS_BYTESIZE = VECTOR_HASH_KEY_POWERS_OFFSET + 16 * VECTOR_HASH_KEY_POWER_COUNT
+
+    # The constants the vector statements read after their code: the mask
+    # that reverses sixteen bytes (offset 0); the mask that reverses only the
+    # last four, the counter word (16); the numbers 0, 1, 2 and 3 in the last
+    # word of four blocks, the offsets of the lanes' counters (32); and 4
+    # (96) and 2 (112) in the last word, the step of a register's counters.
+    VECTOR_CONSTANT_LINES = "  jmp 9f\n  .p2align 6\n8:
+  .quad 0x08090a0b0c0d0e0f\n  .quad 0x0001020304050607
+  .quad 0x0706050403020100\n  .quad 0x0c0d0e0f0b0a0908
+  .quad 0x0000000000000000\n  .quad 0x0000000000000000
+  .quad 0x0000000000000000\n  .quad 0x0000000100000000
+  .quad 0x0000000000000000\n  .quad 0x0000000200000000
+  .quad 0x0000000000000000\n  .quad 0x0000000300000000
+  .quad 0x0000000000000000\n  .quad 0x0000000400000000
+  .quad 0x0000000000000000\n  .quad 0x0000000200000000
+9:
+"
+
+    # `REDUCTION_LINES` in the three-operand VEX form, on xmm registers:
+    # reduces the 256-bit product with its low half in `@L` and its high
+    # half in `@H` to 128 bits in `@L`, with `@A` and `@B` as scratch. With
+    # T the low half shifted left by 57, 62 and 63 in each 64-bit lane and
+    # summed, and L' the low half XORed with T moved up 64 bits, the result
+    # is H, T moved down 64 bits, L', and L' shifted right by 1, 2 and 7 in
+    # each 64-bit lane, all summed.
+    VECTOR_REDUCTION_LINES = "  vpsllq $$57, @L, @A
+  vpsllq $$62, @L, @B
+  vpxor @B, @A, @A
+  vpsllq $$63, @L, @B
+  vpxor @B, @A, @A
+  vpslldq $$8, @A, @B
+  vpsrldq $$8, @A, @A
+  vpxor @B, @L, @L
+  vpxor @A, @H, @H
+  vpxor @L, @H, @H
+  vpsrlq $$1, @L, @A
+  vpxor @A, @H, @H
+  vpsrlq $$2, @L, @A
+  vpxor @A, @H, @H
+  vpsrlq $$7, @L, @A
+  vpxor @A, @H, @L
+"
 
     # The constants each statement reads after its code: the mask that
     # reverses sixteen bytes, then the twisting polynomial (1 in the lowest
@@ -80,11 +156,12 @@ module Beryl::Crypto
 "
 
     # Prepares the table of hash key powers at *hash_key_powers*
-    # (`HASH_KEY_POWER_COUNT` entries of `HASH_KEY_POWER_BYTESIZE` bytes) from
+    # (`HASH_KEY_POWERS_BYTESIZE` bytes, both parts described above) from
     # the hash key at *hash_key* (16 bytes, the encryption of the zero
-    # block). The highest power comes first: entry j holds H^(16 - j), so
-    # that n blocks hashed together take the n entries from 16 - n on. No
-    # loop: fifteen multiplies written out.
+    # block). The highest power comes first in each part: entry j of the
+    # first holds H^(16 - j) and entry j of the second H^(32 - j), so that n
+    # blocks hashed together take the n entries from 16 - n (or 32 - n) on.
+    # No loop: thirty-one multiplies written out.
     #
     # Registers: r8 hash key, r9 table, rax constants; xmm3 twisted H, xmm4
     # its Karatsuba operand, xmm0 the running power.
@@ -111,9 +188,10 @@ module Beryl::Crypto
   pxor %xmm3, %xmm4
   movdqu %xmm3, 480(%r9)
   movdqu %xmm4, 496(%r9)
+  movdqu %xmm3, 1008(%r9)
   movdqa %xmm3, %xmm0
 " %}
-      {% for power in 2..16 %}
+      {% for power in 2..32 %}
         {% template = template + "  movdqa %xmm0, %xmm1
   pshufd $$0x4e, %xmm0, %xmm2
   pxor %xmm0, %xmm2
@@ -127,11 +205,14 @@ module Beryl::Crypto
   pslldq $$8, %xmm5
   pxor %xmm2, %xmm1
   pxor %xmm5, %xmm0
-" + ::Beryl::Crypto::X8664CipherInstructions::REDUCTION_LINES.gsub(/@L/, "%xmm0").gsub(/@H/, "%xmm1").gsub(/@A/, "%xmm5").gsub(/@B/, "%xmm6") + "  pshufd $$0x4e, %xmm0, %xmm2
+" + ::Beryl::Crypto::X8664CipherInstructions::REDUCTION_LINES.gsub(/@L/, "%xmm0").gsub(/@H/, "%xmm1").gsub(/@A/, "%xmm5").gsub(/@B/, "%xmm6") + "  movdqu %xmm0, #{512 + (32 - power) * 16}(%r9)\n" %}
+        {% if power <= 16 %}
+          {% template = template + "  pshufd $$0x4e, %xmm0, %xmm2
   pxor %xmm0, %xmm2
   movdqu %xmm0, #{(16 - power) * 32}(%r9)
   movdqu %xmm2, #{(16 - power) * 32 + 16}(%r9)
 " %}
+        {% end %}
       {% end %}
       {% template = template + ::Beryl::Crypto::X8664CipherInstructions::CONSTANT_LINES %}
       asm({{ template }} :: "r"({{ hash_key }}), "r"({{ hash_key_powers }})
@@ -286,6 +367,160 @@ module Beryl::Crypto
         : "rax", "rcx", "rdx", "r8", "r9", "r10", "r11",
           "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
           "xmm10", "xmm11", "xmm12", "memory", "flags")
+    end
+
+    # Counter mode on VAES: what `encrypt_counter_blocks` does, with the
+    # blocks of a register going through each round in one instruction.
+    # *register_bitsize* is 512 (zmm registers, four blocks each, AVX-512) or
+    # 256 (ymm registers, two blocks each). Each pass encrypts
+    # *registers_per_group* registers of blocks (8 or 1), *group_count*
+    # passes (at least 1); with eight, the processor always has eight
+    # independent AES instructions to start.
+    #
+    # The counters are kept with their last word in the processor's byte
+    # order, so that `vpaddd` steps every lane's counter at once and wraps
+    # it at 2^32 as SP 800-38D's inc32 does; one `vpshufb` per register puts
+    # the word back in big-endian order before the first round.
+    #
+    # Registers: r8 round keys, r9 counter block, r10 input, r11 output, rcx
+    # passes left, rax constants; 0 to 7 the blocks, 8 a round key, 9 a
+    # message register, 10 the last round key, 11 the counters of the next
+    # register, 12 the step between registers, 13 the mask that reverses the
+    # counter word, 14 the first round key. As in `encrypt_counter_blocks`,
+    # the message is XORed into the last round key.
+    macro encrypt_counter_blocks_with_vector_aes(round_keys, counter_block, input, output, group_count, round_count, register_bitsize, registers_per_group)
+      {% vector = register_bitsize == 512 ? "zmm" : "ymm" %}
+      {% register_bytesize = register_bitsize // 8 %}
+      {% broadcast = register_bitsize == 512 ? "vbroadcasti32x4" : "vbroadcasti128" %}
+      {% exclusive_or = register_bitsize == 512 ? "vpxord" : "vpxor" %}
+      {% move = register_bitsize == 512 ? "vmovdqu64" : "vmovdqu" %}
+      {% step_offset = register_bitsize == 512 ? 96 : 112 %}
+      {% template = "  mov $0, %r8\n  mov $1, %r9\n  mov $2, %r10\n  mov $3, %r11\n  mov $4, %rcx
+  lea 8f(%rip), %rax
+  #{broadcast.id} 16(%rax), %#{vector.id}13
+  #{broadcast.id} (%r9), %#{vector.id}11
+  vpshufb %#{vector.id}13, %#{vector.id}11, %#{vector.id}11
+  vpaddd 32(%rax), %#{vector.id}11, %#{vector.id}11
+  #{broadcast.id} #{step_offset}(%rax), %#{vector.id}12
+  #{broadcast.id} (%r8), %#{vector.id}14
+  #{broadcast.id} #{round_count * 16}(%r8), %#{vector.id}10
+1:
+" %}
+      {% for register in 0...registers_per_group %}
+        {% template = template + "  vpshufb %#{vector.id}13, %#{vector.id}11, %#{vector.id}#{register}
+  vpaddd %#{vector.id}12, %#{vector.id}11, %#{vector.id}11
+  #{exclusive_or.id} %#{vector.id}14, %#{vector.id}#{register}, %#{vector.id}#{register}
+" %}
+      {% end %}
+      {% for round in 1...round_count %}
+        {% template = template + "  #{broadcast.id} #{round * 16}(%r8), %#{vector.id}8\n" %}
+        {% for register in 0...registers_per_group %}
+          {% template = template + "  vaesenc %#{vector.id}8, %#{vector.id}#{register}, %#{vector.id}#{register}\n" %}
+        {% end %}
+      {% end %}
+      {% for register in 0...registers_per_group %}
+        {% template = template + "  #{move.id} #{register * register_bytesize}(%r10), %#{vector.id}9
+  #{exclusive_or.id} %#{vector.id}10, %#{vector.id}9, %#{vector.id}9
+  vaesenclast %#{vector.id}9, %#{vector.id}#{register}, %#{vector.id}#{register}
+  #{move.id} %#{vector.id}#{register}, #{register * register_bytesize}(%r11)
+" %}
+      {% end %}
+      {% template = template + "  add $$#{registers_per_group * register_bytesize}, %r10
+  add $$#{registers_per_group * register_bytesize}, %r11
+  dec %rcx
+  jnz 1b
+  vpshufb %xmm13, %xmm11, %xmm11
+  vmovdqu %xmm11, (%r9)
+  vzeroupper
+" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_CONSTANT_LINES %}
+      asm({{ template }} :: "r"({{ round_keys }}), "r"({{ counter_block }}), "r"({{ input }}), "r"({{ output }}), "r"({{ group_count }})
+        : "rax", "rcx", "r8", "r9", "r10", "r11",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm6", "xmm7", "xmm8", "xmm9",
+          "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "memory", "flags")
+    end
+
+    # GHASH on VPCLMULQDQ: what `absorb_hash_blocks` does, with the blocks of
+    # a register multiplied by their powers in one instruction per partial
+    # product. *register_bitsize* is 512 (four blocks a register) or 256
+    # (two). *first_hash_key_power* points into the vector part of the table.
+    #
+    # - *is_grouped* true: *group_count* groups of 32 blocks, each multiplied
+    #   by H^32 to H (the vector part from its first entry) and reduced once.
+    # - *is_grouped* false: *group_count* registers of blocks (fewer than 32
+    #   blocks in all), multiplied by the powers from the entry
+    #   *first_hash_key_power* points at on, summed, and reduced once at the
+    #   end. The accumulator joins the first register only.
+    #
+    # The accumulator joins the lowest lane of the first register of a
+    # group: it sits in the low 128 bits of register 14 (or 10) and the VEX
+    # instructions that write it clear the bits above.
+    #
+    # Registers: r8 the accumulator, r9 hash key powers, r10 input, r11
+    # groups (or registers) left, rax constants; 0 a register of blocks, 1
+    # its powers, 2 to 5 the four partial products, 11, 12 and 13 the sums
+    # of the low, high and middle products, 14 the accumulator, 10 the
+    # accumulator for the first register and zero after, 15 the mask that
+    # reverses sixteen bytes.
+    macro absorb_hash_blocks_with_vector_carryless_multiply(accumulator, first_hash_key_power, input, group_count, register_bitsize, is_grouped)
+      {% vector = register_bitsize == 512 ? "zmm" : "ymm" %}
+      {% register_bytesize = register_bitsize // 8 %}
+      {% registers_per_group = is_grouped ? 4096 // register_bitsize : 1 %}
+      {% broadcast = register_bitsize == 512 ? "vbroadcasti32x4" : "vbroadcasti128" %}
+      {% exclusive_or = register_bitsize == 512 ? "vpxord" : "vpxor" %}
+      {% move = register_bitsize == 512 ? "vmovdqu64" : "vmovdqu" %}
+      {% template = "  mov $0, %r8\n  mov $1, %r9\n  mov $2, %r10\n  mov $3, %r11
+  lea 8f(%rip), %rax
+  #{broadcast.id} (%rax), %#{vector.id}15
+  vmovdqu (%r8), %xmm14
+" %}
+      {% joined = is_grouped ? "14" : "10" %}
+      {% register_lines = "" %}
+      {% for register in 0...registers_per_group %}
+        {% register_lines = register_lines + "  #{move.id} #{register * register_bytesize}(%r10), %#{vector.id}0
+  vpshufb %#{vector.id}15, %#{vector.id}0, %#{vector.id}0
+" %}
+        {% if register == 0 %}
+          {% register_lines = register_lines + "  #{exclusive_or.id} %#{vector.id}#{joined.id}, %#{vector.id}0, %#{vector.id}0\n" %}
+          {% if !is_grouped %}
+            {% register_lines = register_lines + "  vpxor %xmm10, %xmm10, %xmm10\n" %}
+          {% end %}
+        {% end %}
+        {% register_lines = register_lines + "  #{move.id} #{register * register_bytesize}(%r9), %#{vector.id}1
+  vpclmulqdq $$0x00, %#{vector.id}1, %#{vector.id}0, %#{vector.id}2
+  vpclmulqdq $$0x11, %#{vector.id}1, %#{vector.id}0, %#{vector.id}3
+  vpclmulqdq $$0x01, %#{vector.id}1, %#{vector.id}0, %#{vector.id}4
+  vpclmulqdq $$0x10, %#{vector.id}1, %#{vector.id}0, %#{vector.id}5
+  #{exclusive_or.id} %#{vector.id}2, %#{vector.id}11, %#{vector.id}11
+  #{exclusive_or.id} %#{vector.id}3, %#{vector.id}12, %#{vector.id}12
+" %}
+        {% if register_bitsize == 512 %}
+          {% register_lines = register_lines + "  vpternlogq $$0x96, %zmm5, %zmm4, %zmm13\n" %}
+        {% else %}
+          {% register_lines = register_lines + "  vpxor %ymm4, %ymm13, %ymm13\n  vpxor %ymm5, %ymm13, %ymm13\n" %}
+        {% end %}
+      {% end %}
+      {% folding_lines = "" %}
+      {% for sum in [11, 12, 13] %}
+        {% if register_bitsize == 512 %}
+          {% folding_lines = folding_lines + "  vextracti64x4 $$1, %zmm#{sum}, %ymm2\n  vpxor %ymm2, %ymm#{sum}, %ymm#{sum}\n" %}
+        {% end %}
+        {% folding_lines = folding_lines + "  vextracti128 $$1, %ymm#{sum}, %xmm2\n  vpxor %xmm2, %xmm#{sum}, %xmm#{sum}\n" %}
+      {% end %}
+      {% folding_lines = folding_lines + "  vpslldq $$8, %xmm13, %xmm2
+  vpsrldq $$8, %xmm13, %xmm13
+  vpxor %xmm2, %xmm11, %xmm11
+  vpxor %xmm13, %xmm12, %xmm12
+" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_REDUCTION_LINES.gsub(/@L/, "%xmm11").gsub(/@H/, "%xmm12").gsub(/@A/, "%xmm1").gsub(/@B/, "%xmm2") + "  vmovdqa %xmm11, %xmm14\n" %}
+      {% zeroing_lines = "  vpxor %xmm11, %xmm11, %xmm11\n  vpxor %xmm12, %xmm12, %xmm12\n  vpxor %xmm13, %xmm13, %xmm13\n" %}
+      {% if is_grouped %}
+        {% template = template + "1:\n" + zeroing_lines + register_lines + folding_lines + "  add $$512, %r10\n  dec %r11\n  jnz 1b\n" %}
+      {% else %}
+        {% template = template + zeroing_lines + "  vmovdqa %xmm14, %xmm10\n1:\n" + register_lines + "  add $$#{register_bytesize}, %r10\n  add $$#{register_bytesize}, %r9\n  dec %r11\n  jnz 1b\n" + folding_lines %}
+      {% end %}
+      {% template = template + "  vmovdqu %xmm14, (%r8)\n  vzeroupper\n" + ::Beryl::Crypto::X8664CipherInstructions::VECTOR_CONSTANT_LINES %}
+      asm({{ template }} :: "r"({{ accumulator }}), "r"({{ first_hash_key_power }}), "r"({{ input }}), "r"({{ group_count }})
+        : "rax", "r8", "r9", "r10", "r11",
+          "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "xmm5", "xmm10", "xmm11", "xmm12", "xmm13", "xmm14", "xmm15", "memory", "flags")
     end
 
     # Writes at *decryption_round_keys* the round keys of the equivalent
