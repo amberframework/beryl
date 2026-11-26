@@ -31,6 +31,14 @@
   speed on Xeon 6975P-C and from 0.65 to 0.99 on EPYC 7763; it is 1.05 on
   EPYC 9V74, and still behind on EPYC 9V45 (0.87) and Xeon Platinum 8573C
   (0.96). P-256 verification is 1.05 to 1.19 on every x86-64 model measured.
+- P-256 ECDH on x86-64: the window loop runs one copy of the point
+  doubling, never inlined, instead of five unrolled copies; the `mulx`
+  multiplication and squaring take fewer instructions; the doubling's and
+  addition's steps are ordered so that a result passes to the next step in
+  registers, and scratch results no later step reads are not stored.
+  Against OpenSSL 3.0.13, ECDH went from 0.870 to 1.10 times its speed on
+  EPYC 9V45 (Zen 5), from 0.96 to 1.11 on Xeon Platinum 8573C and from
+  0.99 to 1.037 on EPYC 7763 (Zen 3).
 
 ## 0.2.3 (2026-11-25)
 
