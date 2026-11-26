@@ -120,7 +120,7 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
   mulx adcx adox xor sbb cmovc imul shr shl or
   vpxorq vpbroadcastq vpmadd52luq vpmadd52huq valignq vmovq vpsrlq vpandq vpaddq vpsubq vpcmpuq vpcmpeqq
-  vpblendmq vmovdqu64 kmovb vzeroupper vpand vpor vpxor vmovdqu vpextrq
+  vpblendmq vmovdqu64 kmovb vzeroupper vpand vpor vpxor vmovdqu vpextrq vpermi2q vpmovzxbq
   vmovd vmovdqa vmovdqu32 vmovdqa64 vpbroadcastd vpaddd vpxord vporq vpshufb vpslld vpsrld vpsllq vpsrldq vprold
   vpunpckldq vpunpckhdq vpunpcklqdq vpunpckhqdq vperm2i128 vshufi32x4 vextracti128 vextracti64x4 vpshufd vpinsrd addl vpmuludq imulq
   rorx andn vinserti128 vpalignr vprorq vpternlogq
