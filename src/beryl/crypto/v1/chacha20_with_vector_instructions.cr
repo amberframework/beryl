@@ -163,8 +163,8 @@ module Beryl::Crypto::V1
 
     # ChaCha20-Poly1305 opening: when *tag* is the first `tag.size` bytes of
     # the right tag, writes the plaintext of *ciphertext* into *plaintext*
-    # and returns true; otherwise returns false and leaves *plaintext*
-    # untouched.
+    # and returns true; otherwise returns false without writing *plaintext*
+    # (`AuthenticatedEncryption#decrypt` then zeroes it, as for every cipher).
     def self.open(key : Bytes, nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
       raise OutputSizeMismatch.new("the plaintext is as long as the ciphertext") unless plaintext.size == ciphertext.size
       ensure_message_fits(1_u32, ciphertext.size)

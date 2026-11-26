@@ -81,6 +81,17 @@ LIST_OF_CIPHER_CHECK_BYTESIZES = (0..600).to_a +
                                   1983, 1984, 1985, 2047, 2048, 2049, 3007, 3008, 3009, 4095, 4096, 4097,
                                   16_383, 16_384, 16_385, 16_384 + 127, 16_384 + 129, 32_767, 32_768, 32_769, 65_536 + 17, 100_000]
 
+# The vector paths (VAES and VPCLMULQDQ on 512-bit or 256-bit registers)
+# change course at other lengths: the 16 blocks a run needs to take them,
+# their passes of 32 blocks, the single registers of four or two blocks
+# after those, and the one to three blocks left for the AES-NI code. This
+# run compares the path its processor takes; CI's runs under
+# -Dberyl_without_avx512 and -Dberyl_without_avx2 compare the narrower
+# ones.
+LIST_OF_VECTOR_PATH_CHECK_BYTESIZES = [15, 16, 17, 31, 32, 33, 47, 48, 49, 63, 64, 65, 66, 67].flat_map { |block_count|
+  [block_count * 16 - 1, block_count * 16, block_count * 16 + 1]
+} + [256 + 32 * 16, 512 * 2 + 48, 512 * 3 + 16 * 3 + 7, 16_384 + 512 + 16, 16_384 + 64 + 48 + 5, 32 * 1024 - 1, 32 * 1024 + 16 * 30 + 3, 1024 * 1024 + 16 * 35 + 9]
+
 describe "Beryl ciphers on the processor's instructions" do
   it "states which instructions this run uses" do
     STDOUT.puts
@@ -130,10 +141,10 @@ describe "Beryl ciphers on the processor's instructions" do
       expected = PortableCipherReference.seal_with_chacha20_and_poly1305(key, nonce, associated_data, plaintext)
       fail "ChaCha20-Poly1305 differs from the portable code at #{message_bytesize} bytes" unless sealed == expected
       cipher.decrypt(sealed, nonce: nonce, associated_data: associated_data).should eq(plaintext)
-      untouched = Bytes.new(message_bytesize, 0x5a_u8)
+      zeroed = Bytes.new(message_bytesize, 0x5a_u8)
       sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
-      cipher.decrypt(sealed, into: untouched, nonce: nonce, associated_data: associated_data).should be_false
-      untouched.all?(0x5a_u8).should be_true
+      cipher.decrypt(sealed, into: zeroed, nonce: nonce, associated_data: associated_data).should be_false
+      zeroed.all?(0_u8).should be_true
 
       extended_nonce = generator.random_bytes(24)
       subkey = Bytes.new(32)
@@ -197,6 +208,92 @@ describe "Beryl ciphers on the processor's instructions" do
         written = Bytes.new(message_bytesize)
         Beryl::Crypto::V1::ChaCha20WithVectorInstructions.xor_keystream(key, nonce, initial_counter, message, written)
         written.should eq(expected)
+      end
+    end
+  end
+
+  {% for key_bytesize in [16, 24, 32] %}
+    it "seals and opens AES-{{ key_bytesize * 8 }}-GCM as the portable code does at the edges of the vector loops ({{ key_bytesize }}-byte key)" do
+      STDOUT.puts
+      STDOUT.puts "AES-GCM vector register width in use: #{Beryl::Crypto::V1::GaloisCounterModeWithProcessorInstructions::VECTOR_REGISTER_BITSIZE} bits"
+      generator = Random.new(0x7661_6573 + {{ key_bytesize }})
+      (LIST_OF_CIPHER_CHECK_BYTESIZES + LIST_OF_VECTOR_PATH_CHECK_BYTESIZES).each do |message_bytesize|
+        key = generator.random_bytes({{ key_bytesize }})
+        nonce = generator.random_bytes(message_bytesize % 5 == 2 ? 1 + generator.rand(700) : 12)
+        associated_data_bytesize = generator.rand(4) == 0 ? LIST_OF_VECTOR_PATH_CHECK_BYTESIZES.sample(generator) : generator.rand(0..40)
+        associated_data = generator.random_bytes(associated_data_bytesize)
+        plaintext = generator.random_bytes(message_bytesize)
+
+        cipher = Beryl::Crypto::V1::AESGCM.new(key)
+        sealed = cipher.encrypt(plaintext, nonce: nonce, associated_data: associated_data)
+        expected = PortableCipherReference.seal_with_galois_counter_mode(key, nonce, associated_data, plaintext)
+        fail "AES-{{ key_bytesize * 8 }}-GCM differs from the portable code at #{message_bytesize} bytes (#{associated_data.size} of associated data)" unless sealed == expected
+
+        cipher.decrypt(sealed, nonce: nonce, associated_data: associated_data).should eq(plaintext)
+        sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
+        cipher.decrypt(sealed, nonce: nonce, associated_data: associated_data).should be_nil
+      end
+    end
+  {% end %}
+
+  it "opens AES-GCM on every opening path, in place too, and leaves the buffer all zeros on a wrong tag" do
+    generator = Random.new(0x6f70_656e)
+    [16, 32].each do |key_bytesize|
+      cipher = Beryl::Crypto::V1::AESGCM.new(generator.random_bytes(key_bytesize))
+      [0, 1, 64, 239, 240, 1023, 1024, 1025, 2048 + 16 * 3 + 1, 16_384, 16_384 + 256, 17 * 1024, 17 * 1024 + 1, 40_000].each do |message_bytesize|
+        nonce = generator.random_bytes(12)
+        associated_data = generator.random_bytes(13)
+        plaintext = generator.random_bytes(message_bytesize)
+        sealed = cipher.encrypt(plaintext, nonce: nonce, associated_data: associated_data)
+
+        opened = Bytes.new(message_bytesize)
+        cipher.decrypt(sealed, into: opened, nonce: nonce, associated_data: associated_data).should be_true
+        opened.should eq(plaintext)
+
+        in_place = sealed.dup
+        cipher.decrypt(in_place, into: in_place[0, message_bytesize], nonce: nonce, associated_data: associated_data).should be_true
+        in_place[0, message_bytesize].should eq(plaintext)
+
+        sealed[generator.rand(sealed.size)] ^= 1_u8 << generator.rand(8)
+        zeroed = Bytes.new(message_bytesize, 0x5a_u8)
+        cipher.decrypt(sealed, into: zeroed, nonce: nonce, associated_data: associated_data).should be_false
+        zeroed.all?(0_u8).should be_true
+        in_place = sealed.dup
+        cipher.decrypt(in_place, into: in_place[0, message_bytesize], nonce: nonce, associated_data: associated_data).should be_false
+        in_place[0, message_bytesize].all?(0_u8).should be_true
+        in_place[message_bytesize, in_place.size - message_bytesize].should eq(sealed[message_bytesize, sealed.size - message_bytesize])
+      end
+    end
+  end
+
+  it "runs the AES-GCM counter across the end of its 32-bit word as the portable code does, on every path" do
+    generator = Random.new(0x6374_7277)
+    [16, 32].each do |key_bytesize|
+      key = generator.random_bytes(key_bytesize)
+      round_count = Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard.round_count_for(key_bytesize)
+      portable_round_keys = Slice(UInt64).new(Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard::ROUND_KEY_WORD_COUNT, 0_u64)
+      Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard.expand_key(key, portable_round_keys)
+      round_key_bytes = Bytes.new(Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard::ROUND_KEY_BYTESIZE)
+      hash_key_powers = Bytes.new(Beryl::Crypto::V1::GaloisCounterModeWithProcessorInstructions::HASH_KEY_POWERS_BYTESIZE)
+      Beryl::Crypto::V1::GaloisCounterModeWithProcessorInstructions.prepare(key, round_key_bytes, hash_key_powers)
+      [0xffffffff_u32, 0xfffffff0_u32, 0xffffffe3_u32, 0xffffff81_u32].each do |initial_counter|
+        [16 * 16, 16 * 33 + 5, 16 * 70, 16 * 200 + 3].each do |message_bytesize|
+          counter_block = generator.random_bytes(16)
+          IO::ByteFormat::BigEndian.encode(initial_counter, counter_block[12, 4])
+          message = generator.random_bytes(message_bytesize)
+          expected = Bytes.new(message_bytesize)
+          expected_counter_block = counter_block.dup
+          Beryl::Crypto::V1::BitslicedAdvancedEncryptionStandard.xor_counter_keystream(portable_round_keys, round_count, expected_counter_block, message, expected)
+          written = Bytes.new(message_bytesize)
+          written_counter_block = counter_block.dup
+          if Beryl::Crypto::ProcessorFeatures::HAS_GALOIS_COUNTER_MODE_INSTRUCTIONS
+            Beryl::Crypto::V1::GaloisCounterModeWithProcessorInstructions.xor_counter_keystream(round_key_bytes, round_count, written_counter_block, message, written)
+          else
+            written.copy_from(expected)
+          end
+          written.should eq(expected)
+          written_counter_block[0, 12].should eq(counter_block[0, 12])
+        end
       end
     end
   end

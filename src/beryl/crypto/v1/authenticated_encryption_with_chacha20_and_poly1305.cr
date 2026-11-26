@@ -104,8 +104,8 @@ module Beryl::Crypto::V1
     end
 
     # Checks *tag* against the first `tag.size` bytes of the right tag, then
-    # decrypts into *plaintext*; returns false, leaving *plaintext*
-    # untouched, when the tag is wrong.
+    # decrypts into *plaintext*; returns false without writing *plaintext*
+    # when the tag is wrong (`AuthenticatedEncryption#decrypt` then zeroes it).
     def self.open(key : Bytes, nonce : Bytes, associated_data : Bytes, ciphertext : Bytes, tag : Bytes, plaintext : Bytes) : Bool
       if ProcessorFeatures::HAS_VECTOR_INSTRUCTIONS
         return ChaCha20WithVectorInstructions.open(key, nonce, associated_data, ciphertext, tag, plaintext)

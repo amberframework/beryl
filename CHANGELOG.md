@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Contract change:** a failed `decrypt(..., into:)` now overwrites the
+  whole `into:` buffer with zeros, for every AEAD, at every length and on
+  every path; it used to leave the buffer untouched. `decrypt` without
+  `into:` still returns `nil`. The reason is speed: AES-GCM on x86-64 with
+  AVX-512 now decrypts while it hashes, in one pass, as OpenSSL does, so it
+  writes the buffer before the verdict; every path zeroes on failure so
+  that callers see one rule (Go's `crypto/cipher` GCM `Open` does the
+  same). Beryl's TLS record layer opens into its own buffer and never read
+  it after a failure.
+- AES-GCM on x86-64 runs on VAES and VPCLMULQDQ: 512-bit registers with
+  AVX-512 (sealing and opening stitched in one loop), 256-bit registers
+  without (AMD Zen 3); AES-NI and `pclmulqdq` stay the fallback.
+
 ## 0.2.3 (2026-11-25)
 
 Client certificates (mutual TLS) in both directions.

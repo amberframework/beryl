@@ -115,6 +115,8 @@ CONSTANT_TIME_ASSEMBLY_INSTRUCTIONS = %w[
   aese aesmc aesd pmull pmull2 eor3 rev tbl trn1 trn2 ushr shl sshr sli and orr ldp stp ld1r ld4r
   adds adcs adc mul umulh ror
   lsl lsr extr subs sbcs sbc csel cmp bit
+  vmovdqu vmovdqa vmovdqu64 vbroadcasti128 vbroadcasti32x4 vextracti128 vextracti64x4 vextracti32x4
+  vpxor vpxord vpxorq vpternlogq vpaddd vpshufb vpshufd vaesenc vaesenclast vpclmulqdq vzeroupper
   movq mulq addq adcq subq sbbq shlq shrq cmovncq movl movabsq
   mulx adcx adox xor sbb cmovc imul shr shl or
   vpxorq vpbroadcastq vpmadd52luq vpmadd52huq valignq vmovq vpsrlq vpandq vpaddq vpsubq vpcmpuq vpcmpeqq
