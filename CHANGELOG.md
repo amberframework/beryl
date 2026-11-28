@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 (2026-11-28)
+
+Speed: AES-GCM, X25519, Ed25519 and P-256 at or near OpenSSL's speed on x86-64 and AArch64, TCP_NODELAY on accepted sockets, and one contract change: a failed `decrypt(..., into:)` now zeroes the buffer.
 
 - `Beryl::TLS::Server` sets `TCP_NODELAY` on every `TCPSocket` it accepts;
   `Server#tcp_nodelay = false` keeps Nagle on. Each WebSocket message goes
