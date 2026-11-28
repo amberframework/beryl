@@ -1,7 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.2.4 (2026-11-28)
 
+Speed on x86-64: AES-GCM, ChaCha20-Poly1305, SHA-512, RSA and P-256 on the processor's vector and wide-multiply instructions, chosen at run time; X25519 and Ed25519 on a four-word field on x86-64 and AArch64; TCP_NODELAY on accepted sockets; and one contract change: a failed `decrypt(..., into:)` now zeroes the buffer.
+
+- x86-64 finds AVX2, AVX-512, AVX-512 IFMA, VAES, VPCLMULQDQ and MULX/ADX at
+  run time (CPUID leaf 7 and XCR0), and each algorithm below picks its path
+  from them. `-Dberyl_without_avx2`, `-Dberyl_without_avx512` and
+  `-Dberyl_without_mulx` force the narrower paths. (#39)
+- RSA on x86-64: MULX/ADCX/ADOX Montgomery multiplication and squaring with
+  AVX2 constant-time table selection; with AVX-512 IFMA, both CRT
+  exponentiations run side by side for signing and decryption (2048, 3072 and
+  4096 bits) with a dedicated squaring. Secret exponents keep the 5-bit fixed
+  window with masked table reads. (#43, #45)
+- ChaCha20-Poly1305 on x86-64: AVX2 (8 blocks a pass) and AVX-512 (16 blocks
+  a pass) keystream and vector Poly1305, at least OpenSSL 3.0.13's speed on
+  every ubuntu-24.04 x86-64 runner model; SSE stays the fallback. (#44)
+- SHA-384, SHA-512 and SHA-512/256 (and HMAC over them) on x86-64: an AVX2
+  message schedule of two blocks at once and BMI2 rounds, with AVX-512
+  rotations where present. (#41)
+- AES-GCM opens messages under 240 bytes in one counter-mode call, as the
+  short seal does. (#47)
 - `Beryl::TLS::Server` sets `TCP_NODELAY` on every `TCPSocket` it accepts;
   `Server#tcp_nodelay = false` keeps Nagle on. Each WebSocket message goes
   out as one record in one write, and with Nagle on, a small write waited
@@ -35,8 +54,8 @@
   selection, and the point doubling, addition and window steps each as one
   assembly statement. P-256 ECDH went from 0.80 to 1.11 times OpenSSL's
   speed on Xeon 6975P-C and from 0.65 to 0.99 on EPYC 7763; it is 1.05 on
-  EPYC 9V74, and still behind on EPYC 9V45 (0.87) and Xeon Platinum 8573C
-  (0.96). P-256 verification is 1.05 to 1.19 on every x86-64 model measured.
+  EPYC 9V74; at #42, before the follow-up below, it was still behind on
+  EPYC 9V45 (0.87) and Xeon Platinum 8573C (0.96). P-256 verification is 1.05 to 1.19 on every x86-64 model measured.
 - P-256 ECDH on x86-64: the window loop runs one copy of the point
   doubling, never inlined, instead of five unrolled copies; the `mulx`
   multiplication and squaring take fewer instructions; the doubling's and

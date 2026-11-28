@@ -25,7 +25,7 @@
 dependencies:
   beryl:
     github: amberframework/beryl
-    version: 0.2.3
+    version: 0.2.4
 ```
 
 ```crystal
