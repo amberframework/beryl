@@ -708,6 +708,12 @@ module Beryl::TLS
     # handshake runs in the connection's own fiber on first use.
     property start_immediately : Bool = false
     property? sync_close : Bool
+    # Whether each accepted `TCPSocket` gets `TCP_NODELAY`; on by default.
+    # Each WebSocket message or HTTP response goes out as one TLS record in
+    # one write, and with Nagle on a small write waits for the ACK of the one
+    # before it, which a peer delaying its ACKs holds back for up to 40 ms on
+    # Linux. Turn it off only for a server that writes few, large records.
+    property? tcp_nodelay : Bool = true
 
     def initialize(@wrapped : ::Socket::Server, @context : Context::Server, @sync_close : Bool = true)
     end
@@ -727,9 +733,19 @@ module Beryl::TLS
     # quietly on an `IO::Error`) never sees an unhandled exception from a
     # client whose handshake fails.
     private def wrap(io : IO) : Socket::Server
+      set_tcp_nodelay(io) if tcp_nodelay?
       socket = Socket::Server.new(io, @context, sync_close: @sync_close, accept: @start_immediately)
       socket.is_raising_io_errors = true
       socket
+    end
+
+    # A connection the peer has already reset can refuse the option; its own
+    # first read or write reports that, so the accept goes on.
+    private def set_tcp_nodelay(io : IO) : Nil
+      if io.is_a?(TCPSocket)
+        io.tcp_nodelay = true
+      end
+    rescue ::Socket::Error
     end
 
     def close : Nil
