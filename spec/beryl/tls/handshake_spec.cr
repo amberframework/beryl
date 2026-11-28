@@ -20,6 +20,38 @@ private def expect_connected(client, server) : {TLS::Socket::Client, TLS::Socket
   {client, server}
 end
 
+# A loopback `TCPServer` that keeps the last `TCPSocket` it accepted, so a
+# spec can read the options `TLS::Server` set on it.
+private class RecordingTCPServer
+  include Socket::Server
+
+  @tcp_server = TCPServer.new("127.0.0.1", 0)
+  @last_accepted : TCPSocket? = nil
+
+  def accept : TCPSocket
+    accept? || raise IO::Error.new("the recording server is closed")
+  end
+
+  def accept? : TCPSocket?
+    if socket = @tcp_server.accept?
+      @last_accepted = socket
+    end
+    socket
+  end
+
+  def last_accepted : TCPSocket
+    @last_accepted || raise "the recording server has accepted nothing"
+  end
+
+  def local_address : Socket::IPAddress
+    @tcp_server.local_address
+  end
+
+  def close : Nil
+    @tcp_server.close
+  end
+end
+
 # Wraps an IO and keeps a copy of every byte read through it.
 private class RecordingIO < IO
   getter received = IO::Memory.new
@@ -638,6 +670,30 @@ describe "Beryl::TLS handshakes over a socket pair" do
       client.flush
       client.gets.should eq("echo")
       client.close
+      server.close
+    end
+
+    it "sets TCP_NODELAY on each accepted TCP socket" do
+      tcp_server = RecordingTCPServer.new
+      server = TLS::Server.new(tcp_server, TlsHarness.server_context)
+      server.tcp_nodelay?.should be_true
+      plain_client = TCPSocket.new("127.0.0.1", tcp_server.local_address.port)
+      connection = server.accept
+      tcp_server.last_accepted.tcp_nodelay?.should be_true
+      connection.close
+      plain_client.close
+      server.close
+    end
+
+    it "leaves Nagle on for each accepted TCP socket when tcp_nodelay is off" do
+      tcp_server = RecordingTCPServer.new
+      server = TLS::Server.new(tcp_server, TlsHarness.server_context)
+      server.tcp_nodelay = false
+      plain_client = TCPSocket.new("127.0.0.1", tcp_server.local_address.port)
+      connection = server.accept?.should_not be_nil
+      tcp_server.last_accepted.tcp_nodelay?.should be_false
+      connection.close
+      plain_client.close
       server.close
     end
 

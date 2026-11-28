@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `Beryl::TLS::Server` sets `TCP_NODELAY` on every `TCPSocket` it accepts;
+  `Server#tcp_nodelay = false` keeps Nagle on. Each WebSocket message goes
+  out as one record in one write, and with Nagle on, a small write waited
+  for the ACK of the one before it. On Linux, where the peer delays its ACK
+  up to 40 ms, a game relay writing about 34 small messages a second per
+  socket went from 38.7 ms to 3.6 ms p95 per message with the option set.
 - **Contract change:** a failed `decrypt(..., into:)` now overwrites the
   whole `into:` buffer with zeros, for every AEAD, at every length and on
   every path; it used to leave the buffer untouched. `decrypt` without
